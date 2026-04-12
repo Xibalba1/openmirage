@@ -9,6 +9,8 @@
   },
   "scripts": {
     "dev": "turbo run dev --continue --concurrency 20 --filter=@openmirage/web --filter=@openmirage/api --filter=@openmirage/collab --filter=@openmirage/worker",
+    "infra:up": "docker compose up -d postgres minio minio-init",
+    "infra:down": "docker compose down",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "format": "prettier --write .",
