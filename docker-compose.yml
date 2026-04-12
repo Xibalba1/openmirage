@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: openmirage-postgres
+    environment:
+      POSTGRES_DB: openmirage
+      POSTGRES_USER: openmirage
+      POSTGRES_PASSWORD: openmirage
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openmirage -d openmirage"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio:RELEASE.2026-03-27T22-07-57Z
+    container_name: openmirage-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: openmirage
+      MINIO_ROOT_PASSWORD: openmirage123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:RELEASE.2026-03-22T22-37-02Z
+    container_name: openmirage-minio-init
+    depends_on:
+      minio:
+        condition: service_started
+    restart: "no"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        until mc alias set local http://minio:9000 openmirage openmirage123; do sleep 1; done &&
+        mc mb --ignore-existing local/openmirage-assets
+
+volumes:
+  postgres-data:
+  minio-data:

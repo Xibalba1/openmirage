@@ -1,5 +1,6 @@
 # OpenMirage
 
+OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository currently implements the runtime service scaffolding slice plus the first storage slice: bootable `web`, `api`, `collab`, and `worker` shells with shared env, health, logging, and pluggable blob storage contracts.
 OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository currently implements the runtime service scaffolding slice plus the initial Postgres metadata baseline: bootable `web`, `api`, `collab`, and `worker` shells with shared env, health, logging, migrations, and development bootstrap contracts.
 
 ## Current Slice
@@ -18,6 +19,9 @@ Included now:
 - collab health endpoint plus websocket mount path
 - worker heartbeat and HTTP status surface
 - a React/Vite landing shell that probes API and collab reachability
+- a provider-backed storage abstraction with `minio`, generic `s3-compatible`, and `local` adapters
+- local Docker Compose services for PostgreSQL and MinIO with automatic bucket bootstrap
+- API storage smoke endpoints for upload, list, and delete verification through the abstraction
 
 Not included yet:
 
@@ -25,7 +29,7 @@ Not included yet:
 - real magic-link delivery or authenticated product flows
 - collab document persistence or page authorization
 - worker jobs, exports, or cleanup processing
-- Docker Compose, Caddy routing, staging deployment, backup/restore verification
+- Caddy routing, staging deployment, backup/restore verification
 
 ## Requirements
 
@@ -53,6 +57,7 @@ All root commands run through Turborepo and are the primary entrypoints for this
 
 ```bash
 pnpm install
+pnpm infra:up
 pnpm dev
 pnpm build
 pnpm lint
@@ -65,6 +70,12 @@ pnpm db:migrate:up
 pnpm db:migrate:status
 pnpm db:reset
 pnpm db:seed
+```
+
+Stop local infrastructure when you are done:
+
+```bash
+pnpm infra:down
 ```
 
 Run services independently when you want to verify one slice surface at a time:
@@ -86,6 +97,7 @@ Key endpoints:
 - collab websocket mount: `ws://localhost:4100/collab`
 - worker health: `http://localhost:4200/healthz`
 - worker status: `http://localhost:4200/status`
+- storage smoke list: `http://localhost:4000/internal/storage/smoke`
 
 ## Tooling Conventions
 
@@ -98,53 +110,47 @@ Key endpoints:
 
 Each app includes an `.env.example` with the variables needed for this slice. Node services will load `.env` automatically if present. The web shell uses Vite `VITE_*` public variables.
 
-The database package also includes `packages/db/.env.example`, which defaults to:
+The storage-bearing services share the same storage env contract:
+
+- `STORAGE_PROVIDER=minio|s3-compatible|local`
+- `STORAGE_BUCKET=openmirage-assets`
+- `STORAGE_LOCAL_ROOT=.openmirage/storage`
+- `STORAGE_S3_ENDPOINT=http://127.0.0.1:9000`
+- `STORAGE_S3_REGION=us-east-1`
+- `STORAGE_S3_ACCESS_KEY_ID=openmirage`
+- `STORAGE_S3_SECRET_ACCESS_KEY=openmirage123`
+- `STORAGE_S3_FORCE_PATH_STYLE=true`
+- `STORAGE_PUBLIC_BASE_URL=` optional public base URL for direct object resolution
+
+For local development, the default `minio` settings match `docker-compose.yml`. For staging, switch to `STORAGE_PROVIDER=s3-compatible` and point the same variables at the target S3-compatible backend. No application code changes should be required.
+
+## Storage Smoke Check
+
+Start infrastructure and services:
 
 ```bash
-DATABASE_URL=postgres://openmirage:openmirage@localhost:5432/openmirage
+pnpm infra:up
+pnpm dev
 ```
 
-Create `packages/db/.env` if you need a non-default local connection string for migration and seed commands.
-
-## Database Workflow
-
-This slice keeps page content out of Postgres. The relational schema covers only product metadata and auth/session artifacts.
-
-From a blank local Postgres database:
+Then verify the storage slice through the API:
 
 ```bash
-pnpm install
-cp packages/db/.env.example packages/db/.env
-pnpm db:migrate:up
-pnpm db:migrate:status
-pnpm db:seed
+curl http://localhost:4000/internal/storage/smoke
+curl -X POST http://localhost:4000/internal/storage/smoke \
+  -H 'content-type: application/json' \
+  -d '{"key":"smoke/hello.txt","contentType":"text/plain","bodyBase64":"aGVsbG8="}'
+curl http://localhost:4000/internal/storage/smoke
+curl -X DELETE 'http://localhost:4000/internal/storage/smoke?key=smoke/hello.txt'
 ```
 
-Reset the local database and replay the baseline:
+Expected result:
 
-```bash
-pnpm db:reset
-pnpm db:migrate:up
-pnpm db:seed
-```
-
-Create a new migration:
-
-```bash
-pnpm db:migrate:create -- --name add_example_table
-```
-
-Expected development bootstrap records:
-
-- user: `dev@openmirage.local`
-- workspace: `OpenMirage Dev` with slug `openmirage-dev`
-- project: `Platform Bootstrap`
-- file: `Getting Started`
-- page: `Page 1`
-- one active session row for the dev user
-- one unconsumed magic-link token row for the dev user
-
-The seed command prints a compact summary of record IDs and prints plaintext token values only when it creates new auth artifacts during that run.
+- `pnpm infra:up` brings up PostgreSQL, MinIO, and bucket bootstrap
+- API `/healthz` and `/readyz` report the configured storage provider and bucket
+- `POST` uploads the object and returns a download URL
+- `GET` lists the uploaded object
+- `DELETE` removes it without any provider-specific API code path
 
 ## Success Criteria For This Slice
 
