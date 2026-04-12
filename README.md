@@ -1,16 +1,17 @@
 # OpenMirage
 
-OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository currently implements the Step 1 platform slice: the monorepo layout, shared config baselines, and Turbo task graph.
+OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository currently implements the Step 2 platform slice: the monorepo layout, shared config baselines, and repo-wide developer tooling.
 
 ## Current Slice
 
-This slice establishes the repository contract only.
+This slice establishes the repository contract and shared developer-tooling contract only.
 
 Included now:
 
 - `pnpm` workspaces and Turborepo orchestration
 - architecture-aligned apps and shared packages
 - shared TypeScript, env, lint, test, and formatting baseline packages
+- repo-wide ESLint, Prettier, and editor defaults
 - placeholder source/build contracts for every workspace
 
 Not included yet:
@@ -47,10 +48,19 @@ pnpm install
 pnpm dev
 pnpm build
 pnpm lint
+pnpm format
+pnpm format:check
 pnpm test
 pnpm typecheck
 pnpm docker:build
 ```
+
+## Tooling Conventions
+
+- Workspace `tsconfig.json` files inherit from `@openmirage/config-typescript`, not bespoke root target configs.
+- Cross-workspace imports must use workspace package names such as `@openmirage/types`.
+- Relative imports are allowed only within a single workspace.
+- Repo formatting is controlled by the root Prettier config and `pnpm format`.
 
 ## Success Criteria For This Slice
 

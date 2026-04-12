@@ -8,11 +8,11 @@ For MVP, rendering is **browser-owned**. The browser is responsible for editor i
 
 The rendering pipeline should be:
 
-1. load page collaborative state,  
-2. build in-memory scene graph,  
-3. flatten visible nodes into paint order,  
-4. apply viewport transform,  
-5. paint nodes,  
+1. load page collaborative state,
+2. build in-memory scene graph,
+3. flatten visible nodes into paint order,
+4. apply viewport transform,
+5. paint nodes,
 6. paint editor overlays last.
 
 The scene graph is tree-based, so transforms, containment, visibility, ordering, and export traversal follow naturally from parent-child structure. Frames and groups render their children; leaf nodes render their own geometry or content. Styles remain inline on nodes in MVP.
@@ -25,11 +25,11 @@ Hit testing should use the same scene graph and paint order as rendering. On poi
 
 Overlays should render separately from document content. They include:
 
-* selection bounds and resize handles,  
-* hover outlines,  
-* marquee selection,  
-* alignment or spacing guides if added,  
-* remote cursors and remote selections.
+- selection bounds and resize handles,
+- hover outlines,
+- marquee selection,
+- alignment or spacing guides if added,
+- remote cursors and remote selections.
 
 These are editor/presence concerns, not canonical page content. Presence data such as cursors and active selections should remain ephemeral and should not be persisted with the page document.
 
@@ -42,4 +42,3 @@ MVP text is **plain text blocks with basic font controls**; rich text and mixed 
 Zoom and pan should be implemented as a **viewport transform** applied uniformly at render and hit-test time, rather than by mutating node geometry. Node coordinates remain in page space; the camera controls how that space is viewed. This matches the architecture’s browser-first separation between persistent page content and ephemeral interaction/view state, and satisfies the MVP requirement for zoom and pan without complicating the scene graph.
 
 The design rule is simple: **scene graph for content, canvas for drawing, overlays for interaction, viewport transform for navigation**.
-

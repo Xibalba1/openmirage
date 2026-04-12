@@ -33,7 +33,7 @@ OpenMirage helps small startup product teams go from collaborative wireframes to
 OpenMirage exists to solve two linked problems:
 
 1. **Workflow problem**  
-   Teams often use rough ideation tools such as Excalidraw or Miro for early exploration, but those tools do not transition cleanly into real UI design. They then move into Figma, which is powerful but often heavier and more complex than needed for early-to-mid-stage product design.  
+   Teams often use rough ideation tools such as Excalidraw or Miro for early exploration, but those tools do not transition cleanly into real UI design. They then move into Figma, which is powerful but often heavier and more complex than needed for early-to-mid-stage product design.
 2. **Ownership and accessibility problem**  
    Technical startup teams benefit from tools they can run themselves, understand operationally, and adopt without significant cost. Open source and self-hosting are therefore part of the product strategy, not just licensing decisions.
 
@@ -41,11 +41,11 @@ OpenMirage exists to solve two linked problems:
 
 OpenMirage should provide:
 
-* more structure than a whiteboard,  
-* less overhead than Figma,  
-* real-time collaboration by default,  
-* sufficient fidelity for real product UI,  
-* and lightweight developer handoff.
+- more structure than a whiteboard,
+- less overhead than Figma,
+- real-time collaboration by default,
+- sufficient fidelity for real product UI,
+- and lightweight developer handoff.
 
 ---
 
@@ -57,9 +57,9 @@ Small startup product teams.
 
 ### **Team profile**
 
-* Typical team size: **3–8 people**  
-* Typical participants: **designer, product manager, engineer**  
-* Current tools: **Figma for serious design; Excalidraw and/or Miro for rough ideation**
+- Typical team size: **3–8 people**
+- Typical participants: **designer, product manager, engineer**
+- Current tools: **Figma for serious design; Excalidraw and/or Miro for rough ideation**
 
 ### **Initial wedge**
 
@@ -69,10 +69,10 @@ The first product wedge is not large design organizations, enterprise design sys
 
 This user segment has:
 
-* an immediate collaboration need,  
-* a real need to bridge rough ideation and actual product UI,  
-* a higher likelihood of valuing self-hosting and open source,  
-* and a lower requirement for enterprise administration, workflow depth, and ecosystem breadth.
+- an immediate collaboration need,
+- a real need to bridge rough ideation and actual product UI,
+- a higher likelihood of valuing self-hosting and open source,
+- and a lower requirement for enterprise administration, workflow depth, and ecosystem breadth.
 
 ---
 
@@ -86,9 +86,9 @@ Teams use OpenMirage to collaboratively create real UI screens and wireframes, t
 
 The first meaningful value should be visible in the first collaborative session:
 
-1. create a screen quickly,  
-2. invite another person,  
-3. collaborate live in the same canvas,  
+1. create a screen quickly,
+2. invite another person,
+3. collaborate live in the same canvas,
 4. produce something structured enough to continue toward implementation.
 
 ### **Problem being solved**
@@ -111,11 +111,11 @@ OpenMirage is a faster, simpler, self-hostable collaborative UI design workspace
 
 OpenMirage may be described externally as an open-source Figma-like tool, but internally that framing should be used cautiously. The product strategy is not feature parity with Figma. The strategy is a narrower and more defensible position:
 
-* collaborative product UI design,  
-* early-to-mid-stage workflow fit,  
-* lightweight handoff,  
-* self-hostable deployment,  
-* and operational simplicity.
+- collaborative product UI design,
+- early-to-mid-stage workflow fit,
+- lightweight handoff,
+- self-hostable deployment,
+- and operational simplicity.
 
 ### **Competitive answer to “Why not Figma?”**
 
@@ -137,10 +137,10 @@ Build reputation and goodwill by shipping a serious collaborative design tool th
 
 Open source and self-hosting are **core reasons to adopt**, not incidental attributes. This means the product should:
 
-* be deployable with modest infrastructure,  
-* avoid unnecessary managed-service dependency,  
-* remain operationally understandable to technical teams,  
-* and preserve a path for community use and contribution.
+- be deployable with modest infrastructure,
+- avoid unnecessary managed-service dependency,
+- remain operationally understandable to technical teams,
+- and preserve a path for community use and contribution.
 
 ---
 
@@ -152,14 +152,14 @@ The MVP should include only what is necessary to fulfill the core product thesis
 
 The MVP must support creation and editing of mid-fidelity UI screens through:
 
-* frames,  
-* basic shapes,  
-* text,  
-* selection,  
-* move and resize interactions,  
-* z-order / layering,  
-* zoom and pan,  
-* undo and redo.
+- frames,
+- basic shapes,
+- text,
+- selection,
+- move and resize interactions,
+- z-order / layering,
+- zoom and pan,
+- undo and redo.
 
 These capabilities are the minimum required for producing structured UI rather than rough sketches alone.
 
@@ -167,11 +167,11 @@ These capabilities are the minimum required for producing structured UI rather t
 
 The MVP must support:
 
-* live co-editing,  
-* multiplayer presence,  
-* live cursor and/or participant awareness,  
-* basic conflict-safe collaboration behavior,  
-* comments.
+- live co-editing,
+- multiplayer presence,
+- live cursor and/or participant awareness,
+- basic conflict-safe collaboration behavior,
+- comments.
 
 Realtime collaboration is central to the product thesis and is not an optional enhancement.
 
@@ -179,12 +179,12 @@ Realtime collaboration is central to the product thesis and is not an optional e
 
 The MVP must support lightweight handoff through:
 
-* a basic inspect panel,  
-* dimensions and spacing visibility,  
-* color values,  
-* typography values,  
-* asset export,  
-* basic export of designs.
+- a basic inspect panel,
+- dimensions and spacing visibility,
+- color values,
+- typography values,
+- asset export,
+- basic export of designs.
 
 The goal is not full engineering workflow integration. The goal is to provide enough structured information for an engineer to begin implementation without ambiguity.
 
@@ -200,10 +200,10 @@ It should be possible to create plausible, structured application screens. The t
 
 The following capabilities were not selected as the primary top-line MVP requirements, but are recommended because they materially improve product coherence:
 
-* image placement,  
-* grouping,  
-* alignment and distribution,  
-* share or read-only links.
+- image placement,
+- grouping,
+- alignment and distribution,
+- share or read-only links.
 
 These features should be considered supporting scope if they can be delivered without distorting the MVP.
 
@@ -213,18 +213,18 @@ These features should be considered supporting scope if they can be delivered wi
 
 The following are out of scope for the MVP:
 
-* advanced prototyping and animations,  
-* plugin ecosystem,  
-* branching and advanced version-management UI,  
-* enterprise admin and SSO,  
-* advanced auto layout parity with Figma,  
-* full design token pipelines,  
-* code generation,  
-* native desktop application,  
-* strong offline-first guarantees beyond basic resilience,  
-* enterprise governance and compliance workflows,  
-* polished visual design parity with Figma,  
-* marketing and brand-design workflows.
+- advanced prototyping and animations,
+- plugin ecosystem,
+- branching and advanced version-management UI,
+- enterprise admin and SSO,
+- advanced auto layout parity with Figma,
+- full design token pipelines,
+- code generation,
+- native desktop application,
+- strong offline-first guarantees beyond basic resilience,
+- enterprise governance and compliance workflows,
+- polished visual design parity with Figma,
+- marketing and brand-design workflows.
 
 ### **Additional recommended non-goal**
 
@@ -236,20 +236,20 @@ Full component-system sophistication should also be treated as out of scope for 
 
 ### **What OpenMirage is**
 
-* a collaborative UI design workspace,  
-* optimized for product teams,  
-* intended for browser-based use,  
-* self-hostable,  
-* suitable for early-to-mid-stage product design,  
-* and capable of lightweight developer handoff.
+- a collaborative UI design workspace,
+- optimized for product teams,
+- intended for browser-based use,
+- self-hostable,
+- suitable for early-to-mid-stage product design,
+- and capable of lightweight developer handoff.
 
 ### **What OpenMirage is not**
 
-* a general-purpose whiteboard,  
-* a full enterprise design platform,  
-* a marketing or brand design tool,  
-* a complete Figma replacement for all use cases,  
-* or an engineering automation platform.
+- a general-purpose whiteboard,
+- a full enterprise design platform,
+- a marketing or brand design tool,
+- a complete Figma replacement for all use cases,
+- or an engineering automation platform.
 
 ---
 
@@ -257,9 +257,9 @@ Full component-system sophistication should also be treated as out of scope for 
 
 The MVP should be considered successful if a small startup product team can:
 
-1. create a real product UI screen quickly,  
-2. collaborate on it live with another team member,  
-3. use comments to provide lightweight review context,  
+1. create a real product UI screen quickly,
+2. collaborate on it live with another team member,
+3. use comments to provide lightweight review context,
 4. and hand the result to an engineer with enough inspect/export support to begin implementation.
 
 A stronger success criterion is not immediate replacement of Figma across all workflows. A realistic early success condition is that teams can use OpenMirage for early product design and collaborative screen definition without feeling forced to switch to Figma immediately.
@@ -271,13 +271,13 @@ A stronger success criterion is not immediate replacement of Figma across all wo
 The following principles should guide MVP decisions:
 
 1. **Prefer simplicity over breadth**  
-   Avoid feature expansion that weakens speed, clarity, or operational simplicity.  
+   Avoid feature expansion that weakens speed, clarity, or operational simplicity.
 2. **Preserve the bridge between ideation and real UI**  
-   The tool must not collapse into either a pure whiteboard or a heavyweight design suite.  
+   The tool must not collapse into either a pure whiteboard or a heavyweight design suite.
 3. **Treat realtime collaboration as foundational**  
-   Collaboration is part of the product’s identity, not a secondary enhancement.  
+   Collaboration is part of the product’s identity, not a secondary enhancement.
 4. **Support self-hosting in practice, not just in theory**  
-   Deployment and operations should be credible for technical teams.  
+   Deployment and operations should be credible for technical teams.
 5. **Optimize for repeated team use, not just technical impressiveness**  
    The product must be genuinely useful, not merely a strong demo.
 
@@ -287,11 +287,11 @@ The following principles should guide MVP decisions:
 
 The following questions remain open and should be resolved before detailed implementation planning:
 
-* whether minimal reusable components belong in MVP or immediately after MVP,  
-* what exact comment model is needed for MVP,  
-* the minimum viable inspect panel surface,  
-* the minimum export formats required,  
-* and the exact boundary between editor state, collaborative state, and persistent metadata.
+- whether minimal reusable components belong in MVP or immediately after MVP,
+- what exact comment model is needed for MVP,
+- the minimum viable inspect panel surface,
+- the minimum export formats required,
+- and the exact boundary between editor state, collaborative state, and persistent metadata.
 
 ---
 
