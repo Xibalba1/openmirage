@@ -29,6 +29,18 @@ export interface ServiceCheck {
   summary: string;
 }
 
+export interface ErrorReportingConfig {
+  dsn: string | undefined;
+  enabled: boolean;
+  environment: RuntimeEnvironment;
+  release: string;
+}
+
+export interface ApplicationVersionInfo {
+  release: string;
+  schemaVersion: string;
+}
+
 export interface HealthStatus {
   service: ServiceName;
   ok: boolean;

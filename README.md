@@ -10,11 +10,13 @@ Included now:
 
 - independently bootable `web`, `api`, `collab`, and `worker` dev services
 - shared env parsing and validation in `@openmirage/config-env`
-- structured service logging in `@openmirage/observability`
+- structured service logging, metrics, and error-reporting bootstrap in `@openmirage/observability`
 - API health and readiness endpoints
 - collab health endpoint plus websocket mount path
 - worker heartbeat and HTTP status surface
 - a React/Vite landing shell that probes API and collab reachability
+- Prometheus-compatible `/metrics` endpoints for `api`, `collab`, and `worker`
+- env-gated forced test error routes and Sentry integration for backend services
 
 Not included yet:
 
@@ -74,10 +76,13 @@ Key endpoints:
 - web: `http://localhost:3000`
 - api health: `http://localhost:4000/healthz`
 - api readiness: `http://localhost:4000/readyz`
+- api metrics: `http://localhost:4000/metrics`
 - api auth entrypoint: `http://localhost:4000/auth/entry`
 - collab health: `http://localhost:4100/healthz`
+- collab metrics: `http://localhost:4100/metrics`
 - collab websocket mount: `ws://localhost:4100/collab`
 - worker health: `http://localhost:4200/healthz`
+- worker metrics: `http://localhost:4200/metrics`
 - worker status: `http://localhost:4200/status`
 
 ## Tooling Conventions
@@ -91,9 +96,39 @@ Key endpoints:
 
 Each app includes an `.env.example` with the variables needed for this slice. Node services will load `.env` automatically if present. The web shell uses Vite `VITE_*` public variables.
 
+Backend observability envs:
+
+- `APP_VERSION`: release/version string included in logs and metrics
+- `ENABLE_TEST_ERROR_ROUTES`: enables `GET /__diagnostics/error` for forced error verification
+- `SENTRY_DSN`: enables Sentry only when set and `OPENMIRAGE_ENV` is `staging` or `production`
+- `SENTRY_ENVIRONMENT`: optional override for Sentry environment tagging
+- `SENTRY_RELEASE`: optional override for Sentry release tagging
+
+Local defaults keep Sentry off. To verify the reporting path in a staging-like environment, set:
+
+```bash
+OPENMIRAGE_ENV=staging
+ENABLE_TEST_ERROR_ROUTES=true
+SENTRY_DSN=...
+```
+
+Then call one backend diagnostics route, for example:
+
+```bash
+curl -i http://localhost:4000/__diagnostics/error
+```
+
+Expected outcomes:
+
+- the service logs a structured error with request/correlation context
+- `/metrics` reflects the request activity
+- the error appears in the configured Sentry project when enabled
+
 ## Success Criteria For This Slice
 
 - each runtime service boots independently in dev mode
 - `pnpm dev` starts the full runtime slice from the repo root
 - the web shell confirms API and collab reachability
-- logs identify service and environment clearly enough for local debugging
+- logs identify service, environment, version, and request/correlation IDs clearly enough for local debugging
+- `/metrics` is queryable on `api`, `collab`, and `worker`
+- one forced backend test error can be routed to Sentry when explicitly enabled
