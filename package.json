@@ -11,13 +11,23 @@
     "dev": "turbo run dev --continue",
     "build": "turbo run build",
     "lint": "turbo run lint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
     "docker:build": "turbo run docker:build"
   },
   "devDependencies": {
+    "@eslint/js": "^9.25.1",
+    "@openmirage/config-eslint": "workspace:*",
+    "@openmirage/config-prettier": "workspace:*",
+    "@openmirage/config-typescript": "workspace:*",
     "@types/node": "^22.10.2",
+    "eslint": "^9.25.1",
+    "globals": "^16.0.0",
+    "prettier": "^3.5.3",
     "turbo": "^2.3.3",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.30.1"
   }
 }
