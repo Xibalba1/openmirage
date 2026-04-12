@@ -1,13 +1,17 @@
 import {
   type ErrorReportingConfig,
+  type LocalStorageConfig,
   type RuntimeEnvironment,
   runtimeEnvironments,
   type RuntimeUrls,
-  type ServiceName
+  type S3StorageConfig,
+  type ServiceName,
+  type StorageConfig,
+  storageProviderKinds,
+  type StorageProviderKind
 } from "@openmirage/types";
 
 export type ServiceEnvName = Exclude<ServiceName, "web"> | "web";
-export type StorageProvider = "minio" | "s3-compatible" | "local";
 
 export interface BaseServiceEnv {
   service: ServiceEnvName;
@@ -25,7 +29,7 @@ export interface ApiEnv extends BaseServiceEnv {
   port: number;
   authPath: string;
   databaseUrl: string;
-  storageProvider: StorageProvider;
+  storage: StorageConfig;
 }
 
 export interface CollabEnv extends BaseServiceEnv {
@@ -39,7 +43,7 @@ export interface WorkerEnv extends BaseServiceEnv {
   service: "worker";
   port: number;
   databaseUrl: string;
-  storageProvider: StorageProvider;
+  storage: StorageConfig;
   heartbeatIntervalMs: number;
 }
 
@@ -128,19 +132,15 @@ function readLogLevel(source: EnvSource): "debug" | "info" {
   throw new Error("Environment variable LOG_LEVEL must be debug or info");
 }
 
-function readStorageProvider(source: EnvSource): StorageProvider {
+function readStorageProvider(source: EnvSource): StorageProviderKind {
   const value = source.STORAGE_PROVIDER ?? "minio";
 
-  if (
-    value === "minio" ||
-    value === "s3-compatible" ||
-    value === "local"
-  ) {
-    return value;
+  if (storageProviderKinds.includes(value as StorageProviderKind)) {
+    return value as StorageProviderKind;
   }
 
   throw new Error(
-    "Environment variable STORAGE_PROVIDER must be minio, s3-compatible, or local"
+    `Environment variable STORAGE_PROVIDER must be one of ${storageProviderKinds.join(", ")}`
   );
 }
 
@@ -178,8 +178,10 @@ function readErrorReportingConfig(
   return {
     dsn,
     enabled:
-      Boolean(dsn) && (environment === "staging" || environment === "production"),
-    environment: (sentryEnvironment as RuntimeEnvironment | undefined) ?? environment,
+      Boolean(dsn) &&
+      (environment === "staging" || environment === "production"),
+    environment:
+      (sentryEnvironment as RuntimeEnvironment | undefined) ?? environment,
     release: source.SENTRY_RELEASE ?? release
   };
 }
@@ -207,6 +209,58 @@ function readBaseServiceEnv(
   };
 }
 
+export function readStorageConfig(
+  source: EnvSource = process.env
+): StorageConfig {
+  const provider = readStorageProvider(source);
+  const bucket = readRequiredString(
+    source,
+    "STORAGE_BUCKET",
+    "openmirage-assets"
+  );
+
+  if (provider === "local") {
+    const localConfig: LocalStorageConfig = {
+      provider,
+      bucket,
+      rootDirectory: readRequiredString(
+        source,
+        "STORAGE_LOCAL_ROOT",
+        ".openmirage/storage"
+      )
+    };
+
+    return localConfig;
+  }
+
+  const s3Config: S3StorageConfig = {
+    provider,
+    bucket,
+    endpoint: readRequiredString(
+      source,
+      "STORAGE_S3_ENDPOINT",
+      "http://127.0.0.1:9000"
+    ),
+    region: readRequiredString(source, "STORAGE_S3_REGION", "us-east-1"),
+    accessKeyId: readRequiredString(
+      source,
+      "STORAGE_S3_ACCESS_KEY_ID",
+      "openmirage"
+    ),
+    secretAccessKey: readRequiredString(
+      source,
+      "STORAGE_S3_SECRET_ACCESS_KEY",
+      "openmirage123"
+    ),
+    forcePathStyle: readBoolean(source, "STORAGE_S3_FORCE_PATH_STYLE", true),
+    ...(source.STORAGE_PUBLIC_BASE_URL
+      ? { publicBaseUrl: source.STORAGE_PUBLIC_BASE_URL }
+      : {})
+  };
+
+  return s3Config;
+}
+
 export function readApiEnv(source: EnvSource = process.env): ApiEnv {
   return {
     ...readBaseServiceEnv("api", source),
@@ -218,7 +272,7 @@ export function readApiEnv(source: EnvSource = process.env): ApiEnv {
       "DATABASE_URL",
       "postgres://openmirage:openmirage@localhost:5432/openmirage"
     ),
-    storageProvider: readStorageProvider(source)
+    storage: readStorageConfig(source)
   };
 }
 
@@ -246,8 +300,12 @@ export function readWorkerEnv(source: EnvSource = process.env): WorkerEnv {
       "DATABASE_URL",
       "postgres://openmirage:openmirage@localhost:5432/openmirage"
     ),
-    storageProvider: readStorageProvider(source),
-    heartbeatIntervalMs: readNumber(source, "WORKER_HEARTBEAT_INTERVAL_MS", 5000)
+    storage: readStorageConfig(source),
+    heartbeatIntervalMs: readNumber(
+      source,
+      "WORKER_HEARTBEAT_INTERVAL_MS",
+      5000
+    )
   };
 }
 

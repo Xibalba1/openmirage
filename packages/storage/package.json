@@ -14,11 +14,13 @@
     "dev": "node ../../scripts/noop-task.mjs dev @openmirage/storage",
     "build": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings=0",
-    "test": "node ../../scripts/check-workspace.mjs .",
+    "test": "node --import tsx --test src/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/storage"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.910.0",
+    "@aws-sdk/s3-request-presigner": "^3.910.0",
     "@openmirage/types": "workspace:*"
   }
 }

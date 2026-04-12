@@ -41,6 +41,59 @@ export interface ApplicationVersionInfo {
   schemaVersion: string;
 }
 
+export const storageProviderKinds = [
+  "minio",
+  "s3-compatible",
+  "local"
+] as const;
+
+export type StorageProviderKind = (typeof storageProviderKinds)[number];
+
+export interface StorageObjectDescriptor {
+  key: string;
+  size: number;
+  etag?: string;
+  lastModified?: string;
+}
+
+export interface StoragePutInput {
+  body: Uint8Array;
+  contentType?: string;
+  key: string;
+}
+
+export interface StorageDeleteResult {
+  key: string;
+}
+
+export interface StorageHealthStatus {
+  bucket: string;
+  ok: boolean;
+  provider: StorageProviderKind;
+  summary: string;
+}
+
+export interface StorageCommonConfig {
+  bucket: string;
+  provider: StorageProviderKind;
+}
+
+export interface S3StorageConfig extends StorageCommonConfig {
+  accessKeyId: string;
+  endpoint: string;
+  provider: "minio" | "s3-compatible";
+  publicBaseUrl?: string;
+  region: string;
+  secretAccessKey: string;
+  forcePathStyle: boolean;
+}
+
+export interface LocalStorageConfig extends StorageCommonConfig {
+  provider: "local";
+  rootDirectory: string;
+}
+
+export type StorageConfig = S3StorageConfig | LocalStorageConfig;
 export interface HealthStatus {
   service: ServiceName;
   ok: boolean;

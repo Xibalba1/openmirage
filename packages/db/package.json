@@ -14,11 +14,21 @@
     "dev": "node ../../scripts/noop-task.mjs dev @openmirage/db",
     "build": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings=0",
-    "test": "node ../../scripts/check-workspace.mjs .",
+    "test": "node --test --import tsx ./src/index.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/db"
+    "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/db",
+    "migrate:create": "node ./scripts/create-migration.mjs",
+    "migrate:up": "node ./scripts/migrate-up.mjs",
+    "migrate:status": "node ./scripts/migrate-status.mjs",
+    "reset": "node ./scripts/reset.mjs",
+    "seed": "node --import tsx ./scripts/seed.mjs"
   },
   "dependencies": {
+    "pg": "^8.13.1",
     "@openmirage/types": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.5",
+    "node-pg-migrate": "^7.9.1"
   }
 }

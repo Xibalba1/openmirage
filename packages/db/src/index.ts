@@ -1,25 +1,27 @@
-import { type ApplicationVersionInfo, type ServiceCheck } from "@openmirage/types";
+import {
+  type ApplicationVersionInfo,
+  type ServiceCheck
+} from "@openmirage/types";
+export {
+  checkMetadataStore,
+  createMetadataStoreContract,
+  type MetadataStoreContract
+} from "./contracts.js";
+export {
+  checkDatabaseConnection,
+  createDatabasePool,
+  DEFAULT_DATABASE_URL,
+  resolveDatabaseUrl
+} from "./client.js";
+export {
+  hashToken,
+  seedDevelopmentBootstrap,
+  type DevelopmentBootstrapSummary
+} from "./seed.js";
 
-export interface MetadataStoreContract {
-  kind: "postgres-metadata";
-  pageContentOwner: "collab-service";
-}
-
-export function createMetadataStoreContract(): MetadataStoreContract {
-  return {
-    kind: "postgres-metadata",
-    pageContentOwner: "collab-service"
-  };
-}
-
-export function checkMetadataStore(databaseUrl: string): ServiceCheck {
-  return {
-    ok: databaseUrl.startsWith("postgres://") || databaseUrl.startsWith("postgresql://"),
-    summary: "configured for postgres metadata storage"
-  };
-}
-
-export function getApplicationVersionInfo(release: string): ApplicationVersionInfo {
+export function getApplicationVersionInfo(
+  release: string
+): ApplicationVersionInfo {
   return {
     release,
     schemaVersion: "unmigrated"
