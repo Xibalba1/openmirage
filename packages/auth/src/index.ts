@@ -1,15 +1,17 @@
-import { readServiceEnv } from "@openmirage/config-env";
-
 export interface SessionContract {
   mode: "magic-link-session";
   sessionCookieName: string;
 }
 
-export function createSessionContract(): SessionContract {
-  const env = readServiceEnv("api");
+export interface SessionContractOptions {
+  sessionCookieName?: string;
+}
 
+export function createSessionContract(
+  options: SessionContractOptions = {}
+): SessionContract {
   return {
     mode: "magic-link-session",
-    sessionCookieName: env.sessionCookieName
+    sessionCookieName: options.sessionCookieName ?? "openmirage_session"
   };
 }
