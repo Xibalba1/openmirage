@@ -17,7 +17,12 @@
     "format:check": "prettier --check .",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
-    "docker:build": "turbo run docker:build"
+    "docker:build": "turbo run docker:build",
+    "db:migrate:create": "pnpm --filter @openmirage/db migrate:create",
+    "db:migrate:up": "pnpm --filter @openmirage/db migrate:up",
+    "db:migrate:status": "pnpm --filter @openmirage/db migrate:status",
+    "db:reset": "pnpm --filter @openmirage/db reset",
+    "db:seed": "pnpm --filter @openmirage/db seed"
   },
   "devDependencies": {
     "@eslint/js": "^9.25.1",

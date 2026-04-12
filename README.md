@@ -1,6 +1,7 @@
 # OpenMirage
 
 OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository currently implements the runtime service scaffolding slice plus the first storage slice: bootable `web`, `api`, `collab`, and `worker` shells with shared env, health, logging, and pluggable blob storage contracts.
+OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository currently implements the runtime service scaffolding slice plus the initial Postgres metadata baseline: bootable `web`, `api`, `collab`, and `worker` shells with shared env, health, logging, migrations, and development bootstrap contracts.
 
 ## Current Slice
 
@@ -11,6 +12,9 @@ Included now:
 - independently bootable `web`, `api`, `collab`, and `worker` dev services
 - shared env parsing and validation in `@openmirage/config-env`
 - structured service logging in `@openmirage/observability`
+- Postgres migration and reset workflow in `@openmirage/db`
+- relational metadata schema for workspaces, files, pages, auth artifacts, comments, assets, share links, and export jobs
+- deterministic development bootstrap data for one workspace and one test user flow
 - API health and readiness endpoints
 - collab health endpoint plus websocket mount path
 - worker heartbeat and HTTP status surface
@@ -22,7 +26,7 @@ Included now:
 Not included yet:
 
 - editor, canvas, files/pages/projects, comments, or other product routes
-- real magic-link delivery, session persistence, or database-backed auth flows
+- real magic-link delivery or authenticated product flows
 - collab document persistence or page authorization
 - worker jobs, exports, or cleanup processing
 - Caddy routing, staging deployment, backup/restore verification
@@ -42,7 +46,7 @@ If `pnpm` is not installed globally, use `corepack enable` and `corepack pnpm`.
 - `apps/worker`: background worker placeholder
 - `packages/types`: shared service and domain contract placeholders
 - `packages/auth`: auth and session helper placeholders
-- `packages/db`: database contract placeholders
+- `packages/db`: Postgres metadata schema, migrations, and development bootstrap helpers
 - `packages/storage`: blob storage abstraction placeholders
 - `packages/observability`: logging and health helper placeholders
 - `packages/config-*`: shared TypeScript, ESLint, Prettier, env, and test baselines
@@ -62,6 +66,10 @@ pnpm format:check
 pnpm test
 pnpm typecheck
 pnpm docker:build
+pnpm db:migrate:up
+pnpm db:migrate:status
+pnpm db:reset
+pnpm db:seed
 ```
 
 Stop local infrastructure when you are done:
