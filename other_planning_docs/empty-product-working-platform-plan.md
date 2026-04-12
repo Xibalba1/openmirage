@@ -203,6 +203,37 @@ The phase is complete when:
   - remaining gaps are product features, not platform blockers
   - the repo is ready for feature implementation on top of stable platform seams
 
+## Step Dependencies and Parallelization
+
+Treat each numbered step above as atomic.
+
+- These steps must be done one at a time:
+  - `1 -> 2 -> 3`
+  - `10 -> 12 -> 13`
+- After `3` is complete, these steps can proceed in parallel:
+  - `4`
+  - `6`
+  - `11`
+- After `4` is complete, `5` can proceed.
+- After `3`, `4`, and `6` are complete, `7` can proceed.
+- After `5` and `7` are complete, `8` can proceed.
+- After `7` is complete, `9` can proceed.
+- After `8` and `9` are complete, `10` can proceed.
+
+In compact form, the dependency graph is:
+
+- `1 -> 2 -> 3`
+- `3 -> 4`
+- `3 -> 6`
+- `3 -> 11`
+- `4 -> 5`
+- `3 + 4 + 6 -> 7`
+- `5 + 7 -> 8`
+- `7 -> 9`
+- `8 + 9 -> 10`
+- `10 -> 12`
+- `12 -> 13`
+
 ## Test Plan
 
 - Static checks:

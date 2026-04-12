@@ -1,0 +1,17 @@
+{
+  "name": "@openmirage/config-eslint",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "files": [
+    "eslint.config.mjs"
+  ],
+  "scripts": {
+    "dev": "node ../../scripts/noop-task.mjs dev @openmirage/config-eslint",
+    "build": "node ../../scripts/noop-task.mjs build @openmirage/config-eslint",
+    "lint": "node ../../scripts/noop-task.mjs lint @openmirage/config-eslint",
+    "test": "node ../../scripts/check-workspace.mjs .",
+    "typecheck": "node ../../scripts/noop-task.mjs typecheck @openmirage/config-eslint",
+    "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/config-eslint"
+  }
+}

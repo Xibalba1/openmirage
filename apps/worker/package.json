@@ -1,0 +1,20 @@
+{
+  "name": "@openmirage/worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node ../../scripts/noop-task.mjs dev @openmirage/worker",
+    "build": "tsc -p tsconfig.json",
+    "lint": "node ../../scripts/noop-task.mjs lint @openmirage/worker",
+    "test": "node ../../scripts/check-workspace.mjs .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/worker"
+  },
+  "dependencies": {
+    "@openmirage/db": "workspace:*",
+    "@openmirage/observability": "workspace:*",
+    "@openmirage/storage": "workspace:*",
+    "@openmirage/types": "workspace:*"
+  }
+}

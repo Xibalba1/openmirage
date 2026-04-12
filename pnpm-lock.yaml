@@ -1,0 +1,193 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: false
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.19.17
+      turbo:
+        specifier: ^2.3.3
+        version: 2.9.6
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/api:
+    dependencies:
+      '@openmirage/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
+      '@openmirage/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@openmirage/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
+      '@openmirage/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
+      '@openmirage/types':
+        specifier: workspace:*
+        version: link:../../packages/types
+
+  apps/collab:
+    dependencies:
+      '@openmirage/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
+      '@openmirage/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
+      '@openmirage/types':
+        specifier: workspace:*
+        version: link:../../packages/types
+
+  apps/web:
+    dependencies:
+      '@openmirage/types':
+        specifier: workspace:*
+        version: link:../../packages/types
+
+  apps/worker:
+    dependencies:
+      '@openmirage/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@openmirage/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
+      '@openmirage/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
+      '@openmirage/types':
+        specifier: workspace:*
+        version: link:../../packages/types
+
+  packages/auth:
+    dependencies:
+      '@openmirage/config-env':
+        specifier: workspace:*
+        version: link:../config-env
+      '@openmirage/types':
+        specifier: workspace:*
+        version: link:../types
+
+  packages/config-env: {}
+
+  packages/config-eslint: {}
+
+  packages/config-prettier: {}
+
+  packages/config-test: {}
+
+  packages/config-typescript: {}
+
+  packages/db:
+    dependencies:
+      '@openmirage/types':
+        specifier: workspace:*
+        version: link:../types
+
+  packages/observability:
+    dependencies:
+      '@openmirage/types':
+        specifier: workspace:*
+        version: link:../types
+
+  packages/storage:
+    dependencies:
+      '@openmirage/types':
+        specifier: workspace:*
+        version: link:../types
+
+  packages/types: {}
+
+packages:
+
+  '@turbo/darwin-64@2.9.6':
+    resolution: {integrity: sha512-X/56SnVXIQZBLKwniGTwEQTGmtE5brSACnKMBWpY3YafuxVYefrC2acamfjgxP7BG5w3I+6jf0UrLoSzgPcSJg==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@turbo/darwin-arm64@2.9.6':
+    resolution: {integrity: sha512-aalBeSl4agT/QtYGDyf/XLajedWzUC9Vg/pm/YO6QQ93vkQ91Vz5uK1ta5RbVRDozQSz4njxUNqRNmOXDzW+qw==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@turbo/linux-64@2.9.6':
+    resolution: {integrity: sha512-YKi05jnNHaD7vevgYwahpzGwbsNNTwzU2c7VZdmdFm7+cGDP4oREUWSsainiMfRqjRuolQxBwRn8wf1jmu+YZA==}
+    cpu: [x64]
+    os: [linux]
+
+  '@turbo/linux-arm64@2.9.6':
+    resolution: {integrity: sha512-02o/ZS69cOYEDczXvOB2xmyrtzjQ2hVFtWZK1iqxXUfzMmTjZK4UumrfNnjckSg+gqeBfnPRHa0NstA173Ik3g==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@turbo/windows-64@2.9.6':
+    resolution: {integrity: sha512-wVdQjvnBI15wB6JrA+43CtUtagjIMmX6XYO758oZHAsCNSxqRlJtdyujih0D8OCnwCRWiGWGI63zAxR0hO6s9g==}
+    cpu: [x64]
+    os: [win32]
+
+  '@turbo/windows-arm64@2.9.6':
+    resolution: {integrity: sha512-1XUUyWW0W6FTSqGEhU8RHVqb2wP1SPkr7hIvBlMEwH9jr+sJQK5kqeosLJ/QaUv4ecSAd1ZhIrLoW7qslAzT4A==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@types/node@22.19.17':
+    resolution: {integrity: sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q==}
+
+  turbo@2.9.6:
+    resolution: {integrity: sha512-+v2QJey7ZUeUiuigkU+uFfklvNUyPI2VO2vBpMYJA+a1hKFLFiKtUYlRHdb3P9CrAvMzi0upbjI4WT+zKtqkBg==}
+    hasBin: true
+
+  typescript@5.9.3:
+    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
+  undici-types@6.21.0:
+    resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
+
+snapshots:
+
+  '@turbo/darwin-64@2.9.6':
+    optional: true
+
+  '@turbo/darwin-arm64@2.9.6':
+    optional: true
+
+  '@turbo/linux-64@2.9.6':
+    optional: true
+
+  '@turbo/linux-arm64@2.9.6':
+    optional: true
+
+  '@turbo/windows-64@2.9.6':
+    optional: true
+
+  '@turbo/windows-arm64@2.9.6':
+    optional: true
+
+  '@types/node@22.19.17':
+    dependencies:
+      undici-types: 6.21.0
+
+  turbo@2.9.6:
+    optionalDependencies:
+      '@turbo/darwin-64': 2.9.6
+      '@turbo/darwin-arm64': 2.9.6
+      '@turbo/linux-64': 2.9.6
+      '@turbo/linux-arm64': 2.9.6
+      '@turbo/windows-64': 2.9.6
+      '@turbo/windows-arm64': 2.9.6
+
+  typescript@5.9.3: {}
+
+  undici-types@6.21.0: {}

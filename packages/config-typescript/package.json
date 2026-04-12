@@ -1,0 +1,17 @@
+{
+  "name": "@openmirage/config-typescript",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "files": [
+    "README.md"
+  ],
+  "scripts": {
+    "dev": "node ../../scripts/noop-task.mjs dev @openmirage/config-typescript",
+    "build": "node ../../scripts/noop-task.mjs build @openmirage/config-typescript",
+    "lint": "node ../../scripts/noop-task.mjs lint @openmirage/config-typescript",
+    "test": "node ../../scripts/check-workspace.mjs .",
+    "typecheck": "node ../../scripts/noop-task.mjs typecheck @openmirage/config-typescript",
+    "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/config-typescript"
+  }
+}

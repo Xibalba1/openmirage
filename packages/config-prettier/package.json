@@ -1,0 +1,17 @@
+{
+  "name": "@openmirage/config-prettier",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "files": [
+    ".prettierrc.json"
+  ],
+  "scripts": {
+    "dev": "node ../../scripts/noop-task.mjs dev @openmirage/config-prettier",
+    "build": "node ../../scripts/noop-task.mjs build @openmirage/config-prettier",
+    "lint": "node ../../scripts/noop-task.mjs lint @openmirage/config-prettier",
+    "test": "node ../../scripts/check-workspace.mjs .",
+    "typecheck": "node ../../scripts/noop-task.mjs typecheck @openmirage/config-prettier",
+    "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/config-prettier"
+  }
+}
