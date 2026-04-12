@@ -1,3 +1,7 @@
+import {
+  type ApplicationVersionInfo,
+  type ServiceCheck
+} from "@openmirage/types";
 export {
   checkMetadataStore,
   createMetadataStoreContract,
@@ -14,3 +18,12 @@ export {
   seedDevelopmentBootstrap,
   type DevelopmentBootstrapSummary
 } from "./seed.js";
+
+export function getApplicationVersionInfo(
+  release: string
+): ApplicationVersionInfo {
+  return {
+    release,
+    schemaVersion: "unmigrated"
+  };
+}

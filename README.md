@@ -1,7 +1,6 @@
 # OpenMirage
 
-OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository currently implements the runtime service scaffolding slice plus the first storage slice: bootable `web`, `api`, `collab`, and `worker` shells with shared env, health, logging, and pluggable blob storage contracts.
-OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository currently implements the runtime service scaffolding slice plus the initial Postgres metadata baseline: bootable `web`, `api`, `collab`, and `worker` shells with shared env, health, logging, migrations, and development bootstrap contracts.
+OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository currently implements the runtime service scaffolding slice plus the initial Postgres metadata, storage, and observability baselines: bootable `web`, `api`, `collab`, and `worker` shells with shared env, health, logging, metrics, migrations, development bootstrap contracts, and pluggable blob storage.
 
 ## Current Slice
 
@@ -11,7 +10,7 @@ Included now:
 
 - independently bootable `web`, `api`, `collab`, and `worker` dev services
 - shared env parsing and validation in `@openmirage/config-env`
-- structured service logging in `@openmirage/observability`
+- structured service logging, metrics, and error-reporting bootstrap in `@openmirage/observability`
 - Postgres migration and reset workflow in `@openmirage/db`
 - relational metadata schema for workspaces, files, pages, auth artifacts, comments, assets, share links, and export jobs
 - deterministic development bootstrap data for one workspace and one test user flow
@@ -19,6 +18,8 @@ Included now:
 - collab health endpoint plus websocket mount path
 - worker heartbeat and HTTP status surface
 - a React/Vite landing shell that probes API and collab reachability
+- Prometheus-compatible `/metrics` endpoints for `api`, `collab`, and `worker`
+- env-gated forced test error routes and Sentry integration for backend services
 - a provider-backed storage abstraction with `minio`, generic `s3-compatible`, and `local` adapters
 - local Docker Compose services for PostgreSQL and MinIO with automatic bucket bootstrap
 - API storage smoke endpoints for upload, list, and delete verification through the abstraction
@@ -92,10 +93,13 @@ Key endpoints:
 - web: `http://localhost:3000`
 - api health: `http://localhost:4000/healthz`
 - api readiness: `http://localhost:4000/readyz`
+- api metrics: `http://localhost:4000/metrics`
 - api auth entrypoint: `http://localhost:4000/auth/entry`
 - collab health: `http://localhost:4100/healthz`
+- collab metrics: `http://localhost:4100/metrics`
 - collab websocket mount: `ws://localhost:4100/collab`
 - worker health: `http://localhost:4200/healthz`
+- worker metrics: `http://localhost:4200/metrics`
 - worker status: `http://localhost:4200/status`
 - storage smoke list: `http://localhost:4000/internal/storage/smoke`
 
@@ -152,9 +156,39 @@ Expected result:
 - `GET` lists the uploaded object
 - `DELETE` removes it without any provider-specific API code path
 
+Backend observability envs:
+
+- `APP_VERSION`: release/version string included in logs and metrics
+- `ENABLE_TEST_ERROR_ROUTES`: enables `GET /__diagnostics/error` for forced error verification
+- `SENTRY_DSN`: enables Sentry only when set and `OPENMIRAGE_ENV` is `staging` or `production`
+- `SENTRY_ENVIRONMENT`: optional override for Sentry environment tagging
+- `SENTRY_RELEASE`: optional override for Sentry release tagging
+
+Local defaults keep Sentry off. To verify the reporting path in a staging-like environment, set:
+
+```bash
+OPENMIRAGE_ENV=staging
+ENABLE_TEST_ERROR_ROUTES=true
+SENTRY_DSN=...
+```
+
+Then call one backend diagnostics route, for example:
+
+```bash
+curl -i http://localhost:4000/__diagnostics/error
+```
+
+Expected outcomes:
+
+- the service logs a structured error with request/correlation context
+- `/metrics` reflects the request activity
+- the error appears in the configured Sentry project when enabled
+
 ## Success Criteria For This Slice
 
 - each runtime service boots independently in dev mode
 - `pnpm dev` starts the full runtime slice from the repo root
 - the web shell confirms API and collab reachability
-- logs identify service and environment clearly enough for local debugging
+- logs identify service, environment, version, and request/correlation IDs clearly enough for local debugging
+- `/metrics` is queryable on `api`, `collab`, and `worker`
+- one forced backend test error can be routed to Sentry when explicitly enabled

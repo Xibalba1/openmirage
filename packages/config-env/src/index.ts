@@ -1,4 +1,5 @@
 import {
+  type ErrorReportingConfig,
   type LocalStorageConfig,
   type RuntimeEnvironment,
   runtimeEnvironments,
@@ -18,6 +19,9 @@ export interface BaseServiceEnv {
   host: string;
   logLevel: "debug" | "info";
   sessionCookieName: string;
+  appVersion: string;
+  enableTestErrorRoutes: boolean;
+  errorReporting: ErrorReportingConfig;
 }
 
 export interface ApiEnv extends BaseServiceEnv {
@@ -96,6 +100,28 @@ function readRuntimeEnvironment(source: EnvSource): RuntimeEnvironment {
   );
 }
 
+function readBoolean(
+  source: EnvSource,
+  key: string,
+  fallback: boolean
+): boolean {
+  const rawValue = source[key];
+
+  if (rawValue === undefined) {
+    return fallback;
+  }
+
+  if (rawValue === "true") {
+    return true;
+  }
+
+  if (rawValue === "false") {
+    return false;
+  }
+
+  throw new Error(`Environment variable ${key} must be true or false`);
+}
+
 function readLogLevel(source: EnvSource): "debug" | "info" {
   const value = source.LOG_LEVEL ?? "info";
 
@@ -113,7 +139,9 @@ function readStorageProvider(source: EnvSource): StorageProviderKind {
     return value as StorageProviderKind;
   }
 
-  throw new Error(`Environment variable STORAGE_PROVIDER must be one of ${storageProviderKinds.join(", ")}`);
+  throw new Error(
+    `Environment variable STORAGE_PROVIDER must be one of ${storageProviderKinds.join(", ")}`
+  );
 }
 
 function readUrlPath(source: EnvSource, key: string, fallback: string): string {
@@ -126,40 +154,70 @@ function readUrlPath(source: EnvSource, key: string, fallback: string): string {
   return value;
 }
 
+function readAppVersion(source: EnvSource): string {
+  return source.APP_VERSION ?? "0.1.0";
+}
+
+function readErrorReportingConfig(
+  source: EnvSource,
+  environment: RuntimeEnvironment,
+  release: string
+): ErrorReportingConfig {
+  const dsn = source.SENTRY_DSN;
+  const sentryEnvironment = source.SENTRY_ENVIRONMENT;
+
+  if (
+    sentryEnvironment !== undefined &&
+    !runtimeEnvironments.includes(sentryEnvironment as RuntimeEnvironment)
+  ) {
+    throw new Error(
+      `Environment variable SENTRY_ENVIRONMENT must be one of ${runtimeEnvironments.join(", ")}`
+    );
+  }
+
+  return {
+    dsn,
+    enabled:
+      Boolean(dsn) &&
+      (environment === "staging" || environment === "production"),
+    environment:
+      (sentryEnvironment as RuntimeEnvironment | undefined) ?? environment,
+    release: source.SENTRY_RELEASE ?? release
+  };
+}
+
 function readBaseServiceEnv(
   service: ServiceEnvName,
   source: EnvSource
 ): BaseServiceEnv {
+  const environment = readRuntimeEnvironment(source);
+  const appVersion = readAppVersion(source);
+
   return {
     service,
-    environment: readRuntimeEnvironment(source),
+    environment,
     host: source.SERVICE_HOST ?? "0.0.0.0",
     logLevel: readLogLevel(source),
-    sessionCookieName: source.SESSION_COOKIE_NAME ?? "openmirage_session"
+    sessionCookieName: source.SESSION_COOKIE_NAME ?? "openmirage_session",
+    appVersion,
+    enableTestErrorRoutes: readBoolean(
+      source,
+      "ENABLE_TEST_ERROR_ROUTES",
+      false
+    ),
+    errorReporting: readErrorReportingConfig(source, environment, appVersion)
   };
 }
 
-function readBoolean(source: EnvSource, key: string, fallback: boolean): boolean {
-  const value = source[key];
-
-  if (value === undefined) {
-    return fallback;
-  }
-
-  if (value === "true") {
-    return true;
-  }
-
-  if (value === "false") {
-    return false;
-  }
-
-  throw new Error(`Environment variable ${key} must be true or false`);
-}
-
-export function readStorageConfig(source: EnvSource = process.env): StorageConfig {
+export function readStorageConfig(
+  source: EnvSource = process.env
+): StorageConfig {
   const provider = readStorageProvider(source);
-  const bucket = readRequiredString(source, "STORAGE_BUCKET", "openmirage-assets");
+  const bucket = readRequiredString(
+    source,
+    "STORAGE_BUCKET",
+    "openmirage-assets"
+  );
 
   if (provider === "local") {
     const localConfig: LocalStorageConfig = {
@@ -243,7 +301,11 @@ export function readWorkerEnv(source: EnvSource = process.env): WorkerEnv {
       "postgres://openmirage:openmirage@localhost:5432/openmirage"
     ),
     storage: readStorageConfig(source),
-    heartbeatIntervalMs: readNumber(source, "WORKER_HEARTBEAT_INTERVAL_MS", 5000)
+    heartbeatIntervalMs: readNumber(
+      source,
+      "WORKER_HEARTBEAT_INTERVAL_MS",
+      5000
+    )
   };
 }
 

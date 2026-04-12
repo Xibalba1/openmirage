@@ -1,8 +1,22 @@
 import cors from "@fastify/cors";
 import { createSessionContract } from "@openmirage/auth";
 import { readApiEnv } from "@openmirage/config-env";
-import { checkMetadataStore, createMetadataStoreContract } from "@openmirage/db";
-import { createServiceLogger, summarizeChecks } from "@openmirage/observability";
+import {
+  checkMetadataStore,
+  createMetadataStoreContract,
+  getApplicationVersionInfo
+} from "@openmirage/db";
+import {
+  createErrorLogFields,
+  createHttpMetrics,
+  createMetricsRegistry,
+  createRequestId,
+  createServiceLogger,
+  initErrorReporter,
+  registerProcessErrorHandlers,
+  registerServiceInfoMetrics,
+  summarizeChecks
+} from "@openmirage/observability";
 import { createStorage } from "@openmirage/storage";
 import {
   type HealthStatus,
@@ -90,12 +104,44 @@ async function startApiServer(): Promise<void> {
   const logger = createServiceLogger({
     service: "api",
     environment: env.environment,
+    version: env.appVersion,
     level: env.logLevel
   });
+  const reporter = initErrorReporter(env.errorReporting, logger);
+  const registry = createMetricsRegistry();
+  const httpMetrics = createHttpMetrics(registry, "api");
+  const serviceHealth = registry.gauge({
+    name: "openmirage_service_health",
+    help: "Current health state for the service",
+    labelNames: ["service"],
+    type: "gauge"
+  });
+  const serviceReady = registry.gauge({
+    name: "openmirage_service_ready",
+    help: "Current readiness state for the service",
+    labelNames: ["service"],
+    type: "gauge"
+  });
+
+  registerProcessErrorHandlers(logger, reporter);
+  registerServiceInfoMetrics(
+    registry,
+    "api",
+    env.environment,
+    getApplicationVersionInfo(env.appVersion)
+  );
+  serviceHealth.set({ service: "api" }, 1);
+  serviceReady.set({ service: "api" }, 1);
+
+  const requestStartedAt = new WeakMap<object, bigint>();
   const storage = createStorage(env.storage);
 
   const app = Fastify({
-    disableRequestLogging: true
+    disableRequestLogging: true,
+    genReqId(request) {
+      const header = request.headers["x-request-id"];
+      return createRequestId(typeof header === "string" ? header : undefined);
+    }
   });
 
   await app.register(cors, {
@@ -103,10 +149,10 @@ async function startApiServer(): Promise<void> {
     credentials: true
   });
 
-  app.addHook("onRequest", async (request) => {
+  app.addHook("onRequest", async (request, reply) => {
     const startedAt = process.hrtime.bigint();
-
-    request.headers["x-openmirage-started-at"] = startedAt.toString();
+    requestStartedAt.set(request, startedAt);
+    reply.header("x-request-id", request.id);
 
     logger.info("request started", {
       method: request.method,
@@ -116,11 +162,12 @@ async function startApiServer(): Promise<void> {
   });
 
   app.addHook("onResponse", async (request, reply) => {
-    const startedAt = request.headers["x-openmirage-started-at"];
+    const startedAt = requestStartedAt.get(request);
     const durationMs =
-      typeof startedAt === "string"
-        ? Number(process.hrtime.bigint() - BigInt(startedAt)) / 1_000_000
+      typeof startedAt === "bigint"
+        ? Number(process.hrtime.bigint() - startedAt) / 1_000_000
         : undefined;
+    const route = request.routeOptions.url ?? request.url;
 
     logger.info("request completed", {
       durationMs:
@@ -130,6 +177,46 @@ async function startApiServer(): Promise<void> {
       requestId: request.id,
       statusCode: reply.statusCode
     });
+    httpMetrics.requestsTotal.inc({
+      method: request.method,
+      route,
+      service: "api",
+      status_code: reply.statusCode
+    });
+
+    if (durationMs !== undefined) {
+      httpMetrics.requestDurationSeconds.observe(
+        {
+          method: request.method,
+          route,
+          service: "api",
+          status_code: reply.statusCode
+        },
+        durationMs / 1_000
+      );
+    }
+  });
+
+  app.setErrorHandler(async (error, request, reply) => {
+    logger.error(
+      "request failed",
+      createErrorLogFields(error, {
+        method: request.method,
+        path: request.url,
+        requestId: request.id,
+        statusCode: reply.statusCode >= 400 ? reply.statusCode : 500
+      })
+    );
+    reporter.captureException(error, {
+      requestId: request.id,
+      route: request.routeOptions.url
+    });
+
+    if (!reply.sent) {
+      reply.status(500).send({
+        error: "internal_error"
+      });
+    }
   });
 
   app.get("/healthz", async () => buildHealthStatus());
@@ -141,6 +228,10 @@ async function startApiServer(): Promise<void> {
     }
 
     return ready;
+  });
+  app.get("/metrics", async (_request, reply) => {
+    reply.header("content-type", "text/plain; version=0.0.4; charset=utf-8");
+    return registry.render();
   });
   app.get("/", async () => ({
     service: "api",
@@ -161,48 +252,57 @@ async function startApiServer(): Promise<void> {
       objects: await storage.list("smoke/")
     };
   });
-  app.post<{ Body: StorageSmokeBody }>("/internal/storage/smoke", async (request, reply) => {
-    await storage.ensureBucket();
+  app.post<{ Body: StorageSmokeBody }>(
+    "/internal/storage/smoke",
+    async (request, reply) => {
+      await storage.ensureBucket();
 
-    if (!request.body?.bodyBase64) {
-      reply.status(400);
+      if (!request.body?.bodyBase64) {
+        reply.status(400);
+        return {
+          error: "bodyBase64 is required"
+        };
+      }
+
+      const key =
+        request.body.key ??
+        `smoke/${Date.now()}-${Math.random().toString(36).slice(2)}.bin`;
+      const body = Buffer.from(request.body.bodyBase64, "base64");
+      const object = await storage.put({
+        key,
+        body,
+        ...(request.body.contentType
+          ? { contentType: request.body.contentType }
+          : {})
+      });
+
       return {
-        error: "bodyBase64 is required"
+        object,
+        downloadUrl: await storage.resolveDownloadUrl(key)
       };
     }
-
-    const key =
-      request.body.key ??
-      `smoke/${Date.now()}-${Math.random().toString(36).slice(2)}.bin`;
-    const body = Buffer.from(request.body.bodyBase64, "base64");
-    const object = await storage.put({
-      key,
-      body,
-      ...(request.body.contentType
-        ? { contentType: request.body.contentType }
-        : {})
-    });
-
-    return {
-      object,
-      downloadUrl: await storage.resolveDownloadUrl(key)
-    };
-  });
+  );
   app.delete<{ Querystring: { key: string } }>(
     "/internal/storage/smoke",
     async (request, reply) => {
-    await storage.ensureBucket();
+      await storage.ensureBucket();
 
-    if (!request.query.key) {
-      reply.status(400);
-      return {
-        error: "key is required"
-      };
-    }
+      if (!request.query.key) {
+        reply.status(400);
+        return {
+          error: "key is required"
+        };
+      }
 
-    return storage.delete(request.query.key);
+      return storage.delete(request.query.key);
     }
   );
+
+  if (env.enableTestErrorRoutes) {
+    app.get("/__diagnostics/error", async () => {
+      throw new Error("Forced API observability test error");
+    });
+  }
 
   try {
     try {
@@ -226,9 +326,11 @@ async function startApiServer(): Promise<void> {
       storageProvider: env.storage.provider
     });
   } catch (error) {
-    logger.error("api server failed to start", {
-      error: error instanceof Error ? error.message : String(error)
+    logger.error("api server failed to start", createErrorLogFields(error));
+    reporter.captureException(error, {
+      event: "startup"
     });
+    await reporter.flush();
     process.exitCode = 1;
   }
 }

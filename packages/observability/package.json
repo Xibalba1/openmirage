@@ -19,6 +19,7 @@
     "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/observability"
   },
   "dependencies": {
+    "@sentry/node": "^10.22.0",
     "@openmirage/types": "workspace:*"
   }
 }

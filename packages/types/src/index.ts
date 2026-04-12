@@ -29,7 +29,23 @@ export interface ServiceCheck {
   summary: string;
 }
 
-export const storageProviderKinds = ["minio", "s3-compatible", "local"] as const;
+export interface ErrorReportingConfig {
+  dsn: string | undefined;
+  enabled: boolean;
+  environment: RuntimeEnvironment;
+  release: string;
+}
+
+export interface ApplicationVersionInfo {
+  release: string;
+  schemaVersion: string;
+}
+
+export const storageProviderKinds = [
+  "minio",
+  "s3-compatible",
+  "local"
+] as const;
 
 export type StorageProviderKind = (typeof storageProviderKinds)[number];
 
@@ -78,7 +94,6 @@ export interface LocalStorageConfig extends StorageCommonConfig {
 }
 
 export type StorageConfig = S3StorageConfig | LocalStorageConfig;
-
 export interface HealthStatus {
   service: ServiceName;
   ok: boolean;
