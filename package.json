@@ -8,7 +8,7 @@
     "pnpm": ">=9.15.0"
   },
   "scripts": {
-    "dev": "turbo run dev --continue",
+    "dev": "turbo run dev --continue --concurrency 20 --filter=@openmirage/web --filter=@openmirage/api --filter=@openmirage/collab --filter=@openmirage/worker",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "format": "prettier --write .",
@@ -22,12 +22,16 @@
     "@openmirage/config-eslint": "workspace:*",
     "@openmirage/config-prettier": "workspace:*",
     "@openmirage/config-typescript": "workspace:*",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
     "@types/node": "^22.10.2",
     "eslint": "^9.25.1",
     "globals": "^16.0.0",
     "prettier": "^3.5.3",
+    "tsx": "^4.19.3",
     "turbo": "^2.3.3",
     "typescript": "^5.7.2",
-    "typescript-eslint": "^8.30.1"
+    "typescript-eslint": "^8.30.1",
+    "vite": "^6.3.5"
   }
 }

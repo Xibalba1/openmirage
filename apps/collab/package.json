@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node ../../scripts/noop-task.mjs dev @openmirage/collab",
+    "dev": "node ../../scripts/dev-service.mjs ./src/index.ts",
     "build": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings=0",
     "test": "node ../../scripts/check-workspace.mjs .",
@@ -12,8 +12,14 @@
     "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/collab"
   },
   "dependencies": {
+    "@hocuspocus/server": "^3.2.6",
     "@openmirage/auth": "workspace:*",
+    "@openmirage/config-env": "workspace:*",
     "@openmirage/observability": "workspace:*",
-    "@openmirage/types": "workspace:*"
+    "@openmirage/types": "workspace:*",
+    "fastify": "^5.3.2",
+    "ws": "^8.18.3",
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.27"
   }
 }

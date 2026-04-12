@@ -4,14 +4,20 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node ../../scripts/noop-task.mjs dev @openmirage/web",
-    "build": "tsc -p tsconfig.json",
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json && vite build",
     "lint": "eslint . --max-warnings=0",
     "test": "node ../../scripts/check-workspace.mjs .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/web"
   },
   "dependencies": {
-    "@openmirage/types": "workspace:*"
+    "@openmirage/config-env": "workspace:*",
+    "@openmirage/types": "workspace:*",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.4.1"
   }
 }

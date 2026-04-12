@@ -1,23 +1,28 @@
 # OpenMirage
 
-OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository currently implements the Step 2 platform slice: the monorepo layout, shared config baselines, and repo-wide developer tooling.
+OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository currently implements the runtime service scaffolding slice: bootable `web`, `api`, `collab`, and `worker` shells with shared env, health, and logging contracts.
 
 ## Current Slice
 
-This slice establishes the repository contract and shared developer-tooling contract only.
+This slice establishes the initial runtime contract for the platform services while keeping the product itself empty.
 
 Included now:
 
-- `pnpm` workspaces and Turborepo orchestration
-- architecture-aligned apps and shared packages
-- shared TypeScript, env, lint, test, and formatting baseline packages
-- repo-wide ESLint, Prettier, and editor defaults
-- placeholder source/build contracts for every workspace
+- independently bootable `web`, `api`, `collab`, and `worker` dev services
+- shared env parsing and validation in `@openmirage/config-env`
+- structured service logging in `@openmirage/observability`
+- API health and readiness endpoints
+- collab health endpoint plus websocket mount path
+- worker heartbeat and HTTP status surface
+- a React/Vite landing shell that probes API and collab reachability
 
 Not included yet:
 
-- real Fastify, Hocuspocus, worker, database, auth, storage, Docker, Caddy, or deployment behavior
-- product features, editor runtime, or domain workflows
+- editor, canvas, files/pages/projects, comments, or other product routes
+- real magic-link delivery, session persistence, or database-backed auth flows
+- collab document persistence or page authorization
+- worker jobs, exports, or cleanup processing
+- Docker Compose, Caddy routing, staging deployment, backup/restore verification
 
 ## Requirements
 
@@ -55,6 +60,26 @@ pnpm typecheck
 pnpm docker:build
 ```
 
+Run services independently when you want to verify one slice surface at a time:
+
+```bash
+pnpm --filter @openmirage/api dev
+pnpm --filter @openmirage/collab dev
+pnpm --filter @openmirage/worker dev
+pnpm --filter @openmirage/web dev
+```
+
+Key endpoints:
+
+- web: `http://localhost:3000`
+- api health: `http://localhost:4000/healthz`
+- api readiness: `http://localhost:4000/readyz`
+- api auth entrypoint: `http://localhost:4000/auth/entry`
+- collab health: `http://localhost:4100/healthz`
+- collab websocket mount: `ws://localhost:4100/collab`
+- worker health: `http://localhost:4200/healthz`
+- worker status: `http://localhost:4200/status`
+
 ## Tooling Conventions
 
 - Workspace `tsconfig.json` files inherit from `@openmirage/config-typescript`, not bespoke root target configs.
@@ -62,9 +87,13 @@ pnpm docker:build
 - Relative imports are allowed only within a single workspace.
 - Repo formatting is controlled by the root Prettier config and `pnpm format`.
 
+## Environment Files
+
+Each app includes an `.env.example` with the variables needed for this slice. Node services will load `.env` automatically if present. The web shell uses Vite `VITE_*` public variables.
+
 ## Success Criteria For This Slice
 
-- a clean checkout installs as a workspace successfully
-- Turbo resolves every declared app and package
-- root commands are centralized and documented
-- the repo remains product-empty but is ready for the next platform slice
+- each runtime service boots independently in dev mode
+- `pnpm dev` starts the full runtime slice from the repo root
+- the web shell confirms API and collab reachability
+- logs identify service and environment clearly enough for local debugging

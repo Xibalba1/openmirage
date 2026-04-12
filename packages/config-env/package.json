@@ -17,5 +17,8 @@
     "test": "node ../../scripts/check-workspace.mjs .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/config-env"
+  },
+  "dependencies": {
+    "@openmirage/types": "workspace:*"
   }
 }
