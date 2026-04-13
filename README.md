@@ -1,6 +1,6 @@
 # OpenMirage
 
-OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository currently implements the runtime service scaffolding slice plus the initial Postgres metadata, storage, and observability baselines: bootable `web`, `api`, `collab`, and `worker` shells with shared env, health, logging, metrics, migrations, development bootstrap contracts, and pluggable blob storage.
+OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository currently implements the runtime service scaffolding slice plus the initial Postgres metadata, auth/session, storage, and observability baselines: bootable `web`, `api`, `collab`, and `worker` shells with shared env, health, logging, metrics, migrations, development bootstrap contracts, magic-link auth, server-managed sessions, and pluggable blob storage.
 
 ## Current Slice
 
@@ -14,6 +14,9 @@ Included now:
 - Postgres migration and reset workflow in `@openmirage/db`
 - relational metadata schema for workspaces, files, pages, auth artifacts, comments, assets, share links, and export jobs
 - deterministic development bootstrap data for one workspace and one test user flow
+- magic-link auth request and consume flow with Postgres-backed sessions
+- protected session validation and workspace membership lookup endpoints
+- collab websocket authorization delegated to the API/session layer
 - API health and readiness endpoints
 - collab health endpoint plus websocket mount path
 - worker heartbeat and HTTP status surface
@@ -27,7 +30,7 @@ Included now:
 Not included yet:
 
 - editor, canvas, files/pages/projects, comments, or other product routes
-- real magic-link delivery or authenticated product flows
+- SMTP-backed magic-link delivery or polished authenticated product flows
 - collab document persistence or page authorization
 - worker jobs, exports, or cleanup processing
 - Caddy routing, staging deployment, backup/restore verification
@@ -97,6 +100,8 @@ Key endpoints:
 - api readiness: `http://localhost:4000/readyz`
 - api metrics: `http://localhost:4000/metrics`
 - api auth entrypoint: `http://localhost:4000/auth/entry`
+- api auth session: `http://localhost:4000/auth/session`
+- api auth me: `http://localhost:4000/auth/me`
 - collab health: `http://localhost:4100/healthz`
 - collab metrics: `http://localhost:4100/metrics`
 - collab websocket mount: `ws://localhost:4100/collab`
@@ -116,6 +121,17 @@ Key endpoints:
 ## Environment Files
 
 Each app includes an `.env.example` with the variables needed for this slice. Node services will load `.env` automatically if present. The web shell uses Vite `VITE_*` public variables.
+
+Auth/session envs in `apps/api/.env.example`:
+
+- `APP_BASE_URL=http://localhost:3000`
+- `SESSION_COOKIE_NAME=openmirage_session`
+- `SESSION_COOKIE_PATH=/`
+- `SESSION_COOKIE_SAME_SITE=lax`
+- `SESSION_COOKIE_SECURE=false` for direct local dev, `true` behind HTTPS/Caddy
+- `AUTH_MAGIC_LINK_TTL_MINUTES=15`
+- `AUTH_SESSION_TTL_DAYS=30`
+- `DEV_AUTH_EXPOSE_MAGIC_LINK=true` to include the dev magic link in the request response
 
 The storage-bearing services share the same storage env contract:
 
@@ -159,6 +175,68 @@ Expected result:
 - `POST` uploads the object and returns a download URL
 - `GET` lists the uploaded object
 - `DELETE` removes it without any provider-specific API code path
+
+## Auth Smoke Check
+
+Start infrastructure and the auth-bearing services:
+
+```bash
+pnpm infra:up
+pnpm db:migrate:up
+pnpm db:seed
+pnpm --filter @openmirage/api dev
+pnpm --filter @openmirage/collab dev
+```
+
+Request a dev magic link:
+
+```bash
+curl -X POST http://localhost:4000/auth/magic-link/request \
+  -H 'content-type: application/json' \
+  -d '{"email":"dev@openmirage.local"}'
+```
+
+Expected result:
+
+- the API logs a structured `magic link requested` event
+- the JSON response includes `delivery: "log"`
+- in development, the response also includes `magicLinkUrl`
+
+Consume the returned `magicLinkUrl` and store the session cookie:
+
+```bash
+curl -i -c /tmp/openmirage-auth-cookiejar.txt '<magicLinkUrl>'
+```
+
+Validate, refresh, and revoke the session:
+
+```bash
+curl -b /tmp/openmirage-auth-cookiejar.txt http://localhost:4000/auth/session
+curl -X POST -b /tmp/openmirage-auth-cookiejar.txt -c /tmp/openmirage-auth-cookiejar.txt \
+  http://localhost:4000/auth/session/refresh
+curl -X POST -b /tmp/openmirage-auth-cookiejar.txt -c /tmp/openmirage-auth-cookiejar.txt \
+  http://localhost:4000/auth/logout
+curl -i -b /tmp/openmirage-auth-cookiejar.txt http://localhost:4000/auth/session
+```
+
+Expected result:
+
+- `/auth/session` returns the current user, active session, and workspace memberships
+- `/auth/session/refresh` returns `200` and re-issues the session cookie
+- `/auth/logout` clears the session cookie and revokes the server-side session
+- the final `/auth/session` call returns `401`
+
+Verify collab rejects unauthenticated access and accepts an authenticated session:
+
+```bash
+pnpm --filter @openmirage/collab exec node -e "const WebSocket=require('ws');const ws=new WebSocket('ws://127.0.0.1:4100/collab?documentName=runtime-check&workspaceId=<workspaceId>');ws.on('unexpected-response',(_req,res)=>{console.log(res.statusCode);process.exit(0);});ws.on('open',()=>{console.log('unexpected-open');process.exit(1);});"
+pnpm --filter @openmirage/collab exec node -e "const WebSocket=require('ws');const ws=new WebSocket('ws://127.0.0.1:4100/collab?documentName=runtime-check&workspaceId=<workspaceId>',{headers:{Cookie:'openmirage_session=<sessionToken>'}});ws.on('open',()=>{console.log('open');ws.close();});ws.on('close',()=>process.exit(0));"
+```
+
+Expected result:
+
+- the unauthenticated websocket probe receives `401`
+- the authenticated websocket probe reaches `open`
 
 ## Platform Prerequisite Verification
 

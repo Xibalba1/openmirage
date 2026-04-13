@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { readStorageConfig } from "./index.js";
+import { readApiEnv, readStorageConfig } from "./index.js";
 
 test("readStorageConfig returns local storage config when provider is local", () => {
   const config = readStorageConfig({
@@ -52,5 +52,40 @@ test("readStorageConfig rejects invalid boolean values", () => {
         STORAGE_S3_FORCE_PATH_STYLE: "yes"
       }),
     /STORAGE_S3_FORCE_PATH_STYLE/
+  );
+});
+
+test("readApiEnv derives auth defaults for development", () => {
+  const env = readApiEnv({
+    OPENMIRAGE_ENV: "development",
+    DATABASE_URL: "postgres://localhost/openmirage"
+  });
+
+  assert.equal(env.appBaseUrl, "http://localhost:3000");
+  assert.equal(env.authMagicLinkTtlMinutes, 15);
+  assert.equal(env.authSessionTtlDays, 30);
+  assert.equal(env.sessionCookiePath, "/");
+  assert.equal(env.sessionCookieSameSite, "lax");
+  assert.equal(env.sessionCookieSecure, false);
+  assert.equal(env.devAuthExposeMagicLink, true);
+});
+
+test("readApiEnv enables secure cookies by default in staging", () => {
+  const env = readApiEnv({
+    OPENMIRAGE_ENV: "staging",
+    DATABASE_URL: "postgres://localhost/openmirage"
+  });
+
+  assert.equal(env.sessionCookieSecure, true);
+});
+
+test("readApiEnv rejects invalid same-site settings", () => {
+  assert.throws(
+    () =>
+      readApiEnv({
+        DATABASE_URL: "postgres://localhost/openmirage",
+        SESSION_COOKIE_SAME_SITE: "bogus"
+      }),
+    /SESSION_COOKIE_SAME_SITE/
   );
 });

@@ -14,7 +14,7 @@
     "dev": "node ../../scripts/noop-task.mjs dev @openmirage/auth",
     "build": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings=0",
-    "test": "node ../../scripts/check-workspace.mjs .",
+    "test": "node --test --import tsx ./src/index.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/auth"
   },

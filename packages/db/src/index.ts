@@ -15,6 +15,20 @@ export {
   seedDevelopmentBootstrap,
   type DevelopmentBootstrapSummary
 } from "./seed.js";
+export {
+  type ConsumedMagicLinkResult,
+  consumeMagicLinkToken,
+  deriveDisplayName,
+  getAuthContextForSessionToken,
+  issueMagicLinkForEmail,
+  refreshSession,
+  revokeSession,
+  upsertUserByEmail,
+  type IssuedMagicLinkToken,
+  type IssuedSession,
+  type MagicLinkRequestResult,
+  type UpsertUserInput
+} from "./auth.js";
 
 export function getApplicationVersionInfo(
   release: string
