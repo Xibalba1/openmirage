@@ -64,7 +64,9 @@ export interface HistogramMetric {
 export interface MetricsRegistry {
   counter(definition: MetricDefinition): CounterMetric;
   gauge(definition: MetricDefinition): GaugeMetric;
-  histogram(definition: MetricDefinition & { buckets?: number[] }): HistogramMetric;
+  histogram(
+    definition: MetricDefinition & { buckets?: number[] }
+  ): HistogramMetric;
   render(): string;
 }
 
@@ -90,7 +92,10 @@ function shouldLog(
   return nextLevel !== "debug";
 }
 
-function serializeLabels(labels: MetricLabels | undefined, labelNames: string[]): string {
+function serializeLabels(
+  labels: MetricLabels | undefined,
+  labelNames: string[]
+): string {
   if (labelNames.length === 0) {
     return "";
   }
@@ -113,13 +118,18 @@ function escapeLabelValue(value: string): string {
     .replaceAll("\n", "\\n");
 }
 
-function formatMetricLabels(labels: MetricLabels | undefined, labelNames: string[]): string {
+function formatMetricLabels(
+  labels: MetricLabels | undefined,
+  labelNames: string[]
+): string {
   if (labelNames.length === 0) {
     return "";
   }
 
   const normalized = labelNames
-    .map((name) => `${name}="${escapeLabelValue(String(labels?.[name] ?? ""))}"`)
+    .map(
+      (name) => `${name}="${escapeLabelValue(String(labels?.[name] ?? ""))}"`
+    )
     .join(",");
 
   return `{${normalized}}`;
@@ -210,7 +220,10 @@ export function createServiceLogger(options: LoggerOptions): ServiceLogger {
 class BaseMetricStore {
   readonly definition: MetricDefinition;
   readonly labelNames: string[];
-  readonly samples = new Map<string, { labels: MetricLabels | undefined; value: number }>();
+  readonly samples = new Map<
+    string,
+    { labels: MetricLabels | undefined; value: number }
+  >();
 
   constructor(definition: MetricDefinition) {
     this.definition = definition;
@@ -326,8 +339,12 @@ export function createMetricsRegistry(): MetricsRegistry {
       const lines: string[] = [];
 
       for (const metric of metrics) {
-        lines.push(`# HELP ${metric.definition.name} ${escapeHelp(metric.definition.help)}`);
-        lines.push(`# TYPE ${metric.definition.name} ${metric.definition.type}`);
+        lines.push(
+          `# HELP ${metric.definition.name} ${escapeHelp(metric.definition.help)}`
+        );
+        lines.push(
+          `# TYPE ${metric.definition.name} ${metric.definition.type}`
+        );
 
         if (metric instanceof HistogramStore) {
           for (const sample of metric.bucketSamples.values()) {

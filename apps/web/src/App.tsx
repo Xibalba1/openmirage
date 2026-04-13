@@ -42,7 +42,9 @@ export function App() {
 
     async function probeServices() {
       try {
-        const apiHealth = await fetchHealth(`${runtime.urls.apiBaseUrl}/healthz`);
+        const apiHealth = await fetchHealth(
+          `${runtime.urls.apiBaseUrl}/healthz`
+        );
 
         if (!cancelled) {
           setApiState({
@@ -85,10 +87,16 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [runtime.environment, runtime.urls.apiBaseUrl, runtime.urls.collabHttpUrl]);
+  }, [
+    runtime.environment,
+    runtime.urls.apiBaseUrl,
+    runtime.urls.collabHttpUrl
+  ]);
 
   const apiSummary =
-    apiState.status === "checking" ? "Waiting for API probe..." : apiState.summary;
+    apiState.status === "checking"
+      ? "Waiting for API probe..."
+      : apiState.summary;
   const collabSummary =
     collabState.status === "checking"
       ? "Waiting for collab probe..."
@@ -164,8 +172,12 @@ export function App() {
           <h2>Boundaries</h2>
           <ul>
             <li>API owns auth, sessions, and product-domain metadata.</li>
-            <li>Collab owns page-scoped realtime sync and awareness transport.</li>
-            <li>Worker remains bounded to background status and future jobs.</li>
+            <li>
+              Collab owns page-scoped realtime sync and awareness transport.
+            </li>
+            <li>
+              Worker remains bounded to background status and future jobs.
+            </li>
             <li>This slice does not ship editor or document features yet.</li>
           </ul>
         </article>

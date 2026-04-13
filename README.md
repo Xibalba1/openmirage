@@ -67,6 +67,8 @@ pnpm format:check
 pnpm test
 pnpm typecheck
 pnpm docker:build
+pnpm verify:platform:prereqs
+pnpm verify:platform:infra
 pnpm db:migrate:up
 pnpm db:migrate:status
 pnpm db:reset
@@ -99,6 +101,7 @@ Key endpoints:
 - collab metrics: `http://localhost:4100/metrics`
 - collab websocket mount: `ws://localhost:4100/collab`
 - worker health: `http://localhost:4200/healthz`
+- worker readiness: `http://localhost:4200/readyz`
 - worker metrics: `http://localhost:4200/metrics`
 - worker status: `http://localhost:4200/status`
 - storage smoke list: `http://localhost:4000/internal/storage/smoke`
@@ -151,10 +154,51 @@ curl -X DELETE 'http://localhost:4000/internal/storage/smoke?key=smoke/hello.txt
 Expected result:
 
 - `pnpm infra:up` brings up PostgreSQL, MinIO, and bucket bootstrap
-- API `/healthz` and `/readyz` report the configured storage provider and bucket
+- API `/healthz` reports liveness plus configured dependency details
+- API `/readyz` verifies live Postgres reachability and storage readiness
 - `POST` uploads the object and returns a download URL
 - `GET` lists the uploaded object
 - `DELETE` removes it without any provider-specific API code path
+
+## Platform Prerequisite Verification
+
+The canonical prerequisite check for the infrastructure-backed slices is:
+
+```bash
+pnpm verify:platform:prereqs
+```
+
+This command verifies:
+
+- `pnpm` is available
+- Docker and `docker compose` are available
+- the Docker daemon is reachable
+- ports `5432`, `9000`, and `9001` are free
+- the Compose `postgres`, `minio`, and `minio-init` services can start
+- the Compose-backed `postgres` container reaches a healthy state
+
+If any prerequisite fails, the command stops immediately and prints corrective steps. No fallback non-Docker verification path is considered canonical for this slice.
+
+## Docker-Backed Infra Verification
+
+The canonical verification command for steps `4` and `6` is:
+
+```bash
+pnpm verify:platform:infra
+```
+
+This command:
+
+- runs the prerequisite verification first
+- starts the Compose-backed `postgres` and `minio` dependencies
+- runs `pnpm db:migrate:up`
+- runs `pnpm db:migrate:status`
+- runs `pnpm db:seed`
+- boots the API against the Compose-backed dependencies
+- exercises the storage smoke upload/list/delete flow through the API
+- tears down the Compose stack when finished
+
+This is the local manual verification path to keep using until CI automation is added in step `9`.
 
 Backend observability envs:
 
@@ -192,3 +236,4 @@ Expected outcomes:
 - logs identify service, environment, version, and request/correlation IDs clearly enough for local debugging
 - `/metrics` is queryable on `api`, `collab`, and `worker`
 - one forced backend test error can be routed to Sentry when explicitly enabled
+- `readyz` indicates live dependency readiness for `api` and `worker`

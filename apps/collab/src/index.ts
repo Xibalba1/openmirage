@@ -14,7 +14,6 @@ import {
 import { type HealthStatus } from "@openmirage/types";
 import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
-import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
 
 function createCollabHealthStatus(
@@ -111,17 +110,12 @@ async function startCollabServer(): Promise<void> {
   disconnectsTotal.inc({ service: "collab" }, 0);
 
   const requestStartedAt = new WeakMap<object, bigint>();
-  const connectionIds = new Map<string, string>();
+  const socketConnectionIds = new WeakMap<object, string>();
+  let activeSocketCount = 0;
 
   function syncRealtimeMetrics(): void {
-    activeConnections.set(
-      { service: "collab" },
-      hocuspocus.getConnectionsCount()
-    );
-    activeDocuments.set(
-      { service: "collab" },
-      hocuspocus.getDocumentsCount()
-    );
+    activeConnections.set({ service: "collab" }, activeSocketCount);
+    activeDocuments.set({ service: "collab" }, hocuspocus.getDocumentsCount());
   }
 
   const app = Fastify({
@@ -136,26 +130,14 @@ async function startCollabServer(): Promise<void> {
     name: "openmirage-collab",
     quiet: true,
     async onConnect(data) {
-      const socketId = data.socketId ?? randomUUID();
-      const connectionId = randomUUID();
-      connectionIds.set(socketId, connectionId);
-      totalConnections.inc({ service: "collab" });
-      syncRealtimeMetrics();
-      const hasSessionCookie = (data.requestHeaders.cookie ?? "").includes(
-        `${env.sessionCookieName}=`
-      );
-
-      logger.info("collab client connected", {
-        authenticated: hasSessionCookie,
-        connectionId,
+      logger.info("collab session connecting", {
         documentName: data.documentName,
-        socketId
+        socketId: data.socketId
       });
     },
     async connected(data) {
       syncRealtimeMetrics();
-      logger.info("collab connection established", {
-        connectionId: connectionIds.get(data.socketId ?? "") ?? "unknown",
+      logger.info("collab document session established", {
         documentName: data.documentName,
         socketId: data.socketId
       });
@@ -163,7 +145,6 @@ async function startCollabServer(): Promise<void> {
     async onLoadDocument(data) {
       syncRealtimeMetrics();
       logger.info("collab document load requested", {
-        connectionId: connectionIds.get(data.socketId ?? "") ?? "unknown",
         documentName: data.documentName,
         socketId: data.socketId
       });
@@ -171,23 +152,16 @@ async function startCollabServer(): Promise<void> {
     async onChange(data) {
       logger.debug("collab document changed", {
         clientsCount: data.clientsCount,
-        connectionId: connectionIds.get(data.socketId ?? "") ?? "unknown",
         documentName: data.documentName,
         socketId: data.socketId
       });
     },
     async onDisconnect(data) {
-      const connectionId = connectionIds.get(data.socketId ?? "") ?? "unknown";
-      disconnectsTotal.inc({ service: "collab" });
       syncRealtimeMetrics();
-      logger.info("collab client disconnected", {
-        connectionId,
+      logger.info("collab document session disconnected", {
         documentName: data.documentName,
         socketId: data.socketId
       });
-      if (data.socketId) {
-        connectionIds.delete(data.socketId);
-      }
     }
   });
 
@@ -298,7 +272,40 @@ async function startCollabServer(): Promise<void> {
       return;
     }
 
-    websocketServer.handleUpgrade(request, socket, head, (websocket: WebSocket) => {
+    websocketServer.handleUpgrade(request, socket, head, (websocket) => {
+      const closableSocket = websocket as {
+        once(event: "close", listener: () => void): void;
+      };
+      const connectionId = randomUUID();
+      const hasSessionCookie = (request.headers.cookie ?? "").includes(
+        `${env.sessionCookieName}=`
+      );
+      const documentName =
+        requestUrl.searchParams.get("documentName") ?? "unknown";
+
+      socketConnectionIds.set(websocket, connectionId);
+      activeSocketCount += 1;
+      totalConnections.inc({ service: "collab" });
+      syncRealtimeMetrics();
+      logger.info("collab websocket accepted", {
+        authenticated: hasSessionCookie,
+        connectionId,
+        documentName
+      });
+
+      closableSocket.once("close", () => {
+        const closedConnectionId =
+          socketConnectionIds.get(websocket) ?? connectionId;
+
+        activeSocketCount = Math.max(activeSocketCount - 1, 0);
+        disconnectsTotal.inc({ service: "collab" });
+        syncRealtimeMetrics();
+        logger.info("collab websocket closed", {
+          connectionId: closedConnectionId,
+          documentName
+        });
+      });
+
       hocuspocus.handleConnection(websocket, request, {
         connectedAt: new Date().toISOString()
       });
