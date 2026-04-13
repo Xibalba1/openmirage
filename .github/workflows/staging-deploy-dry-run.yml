@@ -1,0 +1,24 @@
+name: Staging Deploy Dry Run
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-staging:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+
+    steps:
+      - name: Show branch
+        run: echo "Deploying from ${GITHUB_REF}"
+
+      - name: Dry run only
+        run: echo "Staging deploy gate passed"
