@@ -394,20 +394,25 @@ export function readWebEnv(source: EnvSource): WebEnv {
       apiBaseUrl: readRequiredString(
         source,
         "VITE_API_BASE_URL",
-        "http://localhost:4000"
+        "http://localhost"
       ),
       collabHttpUrl: readRequiredString(
         source,
         "VITE_COLLAB_HTTP_URL",
-        "http://localhost:4100"
+        "http://localhost/collab"
       ),
       collabWsUrl: readRequiredString(
         source,
         "VITE_COLLAB_WS_URL",
-        "ws://localhost:4100/collab"
+        "ws://localhost/collab"
       ),
       collabWsPath: readUrlPath(source, "VITE_COLLAB_WS_PATH", "/collab"),
-      authPath: readUrlPath(source, "VITE_AUTH_PATH", "/auth")
+      authPath: readUrlPath(source, "VITE_AUTH_PATH", "/auth"),
+      workerHttpUrl: readRequiredString(
+        source,
+        "VITE_WORKER_HTTP_URL",
+        "http://localhost/worker"
+      )
     }
   };
 }

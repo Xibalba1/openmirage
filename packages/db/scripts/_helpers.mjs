@@ -54,12 +54,38 @@ export function requireFlagValue(flagName) {
 }
 
 export function runNodePgMigrate(args) {
-  const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  const result = spawnSync(command, ["exec", "node-pg-migrate", ...args], {
-    cwd: process.cwd(),
-    env: loadScriptEnv(),
-    stdio: "inherit"
-  });
+  const scriptCwd = existsSync(resolve(process.cwd(), "migrations"))
+    ? process.cwd()
+    : resolve(process.cwd(), "packages", "db");
+  const binaryName =
+    process.platform === "win32" ? "node-pg-migrate.cmd" : "node-pg-migrate";
+  const workspaceBinaryPath = resolve(
+    scriptCwd,
+    "node_modules",
+    ".bin",
+    binaryName
+  );
+  const rootBinaryPath = resolve(
+    process.cwd(),
+    "node_modules",
+    ".bin",
+    binaryName
+  );
+  const fallbackCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+  const binaryPath = existsSync(workspaceBinaryPath)
+    ? workspaceBinaryPath
+    : rootBinaryPath;
+  const result = existsSync(binaryPath)
+    ? spawnSync(binaryPath, args, {
+        cwd: scriptCwd,
+        env: loadScriptEnv(),
+        stdio: "inherit"
+      })
+    : spawnSync(fallbackCommand, ["exec", "node-pg-migrate", ...args], {
+        cwd: scriptCwd,
+        env: loadScriptEnv(),
+        stdio: "inherit"
+      });
 
   if (result.error) {
     throw result.error;

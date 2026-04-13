@@ -9,7 +9,7 @@
     "lint": "eslint . --max-warnings=0",
     "test": "node ../../scripts/check-workspace.mjs .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/collab"
+    "docker:build": "docker build -f Dockerfile -t openmirage-collab:local ../.."
   },
   "dependencies": {
     "@hocuspocus/server": "^3.2.6",

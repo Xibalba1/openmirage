@@ -1,6 +1,9 @@
-import { readWebEnv } from "@openmirage/config-env";
-import { type HealthStatus } from "@openmirage/types";
+import {
+  type HealthStatus,
+  type WorkerHeartbeat
+} from "@openmirage/types";
 import { useEffect, useState } from "react";
+import { readRuntimeWebEnv } from "./runtime-env";
 
 type ProbeState =
   | { status: "checking" }
@@ -28,12 +31,25 @@ async function fetchHealth(url: string): Promise<HealthStatus> {
   return (await response.json()) as HealthStatus;
 }
 
+async function fetchWorkerHeartbeat(url: string): Promise<WorkerHeartbeat> {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  return (await response.json()) as WorkerHeartbeat;
+}
+
 export function App() {
-  const runtime = readWebEnv(import.meta.env);
+  const runtime = readRuntimeWebEnv();
   const [apiState, setApiState] = useState<ProbeState>({
     status: "checking"
   });
   const [collabState, setCollabState] = useState<ProbeState>({
+    status: "checking"
+  });
+  const [workerState, setWorkerState] = useState<ProbeState>({
     status: "checking"
   });
 
@@ -80,6 +96,26 @@ export function App() {
           });
         }
       }
+
+      try {
+        const workerHeartbeat = await fetchWorkerHeartbeat(
+          `${runtime.urls.workerHttpUrl}/status`
+        );
+
+        if (!cancelled) {
+          setWorkerState({
+            status: "healthy",
+            summary: `${workerHeartbeat.service} heartbeat every ${workerHeartbeat.heartbeatIntervalMs}ms`
+          });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setWorkerState({
+            status: "unreachable",
+            summary: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
     }
 
     void probeServices();
@@ -90,7 +126,8 @@ export function App() {
   }, [
     runtime.environment,
     runtime.urls.apiBaseUrl,
-    runtime.urls.collabHttpUrl
+    runtime.urls.collabHttpUrl,
+    runtime.urls.workerHttpUrl
   ]);
 
   const apiSummary =
@@ -101,6 +138,10 @@ export function App() {
     collabState.status === "checking"
       ? "Waiting for collab probe..."
       : collabState.summary;
+  const workerSummary =
+    workerState.status === "checking"
+      ? "Waiting for worker probe..."
+      : workerState.summary;
 
   return (
     <main className="shell">
@@ -143,6 +184,10 @@ export function App() {
               <dt>Collab WebSocket</dt>
               <dd>{runtime.urls.collabWsUrl}</dd>
             </div>
+            <div>
+              <dt>Worker HTTP</dt>
+              <dd>{runtime.urls.workerHttpUrl}</dd>
+            </div>
           </dl>
         </article>
 
@@ -164,6 +209,15 @@ export function App() {
             <div>
               <strong>Collab</strong>
               <p>{collabSummary}</p>
+            </div>
+          </div>
+          <div className="status-row">
+            <span className={`pill pill-${workerState.status}`}>
+              {probeLabel(workerState)}
+            </span>
+            <div>
+              <strong>Worker</strong>
+              <p>{workerSummary}</p>
             </div>
           </div>
         </article>

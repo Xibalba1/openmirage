@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 
-const REQUIRED_PORTS = [5432, 9000, 9001];
+const REQUIRED_PORTS = [80, 5432, 9000, 9001];
 
 function printStep(message) {
   console.log(`[openmirage] ${message}`);
@@ -72,7 +72,14 @@ function verifyPortsAvailable(runningServices) {
   try {
     const output = execFileSync(
       "lsof",
-      ["-nP", "-iTCP:5432", "-iTCP:9000", "-iTCP:9001", "-sTCP:LISTEN"],
+      [
+        "-nP",
+        "-iTCP:80",
+        "-iTCP:5432",
+        "-iTCP:9000",
+        "-iTCP:9001",
+        "-sTCP:LISTEN"
+      ],
       {
         cwd: process.cwd(),
         encoding: "utf8",

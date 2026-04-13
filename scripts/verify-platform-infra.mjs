@@ -1,8 +1,6 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 
-const apiPort = process.env.API_PORT ?? "4400";
-const apiBaseUrl = `http://127.0.0.1:${apiPort}`;
-const smokeKey = `smoke/verify-${Date.now()}.txt`;
+const caddyBaseUrl = process.env.CADDY_BASE_URL ?? "http://127.0.0.1";
 
 function log(message) {
   console.log(`[openmirage] ${message}`);
@@ -29,7 +27,7 @@ function run(command, args, options = {}) {
   return result;
 }
 
-async function waitForJson(url, timeoutMs = 30_000) {
+async function waitForJson(url, timeoutMs = 60_000) {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
@@ -58,24 +56,14 @@ async function requestJson(url, init) {
     );
   }
 
-  return body;
+  return {
+    body,
+    headers: response.headers
+  };
 }
 
-let shuttingDown = false;
-let apiProcess;
-
 function cleanup() {
-  if (shuttingDown) {
-    return;
-  }
-
-  shuttingDown = true;
-
-  if (apiProcess && !apiProcess.killed) {
-    apiProcess.kill("SIGTERM");
-  }
-
-  spawnSync("docker", ["compose", "down"], {
+  spawnSync("docker", ["compose", "down", "--remove-orphans"], {
     cwd: process.cwd(),
     stdio: "inherit"
   });
@@ -91,45 +79,36 @@ process.on("SIGTERM", () => {
   process.exit(143);
 });
 
-async function main() {
-  log("running prerequisite verification");
-  run("node", ["./scripts/verify-platform-prereqs.mjs"]);
+async function verifyHomepage() {
+  const response = await fetch(`${caddyBaseUrl}/`);
+  const body = await response.text();
 
-  log("running database migrations");
-  run("pnpm", ["db:migrate:up"]);
+  if (!response.ok || !body.includes("<title>OpenMirage Platform Shell</title>")) {
+    fail("homepage did not render the platform shell through Caddy");
+  }
+}
 
-  log("checking migration status");
-  run("pnpm", ["db:migrate:status"]);
+async function verifyApiAndStorage() {
+  const health = await waitForJson(`${caddyBaseUrl}/healthz`);
 
-  log("seeding development bootstrap");
-  run("pnpm", ["db:seed"]);
-
-  log("starting api service for storage verification");
-  apiProcess = spawn("pnpm", ["--filter", "@openmirage/api", "dev"], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      API_PORT: apiPort,
-      SERVICE_HOST: "127.0.0.1"
-    },
-    stdio: "inherit"
-  });
-
-  const ready = await waitForJson(`${apiBaseUrl}/readyz`);
-
-  if (!ready.ready) {
-    fail("api /readyz did not report ready after startup");
+  if (!health.ok) {
+    fail("api /healthz did not report healthy through Caddy");
   }
 
-  log("verifying initial storage smoke list");
-  const initialList = await waitForJson(`${apiBaseUrl}/internal/storage/smoke`);
+  const ready = await waitForJson(`${caddyBaseUrl}/readyz`);
+
+  if (!ready.ready) {
+    fail("api /readyz did not report ready through Caddy");
+  }
+
+  const smokeKey = `smoke/verify-${Date.now()}.txt`;
+  const initialList = await waitForJson(`${caddyBaseUrl}/internal/storage/smoke`);
 
   if (!Array.isArray(initialList.objects)) {
     fail("storage smoke list did not return an objects array");
   }
 
-  log("uploading storage smoke object");
-  const uploaded = await requestJson(`${apiBaseUrl}/internal/storage/smoke`, {
+  const uploaded = await requestJson(`${caddyBaseUrl}/internal/storage/smoke`, {
     method: "POST",
     headers: {
       "content-type": "application/json"
@@ -141,31 +120,185 @@ async function main() {
     })
   });
 
-  if (uploaded.object?.key !== smokeKey) {
+  if (uploaded.body.object?.key !== smokeKey) {
     fail("storage smoke upload did not return the expected key");
   }
 
-  log("verifying uploaded object appears in list");
-  const listed = await requestJson(`${apiBaseUrl}/internal/storage/smoke`);
+  const listed = await requestJson(`${caddyBaseUrl}/internal/storage/smoke`);
 
-  if (!listed.objects.some((entry) => entry.key === smokeKey)) {
+  if (!listed.body.objects.some((entry) => entry.key === smokeKey)) {
     fail("uploaded smoke object was not listed by the api");
   }
 
-  log("deleting storage smoke object");
   await requestJson(
-    `${apiBaseUrl}/internal/storage/smoke?key=${encodeURIComponent(smokeKey)}`,
+    `${caddyBaseUrl}/internal/storage/smoke?key=${encodeURIComponent(smokeKey)}`,
     {
       method: "DELETE"
     }
   );
 
-  log("verifying final storage smoke list");
-  const finalList = await requestJson(`${apiBaseUrl}/internal/storage/smoke`);
+  const finalList = await requestJson(`${caddyBaseUrl}/internal/storage/smoke`);
 
-  if (finalList.objects.some((entry) => entry.key === smokeKey)) {
+  if (finalList.body.objects.some((entry) => entry.key === smokeKey)) {
     fail("deleted smoke object still appears in the api list");
   }
+}
+
+async function verifyCollabAndWorker() {
+  const collabHealth = await waitForJson(`${caddyBaseUrl}/collab/healthz`);
+
+  if (!collabHealth.ok || collabHealth.details.websocketPath !== "/collab") {
+    fail("collab /healthz did not report the expected websocket path");
+  }
+
+  const workerReady = await waitForJson(`${caddyBaseUrl}/worker/readyz`);
+
+  if (!workerReady.ready) {
+    fail("worker /readyz did not report ready through Caddy");
+  }
+
+  const workerStatus = await waitForJson(`${caddyBaseUrl}/worker/status`);
+
+  if (workerStatus.service !== "worker") {
+    fail("worker /status did not return a worker heartbeat");
+  }
+}
+
+async function verifyAuthAndWebsocket() {
+  const magicLinkRequest = await requestJson(
+    `${caddyBaseUrl}/auth/magic-link/request`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        email: "dev@openmirage.local"
+      })
+    }
+  );
+  const magicLinkUrl = magicLinkRequest.body.magicLinkUrl;
+
+  if (typeof magicLinkUrl !== "string" || !magicLinkUrl.includes("/auth/")) {
+    fail("magic link request did not return a Caddy-routed magic link url");
+  }
+
+  const consumeResponse = await fetch(magicLinkUrl, {
+    redirect: "manual"
+  });
+  const setCookieHeader = consumeResponse.headers.get("set-cookie");
+
+  if (consumeResponse.status !== 302 || !setCookieHeader) {
+    fail("magic link consume did not issue a session cookie");
+  }
+
+  const sessionCookie = setCookieHeader.split(";")[0];
+  const sessionResponse = await requestJson(`${caddyBaseUrl}/auth/session`, {
+    headers: {
+      cookie: sessionCookie
+    }
+  });
+  const workspaceId = sessionResponse.body.memberships?.[0]?.workspaceId;
+
+  if (typeof workspaceId !== "string" || workspaceId.length === 0) {
+    fail("seed bootstrap did not provide a workspace membership for websocket verification");
+  }
+
+  const websocketProbe = spawnSync(
+    "pnpm",
+    [
+      "--filter",
+      "@openmirage/collab",
+      "exec",
+      "node",
+      "--input-type=module",
+      "-e",
+      `import WebSocket from "ws";
+const ws = new WebSocket("ws://127.0.0.1/collab?documentName=runtime-check&workspaceId=${workspaceId}", {
+  headers: { Cookie: ${JSON.stringify(sessionCookie)} }
+});
+const timer = setTimeout(() => {
+  console.error("timeout");
+  process.exit(1);
+}, 5000);
+ws.on("open", () => {
+  clearTimeout(timer);
+  console.log("open");
+  ws.close();
+});
+ws.on("error", (error) => {
+  clearTimeout(timer);
+  console.error(error.message);
+  process.exit(1);
+});
+ws.on("close", () => process.exit(0));`
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: "pipe"
+    }
+  );
+
+  if (websocketProbe.status !== 0) {
+    fail(
+      websocketProbe.stderr.trim() ||
+        websocketProbe.stdout.trim() ||
+        "websocket verification through Caddy failed"
+    );
+  }
+}
+
+function verifyOperatorPorts() {
+  const postgresProbe = run("docker", [
+    "compose",
+    "exec",
+    "-T",
+    "postgres",
+    "pg_isready",
+    "-U",
+    "openmirage",
+    "-d",
+    "openmirage"
+  ]);
+
+  if (!postgresProbe.stdout.includes("accepting connections")) {
+    fail("postgres did not accept connections in the Compose stack");
+  }
+}
+
+async function verifyMinioPort() {
+  const response = await fetch("http://127.0.0.1:9000/minio/health/live");
+
+  if (!response.ok) {
+    fail("minio did not respond on the published operator port");
+  }
+}
+
+async function main() {
+  log("running prerequisite verification");
+  run("node", ["./scripts/verify-platform-prereqs.mjs"]);
+
+  log("starting full docker compose stack");
+  run("docker", ["compose", "up", "--build", "-d", "--wait"], {
+    maxBuffer: 1024 * 1024 * 20
+  });
+
+  log("verifying homepage through Caddy");
+  await verifyHomepage();
+
+  log("verifying api health, readiness, and storage smoke path");
+  await verifyApiAndStorage();
+
+  log("verifying collab and worker routes through Caddy");
+  await verifyCollabAndWorker();
+
+  log("verifying auth flow and websocket upgrade through Caddy");
+  await verifyAuthAndWebsocket();
+
+  log("verifying operator ports for postgres and minio");
+  verifyOperatorPorts();
+  await verifyMinioPort();
 
   log("platform infrastructure verification passed");
 }
