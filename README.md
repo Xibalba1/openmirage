@@ -24,7 +24,10 @@ Included now:
 - Prometheus-compatible `/metrics` endpoints for `api`, `collab`, and `worker`
 - env-gated forced test error routes and Sentry integration for backend services
 - a provider-backed storage abstraction with `minio`, generic `s3-compatible`, and `local` adapters
-- local Docker Compose services for PostgreSQL and MinIO with automatic bucket bootstrap
+- production-oriented Dockerfiles for `web`, `api`, `collab`, and `worker`
+- a full local Docker Compose stack for Caddy, web, api, collab, worker, PostgreSQL, and MinIO
+- Compose-managed migration and development bootstrap jobs
+- Caddy as the single local browser entrypoint with websocket proxying for collab
 - API storage smoke endpoints for upload, list, and delete verification through the abstraction
 
 Not included yet:
@@ -33,7 +36,7 @@ Not included yet:
 - SMTP-backed magic-link delivery or polished authenticated product flows
 - collab document persistence or page authorization
 - worker jobs, exports, or cleanup processing
-- Caddy routing, staging deployment, backup/restore verification
+- staging deployment automation, backup/restore verification
 
 ## Requirements
 
@@ -57,11 +60,23 @@ If `pnpm` is not installed globally, use `corepack enable` and `corepack pnpm`.
 
 ## Canonical Commands
 
-All root commands run through Turborepo and are the primary entrypoints for this repository.
+The canonical local bootstrap path for this slice is:
+
+```bash
+pnpm verify:platform:prereqs
+docker compose up --build --wait
+```
+
+Before modifying code or trying to boot the stack on a new machine, identify prerequisites you cannot satisfy from inside the repo, check them, and stop immediately if any fail. If the prerequisite check fails, do not proceed; use the printed remediation steps, fix the failing prerequisite, and rerun the check before you continue.
+
+Convenience root commands remain available:
 
 ```bash
 pnpm install
+pnpm compose:up
+pnpm compose:down
 pnpm infra:up
+pnpm infra:down
 pnpm dev
 pnpm build
 pnpm lint
@@ -81,7 +96,7 @@ pnpm db:seed
 Stop local infrastructure when you are done:
 
 ```bash
-pnpm infra:down
+docker compose down --remove-orphans
 ```
 
 Run services independently when you want to verify one slice surface at a time:
@@ -95,21 +110,23 @@ pnpm --filter @openmirage/web dev
 
 Key endpoints:
 
-- web: `http://localhost:3000`
-- api health: `http://localhost:4000/healthz`
-- api readiness: `http://localhost:4000/readyz`
-- api metrics: `http://localhost:4000/metrics`
-- api auth entrypoint: `http://localhost:4000/auth/entry`
-- api auth session: `http://localhost:4000/auth/session`
-- api auth me: `http://localhost:4000/auth/me`
-- collab health: `http://localhost:4100/healthz`
-- collab metrics: `http://localhost:4100/metrics`
-- collab websocket mount: `ws://localhost:4100/collab`
-- worker health: `http://localhost:4200/healthz`
-- worker readiness: `http://localhost:4200/readyz`
-- worker metrics: `http://localhost:4200/metrics`
-- worker status: `http://localhost:4200/status`
-- storage smoke list: `http://localhost:4000/internal/storage/smoke`
+- web shell through Caddy: `http://localhost/`
+- api health through Caddy: `http://localhost/healthz`
+- api readiness through Caddy: `http://localhost/readyz`
+- api metrics through Caddy: `http://localhost/metrics`
+- api auth entrypoint through Caddy: `http://localhost/auth/entry`
+- api auth session through Caddy: `http://localhost/auth/session`
+- collab health through Caddy: `http://localhost/collab/healthz`
+- collab metrics through Caddy: `http://localhost/collab/metrics`
+- collab websocket through Caddy: `ws://localhost/collab`
+- worker health through Caddy: `http://localhost/worker/healthz`
+- worker readiness through Caddy: `http://localhost/worker/readyz`
+- worker metrics through Caddy: `http://localhost/worker/metrics`
+- worker status through Caddy: `http://localhost/worker/status`
+- storage smoke list through Caddy: `http://localhost/internal/storage/smoke`
+- postgres operator port: `localhost:5432`
+- MinIO API operator port: `http://localhost:9000`
+- MinIO console operator port: `http://localhost:9001`
 
 ## Tooling Conventions
 
@@ -120,15 +137,15 @@ Key endpoints:
 
 ## Environment Files
 
-Each app includes an `.env.example` with the variables needed for this slice. Node services will load `.env` automatically if present. The web shell uses Vite `VITE_*` public variables.
+Each app includes an `.env.example` with the variables needed for this slice. The examples are aligned to the Docker Compose topology for the canonical boot path. Node services still load `.env` automatically if present, and host-run `pnpm dev` remains available as a convenience path.
 
 Auth/session envs in `apps/api/.env.example`:
 
-- `APP_BASE_URL=http://localhost:3000`
+- `APP_BASE_URL=http://localhost`
 - `SESSION_COOKIE_NAME=openmirage_session`
 - `SESSION_COOKIE_PATH=/`
 - `SESSION_COOKIE_SAME_SITE=lax`
-- `SESSION_COOKIE_SECURE=false` for direct local dev, `true` behind HTTPS/Caddy
+- `SESSION_COOKIE_SECURE=false` for local HTTP, `true` behind HTTPS in staging
 - `AUTH_MAGIC_LINK_TTL_MINUTES=15`
 - `AUTH_SESSION_TTL_DAYS=30`
 - `DEV_AUTH_EXPOSE_MAGIC_LINK=true` to include the dev magic link in the request response
@@ -138,7 +155,7 @@ The storage-bearing services share the same storage env contract:
 - `STORAGE_PROVIDER=minio|s3-compatible|local`
 - `STORAGE_BUCKET=openmirage-assets`
 - `STORAGE_LOCAL_ROOT=.openmirage/storage`
-- `STORAGE_S3_ENDPOINT=http://127.0.0.1:9000`
+- `STORAGE_S3_ENDPOINT=http://minio:9000`
 - `STORAGE_S3_REGION=us-east-1`
 - `STORAGE_S3_ACCESS_KEY_ID=openmirage`
 - `STORAGE_S3_SECRET_ACCESS_KEY=openmirage123`
@@ -149,27 +166,27 @@ For local development, the default `minio` settings match `docker-compose.yml`. 
 
 ## Storage Smoke Check
 
-Start infrastructure and services:
+Start the full stack:
 
 ```bash
-pnpm infra:up
-pnpm dev
+pnpm verify:platform:prereqs
+docker compose up --build --wait
 ```
 
 Then verify the storage slice through the API:
 
 ```bash
-curl http://localhost:4000/internal/storage/smoke
-curl -X POST http://localhost:4000/internal/storage/smoke \
+curl http://localhost/internal/storage/smoke
+curl -X POST http://localhost/internal/storage/smoke \
   -H 'content-type: application/json' \
   -d '{"key":"smoke/hello.txt","contentType":"text/plain","bodyBase64":"aGVsbG8="}'
-curl http://localhost:4000/internal/storage/smoke
-curl -X DELETE 'http://localhost:4000/internal/storage/smoke?key=smoke/hello.txt'
+curl http://localhost/internal/storage/smoke
+curl -X DELETE 'http://localhost/internal/storage/smoke?key=smoke/hello.txt'
 ```
 
 Expected result:
 
-- `pnpm infra:up` brings up PostgreSQL, MinIO, and bucket bootstrap
+- `docker compose up --build --wait` brings up Caddy, web, api, collab, worker, PostgreSQL, MinIO, migration bootstrap, and bucket bootstrap
 - API `/healthz` reports liveness plus configured dependency details
 - API `/readyz` verifies live Postgres reachability and storage readiness
 - `POST` uploads the object and returns a download URL
@@ -178,20 +195,17 @@ Expected result:
 
 ## Auth Smoke Check
 
-Start infrastructure and the auth-bearing services:
+Start the full stack:
 
 ```bash
-pnpm infra:up
-pnpm db:migrate:up
-pnpm db:seed
-pnpm --filter @openmirage/api dev
-pnpm --filter @openmirage/collab dev
+pnpm verify:platform:prereqs
+docker compose up --build --wait
 ```
 
 Request a dev magic link:
 
 ```bash
-curl -X POST http://localhost:4000/auth/magic-link/request \
+curl -X POST http://localhost/auth/magic-link/request \
   -H 'content-type: application/json' \
   -d '{"email":"dev@openmirage.local"}'
 ```
@@ -211,12 +225,12 @@ curl -i -c /tmp/openmirage-auth-cookiejar.txt '<magicLinkUrl>'
 Validate, refresh, and revoke the session:
 
 ```bash
-curl -b /tmp/openmirage-auth-cookiejar.txt http://localhost:4000/auth/session
+curl -b /tmp/openmirage-auth-cookiejar.txt http://localhost/auth/session
 curl -X POST -b /tmp/openmirage-auth-cookiejar.txt -c /tmp/openmirage-auth-cookiejar.txt \
-  http://localhost:4000/auth/session/refresh
+  http://localhost/auth/session/refresh
 curl -X POST -b /tmp/openmirage-auth-cookiejar.txt -c /tmp/openmirage-auth-cookiejar.txt \
-  http://localhost:4000/auth/logout
-curl -i -b /tmp/openmirage-auth-cookiejar.txt http://localhost:4000/auth/session
+  http://localhost/auth/logout
+curl -i -b /tmp/openmirage-auth-cookiejar.txt http://localhost/auth/session
 ```
 
 Expected result:
@@ -229,8 +243,8 @@ Expected result:
 Verify collab rejects unauthenticated access and accepts an authenticated session:
 
 ```bash
-pnpm --filter @openmirage/collab exec node -e "const WebSocket=require('ws');const ws=new WebSocket('ws://127.0.0.1:4100/collab?documentName=runtime-check&workspaceId=<workspaceId>');ws.on('unexpected-response',(_req,res)=>{console.log(res.statusCode);process.exit(0);});ws.on('open',()=>{console.log('unexpected-open');process.exit(1);});"
-pnpm --filter @openmirage/collab exec node -e "const WebSocket=require('ws');const ws=new WebSocket('ws://127.0.0.1:4100/collab?documentName=runtime-check&workspaceId=<workspaceId>',{headers:{Cookie:'openmirage_session=<sessionToken>'}});ws.on('open',()=>{console.log('open');ws.close();});ws.on('close',()=>process.exit(0));"
+node --input-type=module -e "import WebSocket from 'ws';const ws=new WebSocket('ws://127.0.0.1/collab?documentName=runtime-check&workspaceId=<workspaceId>');ws.on('unexpected-response',(_req,res)=>{console.log(res.statusCode);process.exit(0);});ws.on('open',()=>{console.log('unexpected-open');process.exit(1);});"
+node --input-type=module -e "import WebSocket from 'ws';const ws=new WebSocket('ws://127.0.0.1/collab?documentName=runtime-check&workspaceId=<workspaceId>',{headers:{Cookie:'openmirage_session=<sessionToken>'}});ws.on('open',()=>{console.log('open');ws.close();});ws.on('close',()=>process.exit(0));"
 ```
 
 Expected result:
@@ -251,7 +265,7 @@ This command verifies:
 - `pnpm` is available
 - Docker and `docker compose` are available
 - the Docker daemon is reachable
-- ports `5432`, `9000`, and `9001` are free
+- ports `80`, `5432`, `9000`, and `9001` are free
 - the Compose `postgres`, `minio`, and `minio-init` services can start
 - the Compose-backed `postgres` container reaches a healthy state
 
@@ -259,7 +273,7 @@ If any prerequisite fails, the command stops immediately and prints corrective s
 
 ## Docker-Backed Infra Verification
 
-The canonical verification command for steps `4` and `6` is:
+The canonical verification command for the full local stack is:
 
 ```bash
 pnpm verify:platform:infra
@@ -268,12 +282,15 @@ pnpm verify:platform:infra
 This command:
 
 - runs the prerequisite verification first
-- starts the Compose-backed `postgres` and `minio` dependencies
-- runs `pnpm db:migrate:up`
-- runs `pnpm db:migrate:status`
-- runs `pnpm db:seed`
-- boots the API against the Compose-backed dependencies
-- exercises the storage smoke upload/list/delete flow through the API
+- starts the full Compose stack with image builds enabled
+- verifies the homepage through Caddy
+- verifies API health/readiness through Caddy
+- exercises the storage smoke upload/list/delete flow through Caddy
+- verifies collab health through Caddy
+- verifies worker readiness and heartbeat through Caddy
+- verifies the magic-link auth flow through Caddy
+- verifies an authenticated websocket upgrade through Caddy
+- verifies Postgres and MinIO on their published operator ports
 - tears down the Compose stack when finished
 
 This is the local manual verification path to keep using until CI automation is added in step `9`.
@@ -294,10 +311,10 @@ ENABLE_TEST_ERROR_ROUTES=true
 SENTRY_DSN=...
 ```
 
-Then call one backend diagnostics route, for example:
+Then call one backend diagnostics route through Caddy, for example:
 
 ```bash
-curl -i http://localhost:4000/__diagnostics/error
+curl -i http://localhost/__diagnostics/error
 ```
 
 Expected outcomes:
@@ -306,11 +323,22 @@ Expected outcomes:
 - `/metrics` reflects the request activity
 - the error appears in the configured Sentry project when enabled
 
+## First-Boot Failure Handling
+
+If `docker compose up --build --wait` fails:
+
+1. Run `docker compose ps` and identify the service that is unhealthy, exited, or still restarting.
+2. Inspect the failing service with `docker compose logs <service>`.
+3. If the failure is in `db-migrate` or `db-seed`, fix the migration/bootstrap issue first and rerun the full stack command.
+4. If the failure is in `api`, `collab`, `worker`, or `web`, confirm the env wiring still points at Compose service names instead of `localhost` for internal dependencies.
+5. If the failure is an image pull or build problem, confirm Docker daemon access, registry reachability, and the referenced base image tags.
+6. Re-run `pnpm verify:platform:prereqs` after fixing machine-level issues before retrying the stack boot.
+
 ## Success Criteria For This Slice
 
-- each runtime service boots independently in dev mode
-- `pnpm dev` starts the full runtime slice from the repo root
-- the web shell confirms API and collab reachability
+- a new machine can pass the prerequisite gate and boot the full runtime slice with one Docker Compose command
+- Caddy is the single local browser entrypoint
+- the web shell confirms API, collab, and worker reachability through Caddy
 - logs identify service, environment, version, and request/correlation IDs clearly enough for local debugging
 - `/metrics` is queryable on `api`, `collab`, and `worker`
 - one forced backend test error can be routed to Sentry when explicitly enabled

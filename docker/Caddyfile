@@ -1,0 +1,28 @@
+{
+  auto_https off
+}
+
+:80 {
+  encode gzip zstd
+
+  @api path /auth* /healthz /readyz /metrics /internal*
+  handle @api {
+    reverse_proxy api:4000
+  }
+
+  handle /collab {
+    reverse_proxy collab:4100
+  }
+
+  handle_path /collab/* {
+    reverse_proxy collab:4100
+  }
+
+  handle_path /worker/* {
+    reverse_proxy worker:4200
+  }
+
+  handle {
+    reverse_proxy web:80
+  }
+}

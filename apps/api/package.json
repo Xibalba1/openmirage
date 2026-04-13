@@ -9,7 +9,7 @@
     "lint": "eslint . --max-warnings=0",
     "test": "node ../../scripts/check-workspace.mjs .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/api"
+    "docker:build": "docker build -f Dockerfile -t openmirage-api:local ../.."
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",

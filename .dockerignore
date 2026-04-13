@@ -1,0 +1,11 @@
+.git
+.turbo
+.openmirage
+node_modules
+coverage
+dist
+**/node_modules
+**/dist
+.env
+.env.local
+.DS_Store

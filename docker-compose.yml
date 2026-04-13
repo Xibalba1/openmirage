@@ -15,6 +15,8 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    networks:
+      - openmirage
 
   minio:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
@@ -28,6 +30,8 @@ services:
       - "9001:9001"
     volumes:
       - minio-data:/data
+    networks:
+      - openmirage
 
   minio-init:
     image: minio/mc:latest
@@ -42,7 +46,221 @@ services:
       - >
         until mc alias set local http://minio:9000 openmirage openmirage123; do sleep 1; done &&
         mc mb --ignore-existing local/openmirage-assets
+    networks:
+      - openmirage
+
+  db-migrate:
+    image: openmirage-api-tools:local
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: tools
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["node", "packages/db/scripts/migrate-up.mjs"]
+    environment:
+      DATABASE_URL: postgres://openmirage:openmirage@postgres:5432/openmirage
+    restart: "no"
+    networks:
+      - openmirage
+
+  db-seed:
+    image: openmirage-api-tools:local
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: tools
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    command: ["node", "--import", "tsx", "packages/db/scripts/seed.mjs"]
+    environment:
+      DATABASE_URL: postgres://openmirage:openmirage@postgres:5432/openmirage
+    restart: "no"
+    networks:
+      - openmirage
+
+  api:
+    image: openmirage-api:local
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      db-migrate:
+        condition: service_completed_successfully
+      db-seed:
+        condition: service_completed_successfully
+    environment:
+      OPENMIRAGE_ENV: development
+      SERVICE_HOST: 0.0.0.0
+      LOG_LEVEL: info
+      APP_VERSION: 0.1.0
+      API_PORT: 4000
+      APP_BASE_URL: http://localhost
+      AUTH_PATH: /auth
+      SESSION_COOKIE_NAME: openmirage_session
+      SESSION_COOKIE_PATH: /
+      SESSION_COOKIE_SAME_SITE: lax
+      SESSION_COOKIE_SECURE: "false"
+      AUTH_MAGIC_LINK_TTL_MINUTES: 15
+      AUTH_SESSION_TTL_DAYS: 30
+      DEV_AUTH_EXPOSE_MAGIC_LINK: "true"
+      DATABASE_URL: postgres://openmirage:openmirage@postgres:5432/openmirage
+      STORAGE_PROVIDER: minio
+      STORAGE_BUCKET: openmirage-assets
+      STORAGE_LOCAL_ROOT: .openmirage/storage
+      STORAGE_S3_ENDPOINT: http://minio:9000
+      STORAGE_S3_REGION: us-east-1
+      STORAGE_S3_ACCESS_KEY_ID: openmirage
+      STORAGE_S3_SECRET_ACCESS_KEY: openmirage123
+      STORAGE_S3_FORCE_PATH_STYLE: "true"
+      ENABLE_TEST_ERROR_ROUTES: "false"
+      SENTRY_DSN: ""
+      SENTRY_ENVIRONMENT: development
+      SENTRY_RELEASE: 0.1.0
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4000/readyz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - openmirage
+
+  collab:
+    image: openmirage-collab:local
+    build:
+      context: .
+      dockerfile: apps/collab/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      OPENMIRAGE_ENV: development
+      SERVICE_HOST: 0.0.0.0
+      LOG_LEVEL: info
+      APP_VERSION: 0.1.0
+      COLLAB_PORT: 4100
+      COLLAB_WS_PATH: /collab
+      API_BASE_URL: http://api:4000
+      AUTH_PATH: /auth
+      SESSION_COOKIE_NAME: openmirage_session
+      ENABLE_TEST_ERROR_ROUTES: "false"
+      SENTRY_DSN: ""
+      SENTRY_ENVIRONMENT: development
+      SENTRY_RELEASE: 0.1.0
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4100/healthz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - openmirage
+
+  worker:
+    image: openmirage-worker:local
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      db-migrate:
+        condition: service_completed_successfully
+    environment:
+      OPENMIRAGE_ENV: development
+      SERVICE_HOST: 0.0.0.0
+      LOG_LEVEL: info
+      APP_VERSION: 0.1.0
+      WORKER_PORT: 4200
+      SESSION_COOKIE_NAME: openmirage_session
+      DATABASE_URL: postgres://openmirage:openmirage@postgres:5432/openmirage
+      STORAGE_PROVIDER: minio
+      STORAGE_BUCKET: openmirage-assets
+      STORAGE_LOCAL_ROOT: .openmirage/storage
+      STORAGE_S3_ENDPOINT: http://minio:9000
+      STORAGE_S3_REGION: us-east-1
+      STORAGE_S3_ACCESS_KEY_ID: openmirage
+      STORAGE_S3_SECRET_ACCESS_KEY: openmirage123
+      STORAGE_S3_FORCE_PATH_STYLE: "true"
+      WORKER_HEARTBEAT_INTERVAL_MS: 5000
+      ENABLE_TEST_ERROR_ROUTES: "false"
+      SENTRY_DSN: ""
+      SENTRY_ENVIRONMENT: development
+      SENTRY_RELEASE: 0.1.0
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4200/readyz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - openmirage
+
+  web:
+    image: openmirage-web:local
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+      collab:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+    environment:
+      OPENMIRAGE_ENV: development
+      WEB_PORT: 3000
+      VITE_API_BASE_URL: http://localhost
+      VITE_COLLAB_HTTP_URL: http://localhost/collab
+      VITE_COLLAB_WS_URL: ws://localhost/collab
+      VITE_COLLAB_WS_PATH: /collab
+      VITE_AUTH_PATH: /auth
+      VITE_WORKER_HTTP_URL: http://localhost/worker
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - openmirage
+
+  caddy:
+    image: caddy:2.9-alpine
+    container_name: openmirage-caddy
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+      collab:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "80:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - openmirage
 
 volumes:
   postgres-data:
   minio-data:
+
+networks:
+  openmirage:

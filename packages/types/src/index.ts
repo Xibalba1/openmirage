@@ -22,6 +22,7 @@ export interface RuntimeUrls {
   collabWsUrl: string;
   collabWsPath: string;
   authPath: string;
+  workerHttpUrl: string;
 }
 
 export const membershipRoles = ["owner", "editor", "viewer"] as const;
