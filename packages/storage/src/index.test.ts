@@ -68,7 +68,10 @@ test("s3-compatible storage uses injected client for bucket bootstrap and health
         async send(command) {
           seenCommands.push(command.constructor.name);
 
-          if (command.constructor.name === "HeadBucketCommand" && !bucketExists) {
+          if (
+            command.constructor.name === "HeadBucketCommand" &&
+            !bucketExists
+          ) {
             throw new Error("missing bucket");
           }
 

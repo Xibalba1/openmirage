@@ -42,15 +42,11 @@ const mergedEnv = {
   ...process.env
 };
 
-const child = spawn(
-  process.execPath,
-  ["--import", "tsx", entrypoint],
-  {
-    cwd: process.cwd(),
-    env: mergedEnv,
-    stdio: "inherit"
-  }
-);
+const child = spawn(process.execPath, ["--import", "tsx", entrypoint], {
+  cwd: process.cwd(),
+  env: mergedEnv,
+  stdio: "inherit"
+});
 
 child.on("exit", (code, signal) => {
   if (signal) {

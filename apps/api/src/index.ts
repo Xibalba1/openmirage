@@ -2,6 +2,7 @@ import cors from "@fastify/cors";
 import { createSessionContract } from "@openmirage/auth";
 import { readApiEnv } from "@openmirage/config-env";
 import {
+  checkDatabaseConnection,
   checkMetadataStore,
   createMetadataStoreContract,
   getApplicationVersionInfo
@@ -32,21 +33,26 @@ interface StorageSmokeBody {
   key?: string;
 }
 
+function describeConfiguredStorage(storageConfig: StorageConfig): ServiceCheck {
+  return {
+    ok: true,
+    summary: `configured for ${storageConfig.provider} storage bucket ${storageConfig.bucket}`
+  };
+}
+
 async function buildHealthStatus(): Promise<HealthStatus> {
   const env = readApiEnv();
   const session = createSessionContract({
     sessionCookieName: env.sessionCookieName
   });
   const metadataStore = createMetadataStoreContract();
-  const storage = createStorage(env.storage);
-  const storageCheck = await inspectStorage(storage, env.storage);
   const checks = {
     env: {
       ok: true,
       summary: "environment loaded"
     },
     database: checkMetadataStore(env.databaseUrl),
-    storage: storageCheck
+    storage: describeConfiguredStorage(env.storage)
   };
   const ok = Object.values(checks).every((check) => check.ok);
 
@@ -91,11 +97,38 @@ async function inspectStorage(
 }
 
 async function buildReadyStatus(): Promise<ReadyStatus> {
-  const health = await buildHealthStatus();
+  const env = readApiEnv();
+  const session = createSessionContract({
+    sessionCookieName: env.sessionCookieName
+  });
+  const metadataStore = createMetadataStoreContract();
+  const storage = createStorage(env.storage);
+  const checks = {
+    env: {
+      ok: true,
+      summary: "environment loaded"
+    },
+    database: await checkDatabaseConnection(env.databaseUrl),
+    storage: await inspectStorage(storage, env.storage)
+  };
+  const ok = Object.values(checks).every((check) => check.ok);
 
   return {
-    ...health,
-    ready: health.ok
+    service: "api",
+    ok,
+    ready: ok,
+    environment: env.environment,
+    timestamp: new Date().toISOString(),
+    details: {
+      authMode: session.mode,
+      authPath: env.authPath,
+      metadataStore: metadataStore.kind,
+      sessionCookieName: session.sessionCookieName,
+      storageBucket: env.storage.bucket,
+      storageProvider: env.storage.provider,
+      ...summarizeChecks(checks)
+    },
+    checks
   };
 }
 
@@ -131,7 +164,7 @@ async function startApiServer(): Promise<void> {
     getApplicationVersionInfo(env.appVersion)
   );
   serviceHealth.set({ service: "api" }, 1);
-  serviceReady.set({ service: "api" }, 1);
+  serviceReady.set({ service: "api" }, 0);
 
   const requestStartedAt = new WeakMap<object, bigint>();
   const storage = createStorage(env.storage);
@@ -222,6 +255,7 @@ async function startApiServer(): Promise<void> {
   app.get("/healthz", async () => buildHealthStatus());
   app.get("/readyz", async (_, reply) => {
     const ready = await buildReadyStatus();
+    serviceReady.set({ service: "api" }, ready.ready ? 1 : 0);
 
     if (!ready.ready) {
       reply.status(503);

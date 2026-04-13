@@ -1,5 +1,6 @@
 import { readWorkerEnv } from "@openmirage/config-env";
 import {
+  checkDatabaseConnection,
   checkMetadataStore,
   createMetadataStoreContract,
   getApplicationVersionInfo
@@ -34,6 +35,13 @@ function buildHeartbeat(uptimeSeconds: number): WorkerHeartbeat {
     heartbeatIntervalMs: env.heartbeatIntervalMs,
     uptimeSeconds,
     timestamp: new Date().toISOString()
+  };
+}
+
+function describeConfiguredStorage(storageConfig: StorageConfig): ServiceCheck {
+  return {
+    ok: true,
+    summary: `configured for ${storageConfig.provider} storage bucket ${storageConfig.bucket}`
   };
 }
 
@@ -120,7 +128,7 @@ async function startWorker(): Promise<void> {
     getApplicationVersionInfo(env.appVersion)
   );
   serviceHealth.set({ service: "worker" }, 1);
-  serviceReady.set({ service: "worker" }, 1);
+  serviceReady.set({ service: "worker" }, 0);
   jobsTotal.inc(
     {
       job_state: "completed",
@@ -226,19 +234,48 @@ async function startWorker(): Promise<void> {
   });
 
   app.get("/healthz", async () => {
-    const storageCheck = await inspectStorage(storage, env.storage);
     const checks = {
       env: {
         ok: true,
         summary: "environment loaded"
       },
       database: checkMetadataStore(env.databaseUrl),
-      storage: storageCheck
+      storage: describeConfiguredStorage(env.storage)
     };
 
     return {
       ...buildHeartbeat(Math.floor((Date.now() - startedAt) / 1000)),
       ok: Object.values(checks).every((check) => check.ok),
+      details: {
+        metadataStore: metadataStore.kind,
+        storageBucket: env.storage.bucket,
+        storageProvider: env.storage.provider,
+        ...summarizeChecks(checks)
+      },
+      checks
+    };
+  });
+  app.get("/readyz", async (_, reply) => {
+    const checks = {
+      env: {
+        ok: true,
+        summary: "environment loaded"
+      },
+      database: await checkDatabaseConnection(env.databaseUrl),
+      storage: await inspectStorage(storage, env.storage)
+    };
+    const ready = Object.values(checks).every((check) => check.ok);
+
+    serviceReady.set({ service: "worker" }, ready ? 1 : 0);
+
+    if (!ready) {
+      reply.status(503);
+    }
+
+    return {
+      ...buildHeartbeat(Math.floor((Date.now() - startedAt) / 1000)),
+      ok: ready,
+      ready,
       details: {
         metadataStore: metadataStore.kind,
         storageBucket: env.storage.bucket,

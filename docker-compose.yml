@@ -17,7 +17,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
 
   minio:
-    image: minio/minio:RELEASE.2026-03-27T22-07-57Z
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
     container_name: openmirage-minio
     command: server /data --console-address ":9001"
     environment:
@@ -30,7 +30,7 @@ services:
       - minio-data:/data
 
   minio-init:
-    image: minio/mc:RELEASE.2026-03-22T22-37-02Z
+    image: minio/mc:latest
     container_name: openmirage-minio-init
     depends_on:
       minio:

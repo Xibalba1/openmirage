@@ -1,13 +1,18 @@
 :root {
   color: #f4efe6;
   background:
-    radial-gradient(circle at top left, rgba(245, 133, 41, 0.28), transparent 28%),
-    radial-gradient(circle at top right, rgba(95, 195, 228, 0.2), transparent 32%),
+    radial-gradient(
+      circle at top left,
+      rgba(245, 133, 41, 0.28),
+      transparent 28%
+    ),
+    radial-gradient(
+      circle at top right,
+      rgba(95, 195, 228, 0.2),
+      transparent 32%
+    ),
     linear-gradient(180deg, #10212b 0%, #162f3c 54%, #09141b 100%);
-  font-family:
-    "IBM Plex Sans",
-    "Avenir Next",
-    sans-serif;
+  font-family: "IBM Plex Sans", "Avenir Next", sans-serif;
   line-height: 1.5;
   font-weight: 400;
 }

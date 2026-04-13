@@ -97,9 +97,7 @@ export async function seedDevelopmentBootstrap(
   }
 }
 
-async function findOrCreateUser(
-  client: PoolClient
-): Promise<SeedResultRecord> {
+async function findOrCreateUser(client: PoolClient): Promise<SeedResultRecord> {
   const existing = await client.query<{ id: string }>(
     `
       select id

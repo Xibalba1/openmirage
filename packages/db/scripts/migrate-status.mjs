@@ -18,9 +18,9 @@ async function readMigrationFiles() {
   const migrationsDir = resolve(process.cwd(), "migrations");
   const files = await readdir(migrationsDir);
 
-  return files.filter(isMigrationFile).sort((left, right) =>
-    left.localeCompare(right)
-  );
+  return files
+    .filter(isMigrationFile)
+    .sort((left, right) => left.localeCompare(right));
 }
 
 async function readAppliedMigrations(client) {
@@ -33,7 +33,12 @@ async function readAppliedMigrations(client) {
 
     return result.rows;
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "42P01") {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "42P01"
+    ) {
       return [];
     }
 
@@ -52,7 +57,9 @@ try {
   await client.connect();
 
   const appliedMigrations = await readAppliedMigrations(client);
-  const appliedNames = new Set(appliedMigrations.map((migration) => migration.name));
+  const appliedNames = new Set(
+    appliedMigrations.map((migration) => migration.name)
+  );
   const pendingMigrations = migrationFiles.filter(
     (migrationFile) => !appliedNames.has(migrationFile)
   );
@@ -72,9 +79,7 @@ try {
   );
 } catch (error) {
   const message =
-    error instanceof Error && error.message
-      ? error.message
-      : String(error);
+    error instanceof Error && error.message ? error.message : String(error);
 
   console.error(
     `[openmirage] migration status failed for ${env.DATABASE_URL}: ${message}`

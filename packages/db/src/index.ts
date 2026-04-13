@@ -1,7 +1,4 @@
-import {
-  type ApplicationVersionInfo,
-  type ServiceCheck
-} from "@openmirage/types";
+import { type ApplicationVersionInfo } from "@openmirage/types";
 export {
   checkMetadataStore,
   createMetadataStoreContract,

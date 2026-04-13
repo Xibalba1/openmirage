@@ -12,7 +12,14 @@ import {
   CreateBucketCommand
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile
+} from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -92,7 +99,10 @@ class LocalStorageAdapter implements StorageAdapter {
 
     const entries: StorageObjectDescriptor[] = [];
 
-    async function walk(currentPath: string, bucketPath: string): Promise<void> {
+    async function walk(
+      currentPath: string,
+      bucketPath: string
+    ): Promise<void> {
       const childEntries = await readdir(currentPath, { withFileTypes: true });
 
       for (const entry of childEntries) {
@@ -155,7 +165,10 @@ class LocalStorageAdapter implements StorageAdapter {
   #resolveKeyPath(key: string): string {
     const targetPath = resolve(this.#bucketPath, key);
 
-    if (!targetPath.startsWith(`${this.#bucketPath}/`) && targetPath !== this.#bucketPath) {
+    if (
+      !targetPath.startsWith(`${this.#bucketPath}/`) &&
+      targetPath !== this.#bucketPath
+    ) {
       throw new Error(`Storage key escapes bucket root: ${key}`);
     }
 
@@ -301,7 +314,9 @@ export function createStorage(
   return new S3StorageAdapter(config, options.s3Client);
 }
 
-export async function checkStorage(config: StorageConfig): Promise<ServiceCheck> {
+export async function checkStorage(
+  config: StorageConfig
+): Promise<ServiceCheck> {
   const storage = createStorage(config);
   const status = await storage.healthCheck();
 
@@ -311,18 +326,30 @@ export async function checkStorage(config: StorageConfig): Promise<ServiceCheck>
   };
 }
 
-export async function createStorageContract(
-  config: StorageConfig
-): Promise<{
+export async function createStorageContract(config: StorageConfig): Promise<{
   kind: StorageConfig["provider"];
-  operations: ["put", "resolveDownloadUrl", "delete", "list", "ensureBucket", "healthCheck"];
+  operations: [
+    "put",
+    "resolveDownloadUrl",
+    "delete",
+    "list",
+    "ensureBucket",
+    "healthCheck"
+  ];
 }> {
   const storage = createStorage(config);
   await storage.ensureBucket();
 
   return {
     kind: config.provider,
-    operations: ["put", "resolveDownloadUrl", "delete", "list", "ensureBucket", "healthCheck"]
+    operations: [
+      "put",
+      "resolveDownloadUrl",
+      "delete",
+      "list",
+      "ensureBucket",
+      "healthCheck"
+    ]
   };
 }
 
