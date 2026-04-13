@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 
 const REQUIRED_PORTS = [80, 5432, 9000, 9001];
+const STAGING_REQUIRED_PORTS = [80, 443, 5432, 9000, 9001];
 
 function printStep(message) {
   console.log(`[openmirage] ${message}`);
@@ -14,6 +15,29 @@ function failPrerequisite(name, reason, correctiveSteps) {
     console.error(`${index + 1}. ${step}`);
   }
   process.exit(1);
+}
+
+function isHttpsSiteAddress(value) {
+  if (!value) {
+    return false;
+  }
+
+  return !value.startsWith("http://");
+}
+
+function readDeploymentMode() {
+  const environment = process.env.OPENMIRAGE_ENV ?? "development";
+  const siteAddress = process.env.CADDY_SITE_ADDRESS ?? "http://localhost";
+  const stagingLike =
+    environment === "staging" ||
+    environment === "production" ||
+    isHttpsSiteAddress(siteAddress);
+
+  return {
+    environment,
+    siteAddress,
+    stagingLike
+  };
 }
 
 function runChecked(command, args, failure) {
@@ -64,35 +88,27 @@ function readRunningComposeServices() {
   );
 }
 
-function verifyPortsAvailable(runningServices) {
+function verifyPortsAvailable(runningServices, stagingLike) {
   if (runningServices.has("postgres") || runningServices.has("minio")) {
     return;
   }
 
+  const requiredPorts = stagingLike ? STAGING_REQUIRED_PORTS : REQUIRED_PORTS;
+  const lsofArgs = requiredPorts.flatMap((port) => [`-iTCP:${port}`]);
+
   try {
-    const output = execFileSync(
-      "lsof",
-      [
-        "-nP",
-        "-iTCP:80",
-        "-iTCP:5432",
-        "-iTCP:9000",
-        "-iTCP:9001",
-        "-sTCP:LISTEN"
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"]
-      }
-    ).trim();
+    const output = execFileSync("lsof", ["-nP", ...lsofArgs, "-sTCP:LISTEN"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"]
+    }).trim();
 
     if (output) {
       failPrerequisite(
         "required ports available",
         `one or more required ports are already in use:\n${output}`,
         [
-          `Stop the processes listening on ports ${REQUIRED_PORTS.join(", ")}.`,
+          `Stop the processes listening on ports ${requiredPorts.join(", ")}.`,
           "Or change the port mappings in docker-compose.yml to unused ports.",
           "Re-run the prerequisite verification command."
         ]
@@ -110,9 +126,94 @@ function verifyPortsAvailable(runningServices) {
 
     failPrerequisite("required ports available", String(error), [
       "Ensure lsof is available on the machine.",
-      `Manually confirm ports ${REQUIRED_PORTS.join(", ")} are free.`,
+      `Manually confirm ports ${requiredPorts.join(", ")} are free.`,
       "Re-run the prerequisite verification command."
     ]);
+  }
+}
+
+function verifyStagingEnv(deploymentMode) {
+  if (!deploymentMode.stagingLike) {
+    return;
+  }
+
+  const requiredStringVars = [
+    ["CADDY_SITE_ADDRESS", deploymentMode.siteAddress],
+    ["APP_BASE_URL", process.env.APP_BASE_URL],
+    ["OPENMIRAGE_PUBLIC_BASE_URL", process.env.OPENMIRAGE_PUBLIC_BASE_URL],
+    [
+      "OPENMIRAGE_PUBLIC_COLLAB_WS_URL",
+      process.env.OPENMIRAGE_PUBLIC_COLLAB_WS_URL
+    ]
+  ];
+
+  for (const [name, value] of requiredStringVars) {
+    if (!value) {
+      failPrerequisite(
+        `${name} configured for staging`,
+        `${name} is required when OPENMIRAGE_ENV is staging/production or when CADDY_SITE_ADDRESS enables TLS`,
+        [
+          `Set ${name} in the shell, CI environment, or Compose env file.`,
+          "Use the public staging origin rather than an internal container hostname.",
+          "Re-run the prerequisite verification command."
+        ]
+      );
+    }
+  }
+
+  if (
+    !deploymentMode.siteAddress.startsWith("https://") &&
+    !/^[^:/]+$/.test(deploymentMode.siteAddress)
+  ) {
+    failPrerequisite(
+      "CADDY_SITE_ADDRESS staging format",
+      "CADDY_SITE_ADDRESS must be a bare host like staging.example.com or an explicit https:// URL for staging",
+      [
+        "Set CADDY_SITE_ADDRESS to the public staging hostname, for example `staging.example.com`.",
+        "Do not use an internal container hostname or an http:// origin for staging.",
+        "Re-run the prerequisite verification command."
+      ]
+    );
+  }
+
+  for (const [name, value] of [
+    ["APP_BASE_URL", process.env.APP_BASE_URL],
+    ["OPENMIRAGE_PUBLIC_BASE_URL", process.env.OPENMIRAGE_PUBLIC_BASE_URL]
+  ]) {
+    if (!value?.startsWith("https://")) {
+      failPrerequisite(
+        `${name} https origin`,
+        `${name} must start with https:// in staging`,
+        [
+          `Set ${name} to the public HTTPS staging origin, for example \`https://staging.example.com\`.`,
+          "Ensure the value matches the Caddy-facing origin used by the browser.",
+          "Re-run the prerequisite verification command."
+        ]
+      );
+    }
+  }
+
+  if (!process.env.OPENMIRAGE_PUBLIC_COLLAB_WS_URL?.startsWith("wss://")) {
+    failPrerequisite(
+      "OPENMIRAGE_PUBLIC_COLLAB_WS_URL secure websocket origin",
+      "OPENMIRAGE_PUBLIC_COLLAB_WS_URL must start with wss:// in staging",
+      [
+        "Set OPENMIRAGE_PUBLIC_COLLAB_WS_URL to the public secure websocket URL, for example `wss://staging.example.com/collab`.",
+        "Ensure the path matches COLLAB_WS_PATH.",
+        "Re-run the prerequisite verification command."
+      ]
+    );
+  }
+
+  if ((process.env.SESSION_COOKIE_SECURE ?? "").toLowerCase() === "false") {
+    failPrerequisite(
+      "SESSION_COOKIE_SECURE enabled for staging",
+      "SESSION_COOKIE_SECURE must not be false in staging",
+      [
+        "Set SESSION_COOKIE_SECURE=true or omit it to use the staging default.",
+        "Re-run the prerequisite verification command."
+      ]
+    );
   }
 }
 
@@ -227,10 +328,14 @@ verifyCommand("docker", ["ps"], "docker daemon access", [
   "Re-run the prerequisite verification command."
 ]);
 
+const deploymentMode = readDeploymentMode();
 const runningServices = readRunningComposeServices();
 
+printStep("verifying staging-aware proxy env prerequisites");
+verifyStagingEnv(deploymentMode);
+
 printStep("verifying required ports are free");
-verifyPortsAvailable(runningServices);
+verifyPortsAvailable(runningServices, deploymentMode.stagingLike);
 
 printStep("verifying docker compose postgres/minio prerequisites");
 verifyDockerStack();

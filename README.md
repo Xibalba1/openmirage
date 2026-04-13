@@ -69,6 +69,15 @@ docker compose up --build --wait
 
 Before modifying code or trying to boot the stack on a new machine, identify prerequisites you cannot satisfy from inside the repo, check them, and stop immediately if any fail. If the prerequisite check fails, do not proceed; use the printed remediation steps, fix the failing prerequisite, and rerun the check before you continue.
 
+For this proxy/runtime slice, treat the following as mandatory prerequisites before code changes or infrastructure verification:
+
+- local software and access: `pnpm`, Docker, Docker Compose, access to the Docker daemon
+- required local ports for the selected mode
+- current Compose stack can start its baseline dependencies
+- for staging-shaped runs: the public Caddy hostname, HTTPS app origin, and secure websocket origin are set in env before boot
+
+If a prerequisite fails, stop immediately. Output the failing prerequisite and provide step-by-step remediation before proceeding.
+
 Convenience root commands remain available:
 
 ```bash
@@ -139,6 +148,9 @@ Key endpoints:
 
 Each app includes an `.env.example` with the variables needed for this slice. The examples are aligned to the Docker Compose topology for the canonical boot path. Node services still load `.env` automatically if present, and host-run `pnpm dev` remains available as a convenience path.
 
+The Compose stack is now explicitly Caddy-first. Browser-facing URLs must use the public Caddy origin rather than container hostnames or internal ports.
+Use [.env.staging.example](/Users/ik/repos/openmirage/.env.staging.example) as the baseline for staging env values.
+
 Auth/session envs in `apps/api/.env.example`:
 
 - `APP_BASE_URL=http://localhost`
@@ -163,6 +175,38 @@ The storage-bearing services share the same storage env contract:
 - `STORAGE_PUBLIC_BASE_URL=` optional public base URL for direct object resolution
 
 For local development, the default `minio` settings match `docker-compose.yml`. For staging, switch to `STORAGE_PROVIDER=s3-compatible` and point the same variables at the target S3-compatible backend. No application code changes should be required.
+
+Compose-facing proxy envs for this slice:
+
+- `CADDY_SITE_ADDRESS=http://localhost` for local HTTP, or `staging.example.com` for staging TLS
+- `APP_BASE_URL=https://staging.example.com` in staging so magic links and redirects use the public origin
+- `OPENMIRAGE_PUBLIC_BASE_URL=https://staging.example.com` for browser HTTP calls
+- `OPENMIRAGE_PUBLIC_COLLAB_HTTP_URL=https://staging.example.com/collab` for browser health/debug references
+- `OPENMIRAGE_PUBLIC_COLLAB_WS_URL=wss://staging.example.com/collab` for browser websocket traffic
+- `OPENMIRAGE_PUBLIC_WORKER_HTTP_URL=https://staging.example.com/worker` if worker health/status remain exposed through Caddy
+- `COLLAB_WS_PATH=/collab`
+- `AUTH_PATH=/auth`
+- `SESSION_COOKIE_SECURE=true` in staging
+
+Local defaults are already baked into `docker-compose.yml`. Staging should reuse the same images and base Compose file with env overrides plus the staging port override file:
+
+```bash
+pnpm verify:platform:prereqs
+docker compose -f docker-compose.yml -f docker-compose.staging.yml up --build --wait
+```
+
+The staging override adds `443:443` for Caddy. The same route model remains in use for local and staging.
+
+## Proxy Routing
+
+Caddy is the only browser-facing entrypoint in this slice.
+
+- `/` proxies to `web`
+- `/auth*`, `/healthz`, `/readyz`, `/metrics`, `/internal*` proxy to `api`
+- `/collab` and `/collab/*` proxy to `collab`, including websocket upgrades
+- `/worker/healthz`, `/worker/readyz`, `/worker/metrics`, and `/worker/status` proxy to `worker`
+
+If a browser flow only works when you bypass Caddy and hit a service container directly, treat that as a failure for this slice.
 
 ## Storage Smoke Check
 
@@ -215,6 +259,7 @@ Expected result:
 - the API logs a structured `magic link requested` event
 - the JSON response includes `delivery: "log"`
 - in development, the response also includes `magicLinkUrl`
+- the returned `magicLinkUrl` uses the public Caddy origin rather than an internal hostname
 
 Consume the returned `magicLinkUrl` and store the session cookie:
 
@@ -239,6 +284,7 @@ Expected result:
 - `/auth/session/refresh` returns `200` and re-issues the session cookie
 - `/auth/logout` clears the session cookie and revokes the server-side session
 - the final `/auth/session` call returns `401`
+- local cookies do not include `Secure`; staging cookies do include `Secure`
 
 Verify collab rejects unauthenticated access and accepts an authenticated session:
 
@@ -251,6 +297,26 @@ Expected result:
 
 - the unauthenticated websocket probe receives `401`
 - the authenticated websocket probe reaches `open`
+
+## Staging Runtime Notes
+
+This slice does not automate VPS provisioning or DNS changes, but it does assume the same images can be deployed behind Caddy on the staging VPS.
+
+Before running a staging deploy, check these operator prerequisites and stop if any fail:
+
+1. Confirm the staging DNS name points at the VPS.
+2. Confirm inbound ports `80` and `443` reach Caddy on the VPS.
+3. Confirm `CADDY_SITE_ADDRESS`, `APP_BASE_URL`, `OPENMIRAGE_PUBLIC_BASE_URL`, and `OPENMIRAGE_PUBLIC_COLLAB_WS_URL` are set to the public staging origin.
+4. Confirm `SESSION_COOKIE_SECURE=true`.
+5. Confirm the chosen storage credentials and bucket are available.
+
+If staging fails, inspect these first:
+
+- `docker compose logs caddy`
+- `docker compose logs api`
+- `docker compose logs collab`
+- generated magic-link origin and cookie flags
+- websocket upgrade behavior at `/collab`
 
 ## Platform Prerequisite Verification
 

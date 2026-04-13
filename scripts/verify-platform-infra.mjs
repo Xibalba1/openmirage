@@ -1,6 +1,12 @@
 import { spawnSync } from "node:child_process";
 
 const caddyBaseUrl = process.env.CADDY_BASE_URL ?? "http://127.0.0.1";
+const expectedCookieName =
+  process.env.SESSION_COOKIE_NAME ?? "openmirage_session";
+const expectedCookiePath = process.env.SESSION_COOKIE_PATH ?? "/";
+const expectedCookieSameSite = process.env.SESSION_COOKIE_SAME_SITE ?? "lax";
+const expectedSecureCookie =
+  (process.env.SESSION_COOKIE_SECURE ?? "false") === "true";
 
 function log(message) {
   console.log(`[openmirage] ${message}`);
@@ -83,7 +89,10 @@ async function verifyHomepage() {
   const response = await fetch(`${caddyBaseUrl}/`);
   const body = await response.text();
 
-  if (!response.ok || !body.includes("<title>OpenMirage Platform Shell</title>")) {
+  if (
+    !response.ok ||
+    !body.includes("<title>OpenMirage Platform Shell</title>")
+  ) {
     fail("homepage did not render the platform shell through Caddy");
   }
 }
@@ -102,7 +111,9 @@ async function verifyApiAndStorage() {
   }
 
   const smokeKey = `smoke/verify-${Date.now()}.txt`;
-  const initialList = await waitForJson(`${caddyBaseUrl}/internal/storage/smoke`);
+  const initialList = await waitForJson(
+    `${caddyBaseUrl}/internal/storage/smoke`
+  );
 
   if (!Array.isArray(initialList.objects)) {
     fail("storage smoke list did not return an objects array");
@@ -183,6 +194,10 @@ async function verifyAuthAndWebsocket() {
     fail("magic link request did not return a Caddy-routed magic link url");
   }
 
+  if (new URL(magicLinkUrl).origin !== new URL(caddyBaseUrl).origin) {
+    fail("magic link request did not use the expected public Caddy origin");
+  }
+
   const consumeResponse = await fetch(magicLinkUrl, {
     redirect: "manual"
   });
@@ -190,6 +205,30 @@ async function verifyAuthAndWebsocket() {
 
   if (consumeResponse.status !== 302 || !setCookieHeader) {
     fail("magic link consume did not issue a session cookie");
+  }
+
+  if (!setCookieHeader.startsWith(`${expectedCookieName}=`)) {
+    fail("magic link consume did not issue the expected session cookie name");
+  }
+
+  if (!setCookieHeader.includes(`Path=${expectedCookiePath}`)) {
+    fail("magic link consume did not issue the expected session cookie path");
+  }
+
+  if (
+    !setCookieHeader.includes(`SameSite=${capitalize(expectedCookieSameSite)}`)
+  ) {
+    fail(
+      "magic link consume did not issue the expected session cookie same-site policy"
+    );
+  }
+
+  if (expectedSecureCookie && !setCookieHeader.includes("Secure")) {
+    fail("magic link consume did not issue a secure session cookie");
+  }
+
+  if (!expectedSecureCookie && setCookieHeader.includes("Secure")) {
+    fail("magic link consume unexpectedly issued a secure session cookie");
   }
 
   const sessionCookie = setCookieHeader.split(";")[0];
@@ -201,7 +240,9 @@ async function verifyAuthAndWebsocket() {
   const workspaceId = sessionResponse.body.memberships?.[0]?.workspaceId;
 
   if (typeof workspaceId !== "string" || workspaceId.length === 0) {
-    fail("seed bootstrap did not provide a workspace membership for websocket verification");
+    fail(
+      "seed bootstrap did not provide a workspace membership for websocket verification"
+    );
   }
 
   const websocketProbe = spawnSync(
@@ -245,6 +286,49 @@ ws.on("close", () => process.exit(0));`
       websocketProbe.stderr.trim() ||
         websocketProbe.stdout.trim() ||
         "websocket verification through Caddy failed"
+    );
+  }
+
+  const unauthenticatedProbe = spawnSync(
+    "pnpm",
+    [
+      "--filter",
+      "@openmirage/collab",
+      "exec",
+      "node",
+      "--input-type=module",
+      "-e",
+      `import WebSocket from "ws";
+const ws = new WebSocket("ws://127.0.0.1/collab?documentName=runtime-check&workspaceId=${workspaceId}");
+const timer = setTimeout(() => {
+  console.error("timeout");
+  process.exit(1);
+}, 5000);
+ws.on("unexpected-response", (_request, response) => {
+  clearTimeout(timer);
+  console.log(String(response.statusCode));
+  process.exit(response.statusCode === 401 ? 0 : 1);
+});
+ws.on("open", () => {
+  clearTimeout(timer);
+  console.error("unexpected-open");
+  process.exit(1);
+});
+ws.on("error", () => {});
+ws.on("close", () => process.exit(0));`
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: "pipe"
+    }
+  );
+
+  if (unauthenticatedProbe.status !== 0) {
+    fail(
+      unauthenticatedProbe.stderr.trim() ||
+        unauthenticatedProbe.stdout.trim() ||
+        "unauthenticated websocket verification through Caddy failed"
     );
   }
 }
@@ -312,4 +396,8 @@ try {
   process.exitCode = 1;
 } finally {
   cleanup();
+}
+
+function capitalize(value) {
+  return value.slice(0, 1).toUpperCase() + value.slice(1);
 }
