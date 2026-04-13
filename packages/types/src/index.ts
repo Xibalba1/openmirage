@@ -24,6 +24,34 @@ export interface RuntimeUrls {
   authPath: string;
 }
 
+export const membershipRoles = ["owner", "editor", "viewer"] as const;
+
+export type MembershipRole = (typeof membershipRoles)[number];
+
+export interface AuthenticatedUser {
+  id: string;
+  email: string;
+  displayName: string;
+  avatarUrl: string | null;
+}
+
+export interface WorkspaceMembershipSummary {
+  id: string;
+  workspaceId: string;
+  role: MembershipRole;
+}
+
+export interface AuthenticatedSession {
+  id: string;
+  expiresAt: string;
+}
+
+export interface AuthContext {
+  session: AuthenticatedSession;
+  user: AuthenticatedUser;
+  memberships: WorkspaceMembershipSummary[];
+}
+
 export interface ServiceCheck {
   ok: boolean;
   summary: string;

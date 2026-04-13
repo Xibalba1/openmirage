@@ -1,11 +1,26 @@
 import cors from "@fastify/cors";
-import { createSessionContract } from "@openmirage/auth";
+import {
+  buildMagicLinkUrl,
+  createClearSessionCookieHeader,
+  createSessionContract,
+  createSetSessionCookieHeader,
+  isValidEmail,
+  normalizeEmail,
+  readSessionTokenFromCookie
+} from "@openmirage/auth";
 import { readApiEnv } from "@openmirage/config-env";
 import {
   checkDatabaseConnection,
   checkMetadataStore,
+  consumeMagicLinkToken,
+  createDatabasePool,
   createMetadataStoreContract,
-  getApplicationVersionInfo
+  deriveDisplayName,
+  getAuthContextForSessionToken,
+  getApplicationVersionInfo,
+  issueMagicLinkForEmail,
+  refreshSession,
+  revokeSession
 } from "@openmirage/db";
 import {
   createErrorLogFields,
@@ -20,17 +35,105 @@ import {
 } from "@openmirage/observability";
 import { createStorage } from "@openmirage/storage";
 import {
+  type AuthContext,
   type HealthStatus,
   type ReadyStatus,
   type ServiceCheck,
   type StorageConfig
 } from "@openmirage/types";
-import Fastify from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 
 interface StorageSmokeBody {
   bodyBase64: string;
   contentType?: string;
   key?: string;
+}
+
+interface MagicLinkRequestBody {
+  displayName?: string;
+  email?: string;
+}
+
+interface SessionQuerystring {
+  workspaceId?: string;
+}
+
+function createAuthUnauthorizedReply(reply: FastifyReply) {
+  reply.status(401);
+  return {
+    error: "unauthenticated"
+  };
+}
+
+function createAuthForbiddenReply(reply: FastifyReply) {
+  reply.status(403);
+  return {
+    error: "forbidden"
+  };
+}
+
+function createSessionContractFromEnv() {
+  const env = readApiEnv();
+
+  return createSessionContract({
+    sessionCookieMaxAgeSeconds: env.authSessionTtlDays * 24 * 60 * 60,
+    sessionCookieName: env.sessionCookieName,
+    sessionCookiePath: env.sessionCookiePath,
+    sessionCookieSameSite: env.sessionCookieSameSite,
+    sessionCookieSecure: env.sessionCookieSecure
+  });
+}
+
+function getAuthRedirectTarget(
+  env: ReturnType<typeof readApiEnv>,
+  redirectTo: string | undefined
+): string {
+  if (!redirectTo) {
+    return env.appBaseUrl;
+  }
+
+  try {
+    const redirectUrl = new URL(redirectTo);
+    const appBaseUrl = new URL(env.appBaseUrl);
+
+    if (redirectUrl.origin !== appBaseUrl.origin) {
+      return env.appBaseUrl;
+    }
+
+    return redirectUrl.toString();
+  } catch {
+    return env.appBaseUrl;
+  }
+}
+
+async function readAuthContextFromRequest(
+  request: FastifyRequest,
+  databasePool: ReturnType<typeof createDatabasePool>,
+  sessionContract = createSessionContractFromEnv()
+): Promise<AuthContext | null> {
+  const token = readSessionTokenFromCookie(
+    request.headers.cookie,
+    sessionContract
+  );
+
+  if (!token) {
+    return null;
+  }
+
+  return getAuthContextForSessionToken(token, databasePool);
+}
+
+function hasWorkspaceMembership(
+  authContext: AuthContext,
+  workspaceId: string | undefined
+): boolean {
+  if (!workspaceId) {
+    return true;
+  }
+
+  return authContext.memberships.some(
+    (membership) => membership.workspaceId === workspaceId
+  );
 }
 
 function describeConfiguredStorage(storageConfig: StorageConfig): ServiceCheck {
@@ -43,7 +146,11 @@ function describeConfiguredStorage(storageConfig: StorageConfig): ServiceCheck {
 async function buildHealthStatus(): Promise<HealthStatus> {
   const env = readApiEnv();
   const session = createSessionContract({
-    sessionCookieName: env.sessionCookieName
+    sessionCookieMaxAgeSeconds: env.authSessionTtlDays * 24 * 60 * 60,
+    sessionCookieName: env.sessionCookieName,
+    sessionCookiePath: env.sessionCookiePath,
+    sessionCookieSameSite: env.sessionCookieSameSite,
+    sessionCookieSecure: env.sessionCookieSecure
   });
   const metadataStore = createMetadataStoreContract();
   const checks = {
@@ -99,7 +206,11 @@ async function inspectStorage(
 async function buildReadyStatus(): Promise<ReadyStatus> {
   const env = readApiEnv();
   const session = createSessionContract({
-    sessionCookieName: env.sessionCookieName
+    sessionCookieMaxAgeSeconds: env.authSessionTtlDays * 24 * 60 * 60,
+    sessionCookieName: env.sessionCookieName,
+    sessionCookiePath: env.sessionCookiePath,
+    sessionCookieSameSite: env.sessionCookieSameSite,
+    sessionCookieSecure: env.sessionCookieSecure
   });
   const metadataStore = createMetadataStoreContract();
   const storage = createStorage(env.storage);
@@ -134,6 +245,13 @@ async function buildReadyStatus(): Promise<ReadyStatus> {
 
 async function startApiServer(): Promise<void> {
   const env = readApiEnv();
+  const sessionContract = createSessionContract({
+    sessionCookieMaxAgeSeconds: env.authSessionTtlDays * 24 * 60 * 60,
+    sessionCookieName: env.sessionCookieName,
+    sessionCookiePath: env.sessionCookiePath,
+    sessionCookieSameSite: env.sessionCookieSameSite,
+    sessionCookieSecure: env.sessionCookieSecure
+  });
   const logger = createServiceLogger({
     service: "api",
     environment: env.environment,
@@ -168,9 +286,11 @@ async function startApiServer(): Promise<void> {
 
   const requestStartedAt = new WeakMap<object, bigint>();
   const storage = createStorage(env.storage);
+  const databasePool = createDatabasePool(env.databaseUrl);
 
   const app = Fastify({
     disableRequestLogging: true,
+    trustProxy: true,
     genReqId(request) {
       const header = request.headers["x-request-id"];
       return createRequestId(typeof header === "string" ? header : undefined);
@@ -275,8 +395,197 @@ async function startApiServer(): Promise<void> {
     service: "api",
     mode: "magic-link-session",
     route: `${env.authPath}/entry`,
-    status: "placeholder"
+    status: "ready",
+    endpoints: {
+      consumeMagicLink: `${env.authPath}/magic-link/consume`,
+      currentSession: `${env.authPath}/session`,
+      logout: `${env.authPath}/logout`,
+      requestMagicLink: `${env.authPath}/magic-link/request`,
+      sessionRefresh: `${env.authPath}/session/refresh`
+    }
   }));
+  app.post<{ Body: MagicLinkRequestBody }>(
+    `${env.authPath}/magic-link/request`,
+    async (request, reply) => {
+      const email = request.body?.email
+        ? normalizeEmail(request.body.email)
+        : "";
+
+      if (!email || !isValidEmail(email)) {
+        reply.status(400);
+        return {
+          error: "email is required"
+        };
+      }
+
+      const displayName =
+        request.body?.displayName?.trim() || deriveDisplayName(email);
+      const issued = await issueMagicLinkForEmail(
+        {
+          displayName,
+          email,
+          ttlMinutes: env.authMagicLinkTtlMinutes
+        },
+        databasePool
+      );
+      const requestHost = request.headers.host ?? new URL(env.appBaseUrl).host;
+      const magicLinkUrl = buildMagicLinkUrl({
+        apiBaseUrl: `${request.protocol}://${requestHost}`,
+        authPath: env.authPath,
+        redirectTo: env.appBaseUrl,
+        token: issued.magicLink.token
+      });
+
+      logger.info("magic link requested", {
+        authDeliveryMode: env.authDeliveryMode,
+        email,
+        expiresAt: issued.magicLink.expiresAt,
+        magicLinkUrl
+      });
+
+      return {
+        delivery: env.authDeliveryMode,
+        expiresAt: issued.magicLink.expiresAt,
+        ok: true,
+        ...(env.devAuthExposeMagicLink ? { magicLinkUrl } : {})
+      };
+    }
+  );
+  app.get<{
+    Querystring: {
+      redirectTo?: string;
+      token?: string;
+    };
+  }>(`${env.authPath}/magic-link/consume`, async (request, reply) => {
+    if (!request.query.token) {
+      reply.status(400);
+      return {
+        error: "token is required"
+      };
+    }
+
+    const consumedMagicLink = await consumeMagicLinkToken(
+      request.query.token,
+      env.authSessionTtlDays,
+      databasePool
+    );
+
+    if (!consumedMagicLink) {
+      reply.status(401);
+      return {
+        error: "invalid_or_expired_magic_link"
+      };
+    }
+
+    reply.header(
+      "set-cookie",
+      createSetSessionCookieHeader(
+        consumedMagicLink.sessionToken,
+        sessionContract
+      )
+    );
+
+    logger.info("magic link consumed", {
+      sessionId: consumedMagicLink.authContext.session.id,
+      userId: consumedMagicLink.authContext.user.id
+    });
+
+    const redirectTarget = new URL(
+      getAuthRedirectTarget(env, request.query.redirectTo)
+    );
+    redirectTarget.searchParams.set("auth", "success");
+
+    reply.redirect(redirectTarget.toString(), 302);
+  });
+  app.get<{ Querystring: SessionQuerystring }>(
+    `${env.authPath}/session`,
+    async (request, reply) => {
+      const authContext = await readAuthContextFromRequest(
+        request,
+        databasePool,
+        sessionContract
+      );
+
+      if (!authContext) {
+        return createAuthUnauthorizedReply(reply);
+      }
+
+      if (!hasWorkspaceMembership(authContext, request.query.workspaceId)) {
+        return createAuthForbiddenReply(reply);
+      }
+
+      return authContext;
+    }
+  );
+  app.post<{ Querystring: SessionQuerystring }>(
+    `${env.authPath}/session/refresh`,
+    async (request, reply) => {
+      const token = readSessionTokenFromCookie(
+        request.headers.cookie,
+        sessionContract
+      );
+
+      if (!token) {
+        return createAuthUnauthorizedReply(reply);
+      }
+
+      const refreshedContext = await refreshSession(
+        token,
+        env.authSessionTtlDays,
+        databasePool
+      );
+
+      if (!refreshedContext) {
+        reply.header(
+          "set-cookie",
+          createClearSessionCookieHeader(sessionContract)
+        );
+        return createAuthUnauthorizedReply(reply);
+      }
+
+      if (
+        !hasWorkspaceMembership(refreshedContext, request.query.workspaceId)
+      ) {
+        return createAuthForbiddenReply(reply);
+      }
+
+      reply.header(
+        "set-cookie",
+        createSetSessionCookieHeader(token, sessionContract)
+      );
+
+      return refreshedContext;
+    }
+  );
+  app.get(`${env.authPath}/me`, async (request, reply) => {
+    const authContext = await readAuthContextFromRequest(
+      request,
+      databasePool,
+      sessionContract
+    );
+
+    if (!authContext) {
+      return createAuthUnauthorizedReply(reply);
+    }
+
+    return authContext;
+  });
+  app.post(`${env.authPath}/logout`, async (request, reply) => {
+    const token = readSessionTokenFromCookie(
+      request.headers.cookie,
+      sessionContract
+    );
+
+    if (token) {
+      await revokeSession(token, databasePool);
+    }
+
+    reply.header("set-cookie", createClearSessionCookieHeader(sessionContract));
+
+    return {
+      ok: true
+    };
+  });
   app.get("/internal/storage/smoke", async () => {
     await storage.ensureBucket();
 
@@ -339,6 +648,10 @@ async function startApiServer(): Promise<void> {
   }
 
   try {
+    app.addHook("onClose", async () => {
+      await databasePool.end();
+    });
+
     try {
       await storage.ensureBucket();
     } catch (error) {

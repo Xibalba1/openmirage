@@ -26,13 +26,22 @@ export interface BaseServiceEnv {
 
 export interface ApiEnv extends BaseServiceEnv {
   service: "api";
+  appBaseUrl: string;
+  authDeliveryMode: "log";
+  authMagicLinkTtlMinutes: number;
+  authSessionTtlDays: number;
+  devAuthExposeMagicLink: boolean;
   port: number;
   authPath: string;
   databaseUrl: string;
+  sessionCookiePath: string;
+  sessionCookieSameSite: "lax" | "strict" | "none";
+  sessionCookieSecure: boolean;
   storage: StorageConfig;
 }
 
 export interface CollabEnv extends BaseServiceEnv {
+  authPath: string;
   service: "collab";
   port: number;
   apiBaseUrl: string;
@@ -83,6 +92,20 @@ function readNumber(source: EnvSource, key: string, fallback: number): number {
 
   if (!Number.isFinite(value)) {
     throw new Error(`Environment variable ${key} must be a finite number`);
+  }
+
+  return value;
+}
+
+function readPositiveInteger(
+  source: EnvSource,
+  key: string,
+  fallback: number
+): number {
+  const value = readNumber(source, key, fallback);
+
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`Environment variable ${key} must be a positive integer`);
   }
 
   return value;
@@ -152,6 +175,22 @@ function readUrlPath(source: EnvSource, key: string, fallback: string): string {
   }
 
   return value;
+}
+
+function readSameSitePolicy(
+  source: EnvSource,
+  key: string,
+  fallback: "lax" | "strict" | "none"
+): "lax" | "strict" | "none" {
+  const value = source[key] ?? fallback;
+
+  if (value === "lax" || value === "strict" || value === "none") {
+    return value;
+  }
+
+  throw new Error(
+    `Environment variable ${key} must be one of lax, strict, none`
+  );
 }
 
 function readAppVersion(source: EnvSource): string {
@@ -262,15 +301,49 @@ export function readStorageConfig(
 }
 
 export function readApiEnv(source: EnvSource = process.env): ApiEnv {
+  const environment = readRuntimeEnvironment(source);
+
   return {
     ...readBaseServiceEnv("api", source),
     service: "api",
+    appBaseUrl: readRequiredString(
+      source,
+      "APP_BASE_URL",
+      "http://localhost:3000"
+    ),
+    authDeliveryMode: "log",
+    authMagicLinkTtlMinutes: readPositiveInteger(
+      source,
+      "AUTH_MAGIC_LINK_TTL_MINUTES",
+      15
+    ),
+    authSessionTtlDays: readPositiveInteger(
+      source,
+      "AUTH_SESSION_TTL_DAYS",
+      30
+    ),
+    devAuthExposeMagicLink: readBoolean(
+      source,
+      "DEV_AUTH_EXPOSE_MAGIC_LINK",
+      environment !== "production"
+    ),
     port: readNumber(source, "API_PORT", 4000),
     authPath: readUrlPath(source, "AUTH_PATH", "/auth"),
     databaseUrl: readRequiredString(
       source,
       "DATABASE_URL",
       "postgres://openmirage:openmirage@localhost:5432/openmirage"
+    ),
+    sessionCookiePath: readUrlPath(source, "SESSION_COOKIE_PATH", "/"),
+    sessionCookieSameSite: readSameSitePolicy(
+      source,
+      "SESSION_COOKIE_SAME_SITE",
+      "lax"
+    ),
+    sessionCookieSecure: readBoolean(
+      source,
+      "SESSION_COOKIE_SECURE",
+      environment === "staging" || environment === "production"
     ),
     storage: readStorageConfig(source)
   };
@@ -279,6 +352,7 @@ export function readApiEnv(source: EnvSource = process.env): ApiEnv {
 export function readCollabEnv(source: EnvSource = process.env): CollabEnv {
   return {
     ...readBaseServiceEnv("collab", source),
+    authPath: readUrlPath(source, "AUTH_PATH", "/auth"),
     service: "collab",
     port: readNumber(source, "COLLAB_PORT", 4100),
     apiBaseUrl: readRequiredString(

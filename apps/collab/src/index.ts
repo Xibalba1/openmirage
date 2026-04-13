@@ -1,5 +1,8 @@
 import { Hocuspocus } from "@hocuspocus/server";
-import { createSessionContract } from "@openmirage/auth";
+import {
+  createSessionContract,
+  readSessionTokenFromCookie
+} from "@openmirage/auth";
 import { readCollabEnv } from "@openmirage/config-env";
 import {
   createErrorLogFields,
@@ -32,6 +35,7 @@ function createCollabHealthStatus(
     timestamp: new Date().toISOString(),
     details: {
       apiBaseUrl: env.apiBaseUrl,
+      authPath: env.authPath,
       authMode: session.mode,
       sessionCookieName: session.sessionCookieName,
       websocketPath: env.wsPath,
@@ -53,6 +57,9 @@ function createCollabHealthStatus(
 
 async function startCollabServer(): Promise<void> {
   const env = readCollabEnv();
+  const sessionContract = createSessionContract({
+    sessionCookieName: env.sessionCookieName
+  });
   const logger = createServiceLogger({
     service: "collab",
     environment: env.environment,
@@ -261,7 +268,7 @@ async function startCollabServer(): Promise<void> {
     });
   }
 
-  app.server.on("upgrade", (request, socket, head) => {
+  app.server.on("upgrade", async (request, socket, head) => {
     const requestUrl = new URL(
       request.url ?? env.wsPath,
       `http://${request.headers.host ?? `${env.host}:${env.port}`}`
@@ -272,23 +279,82 @@ async function startCollabServer(): Promise<void> {
       return;
     }
 
+    const sessionToken = readSessionTokenFromCookie(
+      request.headers.cookie,
+      sessionContract
+    );
+    const documentName =
+      requestUrl.searchParams.get("documentName") ?? "unknown";
+    const workspaceId = requestUrl.searchParams.get("workspaceId") ?? undefined;
+
+    if (!sessionToken) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      logger.warn("collab websocket rejected", {
+        connectionReason: "missing-session-cookie",
+        documentName,
+        workspaceId
+      });
+      return;
+    }
+
+    const authCheckUrl = new URL(`${env.apiBaseUrl}${env.authPath}/session`);
+
+    if (workspaceId) {
+      authCheckUrl.searchParams.set("workspaceId", workspaceId);
+    }
+
+    let authResponse: Response;
+
+    try {
+      authResponse = await fetch(authCheckUrl, {
+        headers: {
+          cookie: request.headers.cookie ?? ""
+        }
+      });
+    } catch (error) {
+      socket.write(
+        "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n"
+      );
+      socket.destroy();
+      logger.error("collab websocket auth check failed", {
+        documentName,
+        error: error instanceof Error ? error.message : String(error),
+        workspaceId
+      });
+      return;
+    }
+
+    if (!authResponse.ok) {
+      socket.write(
+        `HTTP/1.1 ${authResponse.status} ${
+          authResponse.status === 403 ? "Forbidden" : "Unauthorized"
+        }\r\nConnection: close\r\n\r\n`
+      );
+      socket.destroy();
+      logger.warn("collab websocket rejected", {
+        connectionReason:
+          authResponse.status === 403
+            ? "missing-workspace-membership"
+            : "invalid-session",
+        documentName,
+        workspaceId
+      });
+      return;
+    }
+
     websocketServer.handleUpgrade(request, socket, head, (websocket) => {
       const closableSocket = websocket as {
         once(event: "close", listener: () => void): void;
       };
       const connectionId = randomUUID();
-      const hasSessionCookie = (request.headers.cookie ?? "").includes(
-        `${env.sessionCookieName}=`
-      );
-      const documentName =
-        requestUrl.searchParams.get("documentName") ?? "unknown";
 
       socketConnectionIds.set(websocket, connectionId);
       activeSocketCount += 1;
       totalConnections.inc({ service: "collab" });
       syncRealtimeMetrics();
       logger.info("collab websocket accepted", {
-        authenticated: hasSessionCookie,
+        authenticated: true,
         connectionId,
         documentName
       });
@@ -320,6 +386,7 @@ async function startCollabServer(): Promise<void> {
 
     logger.info("collab server listening", {
       apiBaseUrl: env.apiBaseUrl,
+      authPath: env.authPath,
       host: env.host,
       port: env.port,
       websocketPath: env.wsPath
