@@ -1,7 +1,4 @@
-import {
-  type HealthStatus,
-  type WorkerHeartbeat
-} from "@openmirage/types";
+import { type HealthStatus, type WorkerHeartbeat } from "@openmirage/types";
 import { useEffect, useState } from "react";
 import { readRuntimeWebEnv } from "./runtime-env";
 

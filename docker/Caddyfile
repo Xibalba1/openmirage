@@ -1,11 +1,10 @@
-{
-  auto_https off
-}
-
-:80 {
+(openmirage_routes) {
   encode gzip zstd
 
   @api path /auth* /healthz /readyz /metrics /internal*
+  @collab_http path /collab/*
+  @worker_http path /worker/*
+
   handle @api {
     reverse_proxy api:4000
   }
@@ -14,15 +13,21 @@
     reverse_proxy collab:4100
   }
 
-  handle_path /collab/* {
+  handle @collab_http {
+    uri strip_prefix /collab
     reverse_proxy collab:4100
   }
 
-  handle_path /worker/* {
+  handle @worker_http {
+    uri strip_prefix /worker
     reverse_proxy worker:4200
   }
 
   handle {
     reverse_proxy web:80
   }
+}
+
+{$CADDY_SITE_ADDRESS:http://localhost}, http://127.0.0.1 {
+  import openmirage_routes
 }

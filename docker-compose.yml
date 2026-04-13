@@ -99,17 +99,17 @@ services:
       db-seed:
         condition: service_completed_successfully
     environment:
-      OPENMIRAGE_ENV: development
+      OPENMIRAGE_ENV: ${OPENMIRAGE_ENV:-development}
       SERVICE_HOST: 0.0.0.0
       LOG_LEVEL: info
       APP_VERSION: 0.1.0
       API_PORT: 4000
-      APP_BASE_URL: http://localhost
-      AUTH_PATH: /auth
-      SESSION_COOKIE_NAME: openmirage_session
-      SESSION_COOKIE_PATH: /
-      SESSION_COOKIE_SAME_SITE: lax
-      SESSION_COOKIE_SECURE: "false"
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
+      AUTH_PATH: ${AUTH_PATH:-/auth}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-openmirage_session}
+      SESSION_COOKIE_PATH: ${SESSION_COOKIE_PATH:-/}
+      SESSION_COOKIE_SAME_SITE: ${SESSION_COOKIE_SAME_SITE:-lax}
+      SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-false}"
       AUTH_MAGIC_LINK_TTL_MINUTES: 15
       AUTH_SESSION_TTL_DAYS: 30
       DEV_AUTH_EXPOSE_MAGIC_LINK: "true"
@@ -124,7 +124,7 @@ services:
       STORAGE_S3_FORCE_PATH_STYLE: "true"
       ENABLE_TEST_ERROR_ROUTES: "false"
       SENTRY_DSN: ""
-      SENTRY_ENVIRONMENT: development
+      SENTRY_ENVIRONMENT: ${OPENMIRAGE_ENV:-development}
       SENTRY_RELEASE: 0.1.0
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4000/readyz >/dev/null"]
@@ -143,18 +143,18 @@ services:
       api:
         condition: service_healthy
     environment:
-      OPENMIRAGE_ENV: development
+      OPENMIRAGE_ENV: ${OPENMIRAGE_ENV:-development}
       SERVICE_HOST: 0.0.0.0
       LOG_LEVEL: info
       APP_VERSION: 0.1.0
       COLLAB_PORT: 4100
-      COLLAB_WS_PATH: /collab
+      COLLAB_WS_PATH: ${COLLAB_WS_PATH:-/collab}
       API_BASE_URL: http://api:4000
-      AUTH_PATH: /auth
-      SESSION_COOKIE_NAME: openmirage_session
+      AUTH_PATH: ${AUTH_PATH:-/auth}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-openmirage_session}
       ENABLE_TEST_ERROR_ROUTES: "false"
       SENTRY_DSN: ""
-      SENTRY_ENVIRONMENT: development
+      SENTRY_ENVIRONMENT: ${OPENMIRAGE_ENV:-development}
       SENTRY_RELEASE: 0.1.0
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4100/healthz >/dev/null"]
@@ -177,12 +177,12 @@ services:
       db-migrate:
         condition: service_completed_successfully
     environment:
-      OPENMIRAGE_ENV: development
+      OPENMIRAGE_ENV: ${OPENMIRAGE_ENV:-development}
       SERVICE_HOST: 0.0.0.0
       LOG_LEVEL: info
       APP_VERSION: 0.1.0
       WORKER_PORT: 4200
-      SESSION_COOKIE_NAME: openmirage_session
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-openmirage_session}
       DATABASE_URL: postgres://openmirage:openmirage@postgres:5432/openmirage
       STORAGE_PROVIDER: minio
       STORAGE_BUCKET: openmirage-assets
@@ -195,7 +195,7 @@ services:
       WORKER_HEARTBEAT_INTERVAL_MS: 5000
       ENABLE_TEST_ERROR_ROUTES: "false"
       SENTRY_DSN: ""
-      SENTRY_ENVIRONMENT: development
+      SENTRY_ENVIRONMENT: ${OPENMIRAGE_ENV:-development}
       SENTRY_RELEASE: 0.1.0
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4200/readyz >/dev/null"]
@@ -218,14 +218,14 @@ services:
       worker:
         condition: service_healthy
     environment:
-      OPENMIRAGE_ENV: development
+      OPENMIRAGE_ENV: ${OPENMIRAGE_ENV:-development}
       WEB_PORT: 3000
-      VITE_API_BASE_URL: http://localhost
-      VITE_COLLAB_HTTP_URL: http://localhost/collab
-      VITE_COLLAB_WS_URL: ws://localhost/collab
-      VITE_COLLAB_WS_PATH: /collab
-      VITE_AUTH_PATH: /auth
-      VITE_WORKER_HTTP_URL: http://localhost/worker
+      VITE_API_BASE_URL: ${OPENMIRAGE_PUBLIC_BASE_URL:-http://localhost}
+      VITE_COLLAB_HTTP_URL: ${OPENMIRAGE_PUBLIC_COLLAB_HTTP_URL:-http://localhost/collab}
+      VITE_COLLAB_WS_URL: ${OPENMIRAGE_PUBLIC_COLLAB_WS_URL:-ws://localhost/collab}
+      VITE_COLLAB_WS_PATH: ${COLLAB_WS_PATH:-/collab}
+      VITE_AUTH_PATH: ${AUTH_PATH:-/auth}
+      VITE_WORKER_HTTP_URL: ${OPENMIRAGE_PUBLIC_WORKER_HTTP_URL:-http://localhost/worker}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
       interval: 5s
@@ -248,8 +248,12 @@ services:
         condition: service_healthy
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
     ports:
-      - "80:80"
+      - "${CADDY_HTTP_PORT:-80}:80"
+    environment:
+      CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:-http://localhost}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
       interval: 5s
@@ -261,6 +265,8 @@ services:
 volumes:
   postgres-data:
   minio-data:
+  caddy-data:
+  caddy-config:
 
 networks:
   openmirage:
