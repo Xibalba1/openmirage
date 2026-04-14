@@ -36,7 +36,7 @@ Not included yet:
 - SMTP-backed magic-link delivery or polished authenticated product flows
 - collab document persistence or page authorization
 - worker jobs, exports, or cleanup processing
-- staging deployment automation, backup/restore verification
+- backup/restore verification
 
 ## Requirements
 
@@ -300,7 +300,7 @@ Expected result:
 
 ## Staging Runtime Notes
 
-This slice does not automate VPS provisioning or DNS changes, but it does assume the same images can be deployed behind Caddy on the staging VPS.
+This slice does not automate VPS provisioning or DNS changes, but it does assume the same images can be deployed behind Caddy on the staging VPS. The dedicated staging runbook lives at [ops/staging-vps.md](/Users/ik/repos/openmirage/ops/staging-vps.md).
 
 Before running a staging deploy, check these operator prerequisites and stop if any fail:
 
@@ -334,7 +334,7 @@ The prerequisite gate for this slice is mandatory before code changes or deploy 
 Workflow inventory:
 
 - `.github/workflows/ci.yml`: runs on pull requests to `main` and pushes to `main`; performs static validation, Docker build validation, migration safety, and GHCR image publishing on `main`
-- `.github/workflows/staging-deploy.yml`: manual `workflow_dispatch` deploy from `main`, protected by the GitHub `staging` Environment approval gate
+- `.github/workflows/staging-deploy.yml`: manual `workflow_dispatch` deploy from `main`, protected by the GitHub `staging` Environment approval gate, with an optional immutable `image_tag` input for redeploys or rollbacks
 
 Static validation contract:
 
@@ -393,25 +393,9 @@ Required VPS staging files:
 - `$VPS_DEPLOY_DIR/docker-compose.staging.yml`
 - `$VPS_DEPLOY_DIR/docker/Caddyfile`
 
-The deploy workflow keeps these checked-in deployment assets current on the VPS by copying the repo versions on each run. The environment-specific `.env.staging` file remains operator-managed on the server.
+The deploy workflow keeps the checked-in deployment assets current on the VPS by copying the repo versions on each run. The environment-specific `.env.staging` file remains operator-managed on the server.
 
-The manual staging deploy sequence is:
-
-1. Check out the repo and derive GHCR image tags from `github.sha`.
-2. Connect to the VPS through the protected `staging` Environment.
-3. Confirm Docker, Compose, the deploy directory, and `.env.staging` exist.
-4. Copy `docker-compose.yml`, `docker-compose.staging.yml`, and `docker/Caddyfile` to `$VPS_DEPLOY_DIR`.
-5. Log the VPS into GHCR.
-6. Pull the immutable `db-migrate`, `api`, `web`, `collab`, and `worker` image tags for that commit.
-7. Run `db-migrate` with the new API tools image.
-8. Run `docker compose up -d --no-build --no-deps` for `web`, `api`, `collab`, `worker`, and `caddy`.
-9. Run smoke checks against:
-   - `/`
-   - `/healthz`
-   - `/readyz`
-   - `/collab/healthz`
-   - `/worker/readyz`
-   - websocket upgrade at `/collab`
+The detailed VPS layout, first-boot preparation, immutable tag redeploy flow, rollback expectations, and post-deploy verification sequence are documented in [ops/staging-vps.md](/Users/ik/repos/openmirage/ops/staging-vps.md).
 
 ## Platform Prerequisite Verification
 
