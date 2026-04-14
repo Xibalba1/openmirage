@@ -338,6 +338,7 @@ Workflow inventory:
 
 - `.github/workflows/ci.yml`: runs on pull requests to `main` and pushes to `main`; performs static validation, Docker build validation, migration safety, and GHCR image publishing on `main`
 - `.github/workflows/staging-deploy.yml`: manual `workflow_dispatch` deploy from `main`, protected by the GitHub `staging` Environment approval gate
+- `.github/workflows/production-deploy.yml`: manual `workflow_dispatch` deploy from `main`, protected by the GitHub `production` Environment approval gate
 
 Static validation contract:
 
@@ -389,6 +390,21 @@ Required GitHub `staging` Environment variables:
 
 - `STAGING_PUBLIC_BASE_URL`: public HTTPS origin used for post-deploy smoke checks, for example `https://staging.example.com`
 
+Required GitHub `production` Environment secrets:
+
+- `VPS_HOST`
+- `VPS_PORT`
+- `VPS_USER`
+- `VPS_SSH_PRIVATE_KEY`
+- `VPS_KNOWN_HOSTS`
+- `VPS_DEPLOY_DIR`
+- `GHCR_USERNAME`
+- `GHCR_TOKEN`
+
+Required GitHub `production` Environment variables:
+
+- `PRODUCTION_PUBLIC_BASE_URL`: public HTTPS origin used for post-deploy smoke checks, for example `https://app.example.com`
+
 Required VPS staging files:
 
 - `$VPS_DEPLOY_DIR/.env.staging`
@@ -397,6 +413,38 @@ Required VPS staging files:
 - `$VPS_DEPLOY_DIR/docker/Caddyfile`
 
 The deploy workflow keeps these checked-in deployment assets current on the VPS by copying the repo versions on each run. The environment-specific `.env.staging` file remains operator-managed on the server.
+
+To bootstrap the VPS-side prerequisites that CI does not create for you, use:
+
+```bash
+VPS_HOST=staging.example.com \
+VPS_USER=deploy \
+VPS_PORT=22 \
+VPS_DEPLOY_DIR=/srv/openmirage \
+STAGING_PUBLIC_BASE_URL=https://staging.example.com \
+pnpm setup:staging:prereqs
+```
+
+This script:
+
+- creates `$VPS_DEPLOY_DIR`
+- creates `$VPS_DEPLOY_DIR/docker`
+- creates `$VPS_DEPLOY_DIR/.env.staging` from the current staging env contract
+
+It will not overwrite an existing `.env.staging` unless you pass `--force` or `OPENMIRAGE_FORCE=true`.
+
+To verify those operator-managed prerequisites before running the GitHub workflow, use:
+
+```bash
+VPS_HOST=staging.example.com \
+VPS_USER=deploy \
+VPS_PORT=22 \
+VPS_DEPLOY_DIR=/srv/openmirage \
+STAGING_PUBLIC_BASE_URL=https://staging.example.com \
+pnpm verify:staging:prereqs
+```
+
+This verification checks the deploy directory, the `docker` subdirectory, and the exact `.env.staging` values expected for the current public origin and secure-cookie staging contract.
 
 The manual staging deploy sequence is:
 
@@ -415,6 +463,8 @@ The manual staging deploy sequence is:
    - `/collab/healthz`
    - `/worker/readyz`
    - websocket upgrade at `/collab`
+
+The manual production deploy workflow uses the same image, Compose, migration, and smoke-check sequence, but reads `.env.production` and is protected by the GitHub `production` Environment.
 
 ## Platform Prerequisite Verification
 
