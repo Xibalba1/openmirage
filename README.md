@@ -318,6 +318,101 @@ If staging fails, inspect these first:
 - generated magic-link origin and cookie flags
 - websocket upgrade behavior at `/collab`
 
+## CI And Staging Deploy
+
+Step `9` adds the canonical GitHub Actions validation, image packaging, and staging deploy path for this monorepo. The deploy model stays intentionally boring: GitHub Actions builds the same checked-in Dockerfiles used locally, publishes immutable GHCR tags, and performs one protected manual staging deploy over SSH to a single VPS that runs Docker Compose.
+
+The prerequisite gate for this slice is mandatory before code changes or deploy attempts. Check these first and stop immediately if any fail:
+
+1. GitHub Actions is enabled for the repo.
+2. GHCR publish permission is available for the workflow identity.
+3. The `staging` GitHub Environment exists and is protected as intended.
+4. CI can reach the staging VPS over SSH.
+5. Docker and `docker compose` are installed on the VPS.
+6. Required GitHub secrets, variables, and VPS env files are present.
+
+Workflow inventory:
+
+- `.github/workflows/ci.yml`: runs on pull requests to `main` and pushes to `main`; performs static validation, Docker build validation, migration safety, and GHCR image publishing on `main`
+- `.github/workflows/staging-deploy.yml`: manual `workflow_dispatch` deploy from `main`, protected by the GitHub `staging` Environment approval gate
+
+Static validation contract:
+
+- `pnpm lint`
+- `pnpm typecheck`
+- `pnpm test`
+
+Docker build validation contract:
+
+- builds `api`, `api-tools`, `web`, `collab`, and `worker` directly from the checked-in Dockerfiles
+
+Migration safety contract:
+
+- runs against an ephemeral PostgreSQL service in GitHub Actions
+- applies migrations with `pnpm db:migrate:up`
+- verifies no drift with `pnpm db:migrate:status`
+
+GHCR image contract:
+
+- `ghcr.io/<owner-lowercase>/openmirage-api:<git-sha>`
+- `ghcr.io/<owner-lowercase>/openmirage-api-tools:<git-sha>`
+- `ghcr.io/<owner-lowercase>/openmirage-web:<git-sha>`
+- `ghcr.io/<owner-lowercase>/openmirage-collab:<git-sha>`
+- `ghcr.io/<owner-lowercase>/openmirage-worker:<git-sha>`
+- the same images are also tagged `:main` on protected-branch pushes
+
+Compose image override contract:
+
+- local Compose continues to use the default `:local` image tags
+- staging deploys inject immutable GHCR image references through:
+  - `OPENMIRAGE_API_IMAGE`
+  - `OPENMIRAGE_API_TOOLS_IMAGE`
+  - `OPENMIRAGE_WEB_IMAGE`
+  - `OPENMIRAGE_COLLAB_IMAGE`
+  - `OPENMIRAGE_WORKER_IMAGE`
+
+Required GitHub `staging` Environment secrets:
+
+- `VPS_HOST`
+- `VPS_PORT`
+- `VPS_USER`
+- `VPS_SSH_PRIVATE_KEY`
+- `VPS_KNOWN_HOSTS`
+- `VPS_DEPLOY_DIR`
+- `GHCR_USERNAME`
+- `GHCR_TOKEN`
+
+Required GitHub `staging` Environment variables:
+
+- `STAGING_PUBLIC_BASE_URL`: public HTTPS origin used for post-deploy smoke checks, for example `https://staging.example.com`
+
+Required VPS staging files:
+
+- `$VPS_DEPLOY_DIR/.env.staging`
+- `$VPS_DEPLOY_DIR/docker-compose.yml`
+- `$VPS_DEPLOY_DIR/docker-compose.staging.yml`
+- `$VPS_DEPLOY_DIR/docker/Caddyfile`
+
+The deploy workflow keeps these checked-in deployment assets current on the VPS by copying the repo versions on each run. The environment-specific `.env.staging` file remains operator-managed on the server.
+
+The manual staging deploy sequence is:
+
+1. Check out the repo and derive GHCR image tags from `github.sha`.
+2. Connect to the VPS through the protected `staging` Environment.
+3. Confirm Docker, Compose, the deploy directory, and `.env.staging` exist.
+4. Copy `docker-compose.yml`, `docker-compose.staging.yml`, and `docker/Caddyfile` to `$VPS_DEPLOY_DIR`.
+5. Log the VPS into GHCR.
+6. Pull the immutable `db-migrate`, `api`, `web`, `collab`, and `worker` image tags for that commit.
+7. Run `db-migrate` with the new API tools image.
+8. Run `docker compose up -d --no-build --no-deps` for `web`, `api`, `collab`, `worker`, and `caddy`.
+9. Run smoke checks against:
+   - `/`
+   - `/healthz`
+   - `/readyz`
+   - `/collab/healthz`
+   - `/worker/readyz`
+   - websocket upgrade at `/collab`
+
 ## Platform Prerequisite Verification
 
 The canonical prerequisite check for the infrastructure-backed slices is:

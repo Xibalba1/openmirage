@@ -50,7 +50,7 @@ services:
       - openmirage
 
   db-migrate:
-    image: openmirage-api-tools:local
+    image: ${OPENMIRAGE_API_TOOLS_IMAGE:-openmirage-api-tools:local}
     pull_policy: never
     build:
       context: .
@@ -67,7 +67,7 @@ services:
       - openmirage
 
   db-seed:
-    image: openmirage-api-tools:local
+    image: ${OPENMIRAGE_API_TOOLS_IMAGE:-openmirage-api-tools:local}
     pull_policy: never
     build:
       context: .
@@ -84,7 +84,7 @@ services:
       - openmirage
 
   api:
-    image: openmirage-api:local
+    image: ${OPENMIRAGE_API_IMAGE:-openmirage-api:local}
     pull_policy: never
     build:
       context: .
@@ -135,7 +135,7 @@ services:
       - openmirage
 
   collab:
-    image: openmirage-collab:local
+    image: ${OPENMIRAGE_COLLAB_IMAGE:-openmirage-collab:local}
     build:
       context: .
       dockerfile: apps/collab/Dockerfile
@@ -165,7 +165,7 @@ services:
       - openmirage
 
   worker:
-    image: openmirage-worker:local
+    image: ${OPENMIRAGE_WORKER_IMAGE:-openmirage-worker:local}
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
@@ -206,7 +206,7 @@ services:
       - openmirage
 
   web:
-    image: openmirage-web:local
+    image: ${OPENMIRAGE_WEB_IMAGE:-openmirage-web:local}
     build:
       context: .
       dockerfile: apps/web/Dockerfile
