@@ -48,6 +48,6 @@ jobs:
           set -euo pipefail
           whoami
           docker --version
-          docker compose --version
+          docker compose version
           test -d "$VPS_DEPLOY_DIR"
           EOF
