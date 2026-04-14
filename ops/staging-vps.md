@@ -226,3 +226,16 @@ Also inspect:
 ## Relationship To Later Steps
 
 This slice defines the VPS layout and repeatable deploy procedure only. Backup automation, restore drills, and full recovery validation remain step 12 work. When that slice lands, it should attach to this layout by backing up the Postgres data and the operator-managed deployment configuration needed to recreate the stack.
+
+## Relationship To Recovery
+
+The recovery slice is now defined in [`ops/backup-restore-recovery.md`](/Users/ik/repos/openmirage/ops/backup-restore-recovery.md:1).
+
+Use the staging deploy flow and the recovery flow together:
+
+- staging deploy remains the only supported way to update runtime images on the VPS
+- backup artifacts should be produced from the deployed staging stack, not from ad hoc server state
+- `.env.staging` remains operator-managed and must be preserved for recovery
+- a failed VPS should be reprovisioned by restoring the operator-managed env/config, restoring Postgres, reconnecting or restoring storage, and then rerunning the staging deploy workflow
+
+The deploy workflow is not a substitute for backups, and backups are not a substitute for rerunning the immutable-image deploy flow.
