@@ -38,7 +38,7 @@ Not included yet:
 - SMTP-backed magic-link delivery or polished authenticated product flows
 - collab document persistence or page authorization
 - worker jobs, exports, or cleanup processing
-- committed staging acceptance evidence and verified backup/restore evidence
+- offsite backup replication or PITR
 
 ## Requirements
 
@@ -98,11 +98,47 @@ pnpm typecheck
 pnpm docker:build
 pnpm verify:platform:prereqs
 pnpm verify:platform:infra
-pnpm verify:platform:acceptance
+pnpm verify:recovery:prereqs
+pnpm backup:create
+pnpm backup:verify
+pnpm backup:restore
+pnpm backup:restore:drill
 pnpm db:migrate:up
 pnpm db:migrate:status
 pnpm db:reset
 pnpm db:seed
+```
+
+## Backup And Recovery
+
+This slice now includes the MVP backup/recovery baseline:
+
+- Postgres-first backup artifacts using `pg_dump -Fc`
+- conditional self-hosted asset archives for `minio` and `local` storage
+- manifest plus `SHA256SUMS` integrity verification
+- a destructive clean-room restore drill for a disposable local Compose target
+
+Runbooks:
+
+- [`ops/backup-restore-recovery.md`](/Users/ik/repos/openmirage/ops/backup-restore-recovery.md:1)
+- [`ops/staging-vps.md`](/Users/ik/repos/openmirage/ops/staging-vps.md:1)
+- [`ops/backup-restore-drill-evidence.md`](/Users/ik/repos/openmirage/ops/backup-restore-drill-evidence.md:1)
+
+Required prerequisite instruction for this slice:
+
+> Before modifying any code, identify any prerequisites to your work that you cannot accomplish (ex: software installs on the local machine). Check those prerequisites (pass or fail). If any fail, do not proceed. Output the failures and provide procedural, step-by-step instructions on how to complete/fulfill the failing prerequisites.
+
+Typical local recovery flow:
+
+```bash
+pnpm verify:recovery:prereqs
+export BACKUP_ROOT=/tmp/openmirage-backups
+pnpm backup:create
+export BACKUP_ARTIFACT_DIR=/tmp/openmirage-backups/openmirage-backup-<timestamp>
+pnpm backup:verify
+pnpm verify:recovery:prereqs restore-drill
+export OPENMIRAGE_RECOVERY_ALLOW_DESTRUCTIVE=true
+pnpm backup:restore:drill
 ```
 
 Stop local infrastructure when you are done:
@@ -303,7 +339,7 @@ Expected result:
 
 ## Staging Runtime Notes
 
-This slice does not automate VPS provisioning or DNS changes, but it does assume the same images can be deployed behind Caddy on the staging VPS.
+This slice does not automate VPS provisioning or DNS changes, but it does assume the same images can be deployed behind Caddy on the staging VPS. The dedicated staging runbook lives at [ops/staging-vps.md](/Users/ik/repos/openmirage/ops/staging-vps.md).
 
 Before running a staging deploy, check these operator prerequisites and stop if any fail:
 
@@ -337,8 +373,7 @@ The prerequisite gate for this slice is mandatory before code changes or deploy 
 Workflow inventory:
 
 - `.github/workflows/ci.yml`: runs on pull requests to `main` and pushes to `main`; performs static validation, Docker build validation, migration safety, and GHCR image publishing on `main`
-- `.github/workflows/staging-deploy.yml`: manual `workflow_dispatch` deploy from `main`, protected by the GitHub `staging` Environment approval gate
-- `.github/workflows/production-deploy.yml`: manual `workflow_dispatch` deploy from `main`, protected by the GitHub `production` Environment approval gate
+- `.github/workflows/staging-deploy.yml`: manual `workflow_dispatch` deploy from `main`, protected by the GitHub `staging` Environment approval gate, with an optional immutable `image_tag` input for redeploys or rollbacks
 
 Static validation contract:
 
@@ -412,57 +447,9 @@ Required VPS staging files:
 - `$VPS_DEPLOY_DIR/docker-compose.staging.yml`
 - `$VPS_DEPLOY_DIR/docker/Caddyfile`
 
-The deploy workflow keeps these checked-in deployment assets current on the VPS by copying the repo versions on each run. The environment-specific `.env.staging` file remains operator-managed on the server.
+The deploy workflow keeps the checked-in deployment assets current on the VPS by copying the repo versions on each run. The environment-specific `.env.staging` file remains operator-managed on the server.
 
-To bootstrap the VPS-side prerequisites that CI does not create for you, use:
-
-```bash
-VPS_HOST=staging.example.com \
-VPS_USER=deploy \
-VPS_PORT=22 \
-VPS_DEPLOY_DIR=/srv/openmirage \
-STAGING_PUBLIC_BASE_URL=https://staging.example.com \
-pnpm setup:staging:prereqs
-```
-
-This script:
-
-- creates `$VPS_DEPLOY_DIR`
-- creates `$VPS_DEPLOY_DIR/docker`
-- creates `$VPS_DEPLOY_DIR/.env.staging` from the current staging env contract
-
-It will not overwrite an existing `.env.staging` unless you pass `--force` or `OPENMIRAGE_FORCE=true`.
-
-To verify those operator-managed prerequisites before running the GitHub workflow, use:
-
-```bash
-VPS_HOST=staging.example.com \
-VPS_USER=deploy \
-VPS_PORT=22 \
-VPS_DEPLOY_DIR=/srv/openmirage \
-STAGING_PUBLIC_BASE_URL=https://staging.example.com \
-pnpm verify:staging:prereqs
-```
-
-This verification checks the deploy directory, the `docker` subdirectory, and the exact `.env.staging` values expected for the current public origin and secure-cookie staging contract.
-
-The manual staging deploy sequence is:
-
-1. Check out the repo and derive GHCR image tags from `github.sha`.
-2. Connect to the VPS through the protected `staging` Environment.
-3. Confirm Docker, Compose, the deploy directory, and `.env.staging` exist.
-4. Copy `docker-compose.yml`, `docker-compose.staging.yml`, and `docker/Caddyfile` to `$VPS_DEPLOY_DIR`.
-5. Log the VPS into GHCR.
-6. Pull the immutable `db-migrate`, `api`, `web`, `collab`, and `worker` image tags for that commit.
-7. Run `db-migrate` with the new API tools image.
-8. Run `docker compose up -d --no-build --no-deps` for `web`, `api`, `collab`, `worker`, and `caddy`.
-9. Run smoke checks against:
-   - `/`
-   - `/healthz`
-   - `/readyz`
-   - `/collab/healthz`
-   - `/worker/readyz`
-   - websocket upgrade at `/collab`
+The detailed VPS layout, first-boot preparation, immutable tag redeploy flow, rollback expectations, and post-deploy verification sequence are documented in [ops/staging-vps.md](/Users/ik/repos/openmirage/ops/staging-vps.md).
 
 The manual production deploy workflow uses the same image, Compose, migration, and smoke-check sequence, but reads `.env.production` and is protected by the GitHub `production` Environment.
 

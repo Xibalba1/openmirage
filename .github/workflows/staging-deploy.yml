@@ -2,6 +2,11 @@ name: Staging Deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Immutable image tag to deploy or redeploy. Defaults to the current commit SHA."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -9,6 +14,9 @@ permissions:
 concurrency:
   group: staging-deploy
   cancel-in-progress: false
+
+env:
+  NODE_VERSION: 20.15.0
 
 jobs:
   deploy-staging:
@@ -29,16 +37,26 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Derive image references
         id: images
         run: |
           registry_owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          image_tag="${{ inputs.image_tag }}"
+          if [ -z "$image_tag" ]; then
+            image_tag="${GITHUB_SHA}"
+          fi
           {
-            echo "api=ghcr.io/${registry_owner}/openmirage-api:${GITHUB_SHA}"
-            echo "api_tools=ghcr.io/${registry_owner}/openmirage-api-tools:${GITHUB_SHA}"
-            echo "web=ghcr.io/${registry_owner}/openmirage-web:${GITHUB_SHA}"
-            echo "collab=ghcr.io/${registry_owner}/openmirage-collab:${GITHUB_SHA}"
-            echo "worker=ghcr.io/${registry_owner}/openmirage-worker:${GITHUB_SHA}"
+            echo "tag=${image_tag}"
+            echo "api=ghcr.io/${registry_owner}/openmirage-api:${image_tag}"
+            echo "api_tools=ghcr.io/${registry_owner}/openmirage-api-tools:${image_tag}"
+            echo "web=ghcr.io/${registry_owner}/openmirage-web:${image_tag}"
+            echo "collab=ghcr.io/${registry_owner}/openmirage-collab:${image_tag}"
+            echo "worker=ghcr.io/${registry_owner}/openmirage-worker:${image_tag}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Install SSH key and known hosts
@@ -143,3 +161,4 @@ jobs:
             "$base_url/collab" || true
 
           grep -Eq '^HTTP/1\.1 (101|401)' "$headers_file"
+          node ./scripts/verify-staging-deploy.mjs
