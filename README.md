@@ -425,6 +425,21 @@ Required GitHub `staging` Environment variables:
 
 - `STAGING_PUBLIC_BASE_URL`: public HTTPS origin used for post-deploy smoke checks, for example `https://staging.example.com`
 
+Required GitHub `production` Environment secrets:
+
+- `VPS_HOST`
+- `VPS_PORT`
+- `VPS_USER`
+- `VPS_SSH_PRIVATE_KEY`
+- `VPS_KNOWN_HOSTS`
+- `VPS_DEPLOY_DIR`
+- `GHCR_USERNAME`
+- `GHCR_TOKEN`
+
+Required GitHub `production` Environment variables:
+
+- `PRODUCTION_PUBLIC_BASE_URL`: public HTTPS origin used for post-deploy smoke checks, for example `https://app.example.com`
+
 Required VPS staging files:
 
 - `$VPS_DEPLOY_DIR/.env.staging`
@@ -435,6 +450,8 @@ Required VPS staging files:
 The deploy workflow keeps the checked-in deployment assets current on the VPS by copying the repo versions on each run. The environment-specific `.env.staging` file remains operator-managed on the server.
 
 The detailed VPS layout, first-boot preparation, immutable tag redeploy flow, rollback expectations, and post-deploy verification sequence are documented in [ops/staging-vps.md](/Users/ik/repos/openmirage/ops/staging-vps.md).
+
+The manual production deploy workflow uses the same image, Compose, migration, and smoke-check sequence, but reads `.env.production` and is protected by the GitHub `production` Environment.
 
 ## Platform Prerequisite Verification
 
