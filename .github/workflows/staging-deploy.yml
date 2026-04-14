@@ -139,4 +139,26 @@ jobs:
 
       - name: Smoke check staging public origin
         run: |
+          base_url="${STAGING_PUBLIC_BASE_URL%/}"
+          test -n "$base_url"
+
+          curl -fsS "$base_url/" >/dev/null
+          curl -fsS "$base_url/healthz" >/dev/null
+          curl -fsS "$base_url/readyz" >/dev/null
+          curl -fsS "$base_url/metrics" >/dev/null
+          curl -fsS "$base_url/collab/healthz" >/dev/null
+          curl -fsS "$base_url/collab/metrics" >/dev/null
+          curl -fsS "$base_url/worker/readyz" >/dev/null
+          curl -fsS "$base_url/worker/metrics" >/dev/null
+          curl -fsS "$base_url/worker/status" >/dev/null
+
+          headers_file="$(mktemp)"
+          curl --http1.1 -sS -o /dev/null -D "$headers_file" \
+            -H 'Connection: Upgrade' \
+            -H 'Upgrade: websocket' \
+            -H 'Sec-WebSocket-Key: SGVsbG8sIHdvcmxkIQ==' \
+            -H 'Sec-WebSocket-Version: 13' \
+            "$base_url/collab" || true
+
+          grep -Eq '^HTTP/1\.1 (101|401)' "$headers_file"
           node ./scripts/verify-staging-deploy.mjs

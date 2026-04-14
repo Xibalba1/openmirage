@@ -7,3 +7,4 @@ coverage
 .env.local
 .openmirage
 *.tsbuildinfo
+ops/platform-acceptance-evidence.json

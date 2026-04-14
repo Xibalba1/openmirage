@@ -7,6 +7,8 @@ const expectedCookiePath = process.env.SESSION_COOKIE_PATH ?? "/";
 const expectedCookieSameSite = process.env.SESSION_COOKIE_SAME_SITE ?? "lax";
 const expectedSecureCookie =
   (process.env.SESSION_COOKIE_SECURE ?? "false") === "true";
+const verifyDiagnosticsErrorRoute =
+  (process.env.OPENMIRAGE_VERIFY_ERROR_ROUTE ?? "false") === "true";
 
 function log(message) {
   console.log(`[openmirage] ${message}`);
@@ -152,6 +154,69 @@ async function verifyApiAndStorage() {
 
   if (finalList.body.objects.some((entry) => entry.key === smokeKey)) {
     fail("deleted smoke object still appears in the api list");
+  }
+}
+
+async function verifyMetrics() {
+  const metricsChecks = [
+    {
+      name: "api",
+      path: "/metrics",
+      patterns: ["openmirage_service_health", 'service="api"']
+    },
+    {
+      name: "collab",
+      path: "/collab/metrics",
+      patterns: ["openmirage_service_health", 'service="collab"']
+    },
+    {
+      name: "worker",
+      path: "/worker/metrics",
+      patterns: ["openmirage_service_health", 'service="worker"']
+    }
+  ];
+
+  for (const check of metricsChecks) {
+    const response = await fetch(`${caddyBaseUrl}${check.path}`);
+    const body = await response.text();
+
+    if (!response.ok) {
+      fail(`${check.name} metrics endpoint did not respond successfully`);
+    }
+
+    for (const pattern of check.patterns) {
+      if (!body.includes(pattern)) {
+        fail(`${check.name} metrics endpoint did not include ${pattern}`);
+      }
+    }
+  }
+}
+
+function verifyDockerLogs() {
+  const result = run("docker", [
+    "compose",
+    "logs",
+    "--no-color",
+    "--tail",
+    "200",
+    "caddy",
+    "api",
+    "collab",
+    "worker"
+  ]);
+  const body = result.stdout;
+
+  for (const pattern of [
+    '"service":"api"',
+    '"service":"collab"',
+    '"service":"worker"',
+    "magic link requested",
+    "worker heartbeat",
+    "collab websocket accepted"
+  ]) {
+    if (!body.includes(pattern)) {
+      fail(`docker compose logs output did not include ${pattern}`);
+    }
   }
 }
 
@@ -333,6 +398,18 @@ ws.on("close", () => process.exit(0));`
   }
 }
 
+async function verifyErrorRoute() {
+  if (!verifyDiagnosticsErrorRoute) {
+    return;
+  }
+
+  const response = await fetch(`${caddyBaseUrl}/__diagnostics/error`);
+
+  if (response.status !== 500) {
+    fail("diagnostics error route did not return 500 through Caddy");
+  }
+}
+
 function verifyOperatorPorts() {
   const postgresProbe = run("docker", [
     "compose",
@@ -379,6 +456,17 @@ async function main() {
 
   log("verifying auth flow and websocket upgrade through Caddy");
   await verifyAuthAndWebsocket();
+
+  log("verifying metrics through Caddy");
+  await verifyMetrics();
+
+  if (verifyDiagnosticsErrorRoute) {
+    log("verifying diagnostics error route through Caddy");
+    await verifyErrorRoute();
+  }
+
+  log("verifying docker compose logs");
+  verifyDockerLogs();
 
   log("verifying operator ports for postgres and minio");
   verifyOperatorPorts();
