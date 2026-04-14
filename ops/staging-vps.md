@@ -234,7 +234,7 @@ The recovery slice is now defined in [`ops/backup-restore-recovery.md`](/Users/i
 Use the staging deploy flow and the recovery flow together:
 
 - staging deploy remains the only supported way to update runtime images on the VPS
-- backup artifacts should be produced from the deployed staging stack, not from ad hoc server state
+- backup artifacts should be produced from the deployed staging stack by running `pnpm backup:create` with `BACKUP_SSH_TARGET`, `VPS_DEPLOY_DIR`, and `BACKUP_ROOT` set
 - `.env.staging` remains operator-managed and must be preserved for recovery
 - a failed VPS should be reprovisioned by restoring the operator-managed env/config, restoring Postgres, reconnecting or restoring storage, and then rerunning the staging deploy workflow
 

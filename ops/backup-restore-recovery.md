@@ -56,6 +56,7 @@ Before producing staging artifacts, export:
 export BACKUP_SSH_TARGET=<user@staging-host>
 export VPS_DEPLOY_DIR=<staging-compose-root>
 export BACKUP_ROOT=<operator-managed-backup-dir>
+export BACKUP_ENV_FILE=.env.staging
 ```
 
 Then run:
@@ -71,6 +72,8 @@ This verifies:
 - existence of `$VPS_DEPLOY_DIR/.env.staging`
 - existence and writability of `$BACKUP_ROOT`
 - minimum free space in `$BACKUP_ROOT`
+
+If any check fails, stop. Complete the printed remediation steps before attempting a backup run.
 
 ### Restore drill prerequisites
 
@@ -120,6 +123,15 @@ $BACKUP_ROOT/openmirage-backup-<timestamp>/
 
 `SHA256SUMS` is the integrity gate for every artifact set. Always verify it before restore.
 
+Naming contract:
+
+- directory: `openmirage-backup-<UTC timestamp>`
+- Postgres dump: `postgres.openmirage.dump`
+- MinIO archive: `assets.minio-data.tar.gz`
+- local-storage archive: `assets.local-storage.tar.gz`
+- manifest: `manifest.json`
+- checksums: `SHA256SUMS`
+
 ## Backup Scope
 
 ### Postgres
@@ -155,23 +167,42 @@ Do not store plaintext secrets in repo-tracked files.
 
 ### Create a staging or staging-equivalent backup
 
-For local MinIO-backed backup generation:
+For staging backup generation directly onto the VPS backup root:
+
+```bash
+export BACKUP_SSH_TARGET=<user@staging-host>
+export VPS_DEPLOY_DIR=<staging-compose-root>
+export BACKUP_ROOT=/var/backups/openmirage
+export BACKUP_ENV_FILE=.env.staging
+export BACKUP_DEPLOY_TAG=<ghcr-or-git-tag>
+pnpm verify:recovery:prereqs staging-backup
+pnpm backup:create
+```
+
+This writes the artifact directory on the staging VPS at:
+
+```text
+$BACKUP_ROOT/openmirage-backup-<timestamp>/
+```
+
+For a local staging-equivalent backup generation run:
 
 ```bash
 export BACKUP_ROOT=/tmp/openmirage-backups
 pnpm backup:create
 ```
 
-For staging-shaped backup generation with env inventory:
+### Verify an artifact set
+
+To verify an artifact set in the staging VPS backup root:
 
 ```bash
-export BACKUP_ROOT=/var/backups/openmirage
-export BACKUP_ENV_FILE=.env.staging
-export BACKUP_DEPLOY_TAG=<ghcr-or-git-tag>
-pnpm backup:create
+export BACKUP_SSH_TARGET=<user@staging-host>
+export BACKUP_ARTIFACT_DIR=/var/backups/openmirage/openmirage-backup-<timestamp>
+pnpm backup:verify
 ```
 
-### Verify an artifact set
+To verify a copied local artifact set:
 
 ```bash
 export BACKUP_ARTIFACT_DIR=/tmp/openmirage-backups/openmirage-backup-<timestamp>
@@ -190,6 +221,13 @@ pnpm backup:restore
 ## One-Time Restore Drill
 
 The required restore drill target is a disposable local Compose environment with fresh named volumes.
+
+Before starting the drill, copy the chosen staging artifact directory onto the local machine if it was created on the VPS:
+
+```bash
+mkdir -p /tmp/openmirage-backups
+scp -r <user@staging-host>:/var/backups/openmirage/openmirage-backup-<timestamp> /tmp/openmirage-backups/
+```
 
 ### Drill flow
 
@@ -238,12 +276,12 @@ To reprovision a failed staging VPS:
 2. Recreate the deploy root layout described in [`ops/staging-vps.md`](/Users/ik/repos/openmirage/ops/staging-vps.md:1).
 3. Restore the operator-managed `.env.staging`.
 4. Copy the checked-in deploy assets from the repo into `$VPS_DEPLOY_DIR`.
-5. If storage is self-hosted on-box, restore the asset archive into the replacement host’s storage service/root.
-6. Restore the Postgres dump into the replacement Postgres service.
+5. Restore the Postgres dump into the replacement Postgres service.
+6. If storage is self-hosted on-box, restore the asset archive into the replacement host’s storage service/root.
 7. Run the documented staging deploy workflow to bring the immutable images back up.
 8. Run the staging smoke verification sequence.
 
-For `STORAGE_PROVIDER=s3-compatible`, step 5 is replaced by restoring credentials and reconnecting the service to the existing provider.
+For `STORAGE_PROVIDER=s3-compatible`, step 6 is replaced by restoring credentials and reconnecting the service to the existing provider.
 
 ## Failure Triage
 

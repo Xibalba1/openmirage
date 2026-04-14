@@ -23,6 +23,10 @@ function readTextFile(path) {
   return readFileSync(path, "utf8");
 }
 
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: process.cwd(),
@@ -64,30 +68,19 @@ function parseEnvFile(path) {
     return {};
   }
 
-  const result = {};
-  for (const line of readTextFile(path).split(/\r?\n/)) {
-    const trimmed = line.trim();
-
-    if (!trimmed || trimmed.startsWith("#")) {
-      continue;
-    }
-
-    const separatorIndex = trimmed.indexOf("=");
-
-    if (separatorIndex === -1) {
-      continue;
-    }
-
-    const key = trimmed.slice(0, separatorIndex).trim();
-    const value = trimmed.slice(separatorIndex + 1).trim();
-    result[key] = value;
-  }
-
-  return result;
+  return parseEnvFileFromText(readTextFile(path));
 }
 
 function pickEnv(key, envFileValues = {}) {
   return process.env[key] ?? envFileValues[key];
+}
+
+function usingRemoteBackupHost() {
+  return Boolean(process.env.BACKUP_SSH_TARGET);
+}
+
+function resolveTimestampedArtifactDir(baseDirectory) {
+  return `${baseDirectory.replace(/\/+$/, "")}/openmirage-backup-${toTimestamp()}`;
 }
 
 function resolveArtifactDir() {
@@ -99,8 +92,7 @@ function resolveArtifactDir() {
 
   const artifactDir = resolve(
     process.cwd(),
-    backupRoot,
-    `openmirage-backup-${toTimestamp()}`
+    resolveTimestampedArtifactDir(backupRoot)
   );
   mkdirSync(artifactDir, { recursive: true });
   return artifactDir;
@@ -140,6 +132,65 @@ function ensureContainerRunning(name) {
   if (output !== "true") {
     fail(`${name} is not running`);
   }
+}
+
+function runRemote(script, args = []) {
+  const sshTarget = process.env.BACKUP_SSH_TARGET;
+
+  if (!sshTarget) {
+    fail("BACKUP_SSH_TARGET is required for remote backup operations");
+  }
+
+  return run("ssh", [
+    sshTarget,
+    "sh",
+    "-lc",
+    script,
+    "openmirage-backup",
+    ...args
+  ]);
+}
+
+function runRemoteWithOutput(script, args = []) {
+  const sshTarget = process.env.BACKUP_SSH_TARGET;
+
+  if (!sshTarget) {
+    fail("BACKUP_SSH_TARGET is required for remote backup operations");
+  }
+
+  return run("ssh", [
+    sshTarget,
+    "sh",
+    "-lc",
+    script,
+    "openmirage-backup",
+    ...args
+  ]);
+}
+
+function readRemoteTextFile(path) {
+  return runRemoteWithOutput('cat "$1"', [path]);
+}
+
+function writeRemoteTextFile(path, contents) {
+  const escapedContents = shellQuote(contents);
+  runRemote(
+    `mkdir -p "$(dirname "$1")" && printf %s ${escapedContents} > "$1"`,
+    [path]
+  );
+}
+
+function resolveRemoteEnvFilePath() {
+  const deployDir = process.env.VPS_DEPLOY_DIR;
+
+  if (!deployDir) {
+    fail("VPS_DEPLOY_DIR is required for remote backup operations");
+  }
+
+  const envFile = process.env.BACKUP_ENV_FILE ?? ".env.staging";
+  return envFile.startsWith("/")
+    ? envFile
+    : `${deployDir.replace(/\/+$/, "")}/${envFile}`;
 }
 
 function createPostgresDump(artifactDir, postgres) {
@@ -208,6 +259,83 @@ function createLocalStorageArchive(artifactDir, storage) {
   return archiveFile;
 }
 
+function createRemotePostgresDump(artifactDir, postgres) {
+  const dumpFile = "postgres.openmirage.dump";
+
+  log(`creating Postgres backup on ${process.env.BACKUP_SSH_TARGET}`);
+  runRemote(
+    [
+      "set -euo pipefail",
+      'artifact_dir="$1"',
+      'postgres_container="$2"',
+      'database_name="$3"',
+      'database_user="$4"',
+      'dump_file="$5"',
+      'container_dump_path="/tmp/$dump_file"',
+      'mkdir -p "$artifact_dir"',
+      'docker inspect "$postgres_container" --format "{{.State.Running}}" | grep -qx true',
+      'docker exec "$postgres_container" sh -lc "rm -f \\"$container_dump_path\\" && pg_dump -U \\"$database_user\\" -d \\"$database_name\\" -Fc -f \\"$container_dump_path\\""',
+      'docker cp "$postgres_container:$container_dump_path" "$artifact_dir/$dump_file"',
+      'docker exec "$postgres_container" rm -f "$container_dump_path"'
+    ].join("; "),
+    [
+      artifactDir,
+      postgres.containerName,
+      postgres.database,
+      postgres.user,
+      dumpFile
+    ]
+  );
+  return dumpFile;
+}
+
+function createRemoteMinioArchive(artifactDir, storage) {
+  const archiveFile = "assets.minio-data.tar.gz";
+  const bucketName = process.env.STORAGE_BUCKET ?? "openmirage-assets";
+
+  log(`creating MinIO asset archive on ${process.env.BACKUP_SSH_TARGET}`);
+  runRemote(
+    [
+      "set -euo pipefail",
+      'artifact_dir="$1"',
+      'minio_container="$2"',
+      'bucket_name="$3"',
+      'archive_file="$4"',
+      'temporary_data_dir="$artifact_dir/.minio-data"',
+      'mkdir -p "$artifact_dir"',
+      'docker inspect "$minio_container" --format "{{.State.Running}}" | grep -qx true',
+      'rm -rf "$temporary_data_dir"',
+      'mkdir -p "$temporary_data_dir"',
+      'docker cp "$minio_container:/data/$bucket_name/." "$temporary_data_dir"',
+      'tar -czf "$artifact_dir/$archive_file" -C "$temporary_data_dir" .',
+      'rm -rf "$temporary_data_dir"'
+    ].join("; "),
+    [artifactDir, storage.minioContainerName, bucketName, archiveFile]
+  );
+  return archiveFile;
+}
+
+function createRemoteLocalStorageArchive(artifactDir, storage) {
+  const archiveFile = "assets.local-storage.tar.gz";
+
+  log(
+    `creating local-storage asset archive on ${process.env.BACKUP_SSH_TARGET}`
+  );
+  runRemote(
+    [
+      "set -euo pipefail",
+      'artifact_dir="$1"',
+      'local_root="$2"',
+      'archive_file="$3"',
+      'test -d "$local_root"',
+      'mkdir -p "$artifact_dir"',
+      'tar -czf "$artifact_dir/$archive_file" -C "$local_root" .'
+    ].join("; "),
+    [artifactDir, storage.localRoot, archiveFile]
+  );
+  return archiveFile;
+}
+
 function writeChecksums(artifactDir, files) {
   const lines = files.map(
     (file) => `${fileSha256(resolve(artifactDir, file))}  ${file}`
@@ -218,6 +346,7 @@ function writeChecksums(artifactDir, files) {
 function buildManifest({
   artifactDir,
   envFilePath,
+  envFileContents,
   envValues,
   postgresDumpFile,
   storageArchiveFile,
@@ -230,14 +359,14 @@ function buildManifest({
     "ops/staging-vps.md",
     "ops/backup-restore-recovery.md"
   ].filter((file) => existsSync(resolve(process.cwd(), file)));
-  const envInventoryKeys =
-    envFilePath && existsSync(envFilePath) ? Object.keys(envValues).sort() : [];
+  const envInventoryKeys = envFilePath ? Object.keys(envValues).sort() : [];
 
   return {
     schemaVersion: 1,
     createdAt: new Date().toISOString(),
     artifactDirectory: basename(artifactDir),
     sourceHost: process.env.BACKUP_SOURCE_HOST ?? hostname(),
+    sourceMode: usingRemoteBackupHost() ? "ssh" : "local",
     deployTag:
       process.env.BACKUP_DEPLOY_TAG ??
       process.env.OPENMIRAGE_DEPLOY_TAG ??
@@ -260,8 +389,8 @@ function buildManifest({
       envFilePath: envFilePath ? basename(envFilePath) : null,
       envInventoryKeys,
       envInventorySha256:
-        envFilePath && existsSync(envFilePath)
-          ? stringSha256(readTextFile(envFilePath))
+        envFilePath && typeof envFileContents === "string"
+          ? stringSha256(envFileContents)
           : null
     }
   };
@@ -284,6 +413,22 @@ function readManifestFromArtifactDir() {
   return {
     artifactDir: absoluteArtifactDir,
     manifest: JSON.parse(readTextFile(manifestPath))
+  };
+}
+
+function readRemoteManifestFromArtifactDir() {
+  const artifactDir = process.env.BACKUP_ARTIFACT_DIR;
+
+  if (!artifactDir) {
+    fail("BACKUP_ARTIFACT_DIR is required");
+  }
+
+  const manifestPath = `${artifactDir.replace(/\/+$/, "")}/manifest.json`;
+  const manifestContents = readRemoteTextFile(manifestPath);
+
+  return {
+    artifactDir,
+    manifest: JSON.parse(manifestContents)
   };
 }
 
@@ -310,6 +455,19 @@ function verifyChecksums(artifactDir) {
   if (mismatches.length > 0) {
     fail(`checksum verification failed:\n${mismatches.join("\n")}`);
   }
+}
+
+function verifyRemoteChecksums(artifactDir) {
+  runRemote(
+    [
+      "set -euo pipefail",
+      'artifact_dir="$1"',
+      'cd "$artifact_dir"',
+      "test -f SHA256SUMS",
+      "sha256sum -c SHA256SUMS"
+    ].join("; "),
+    [artifactDir]
+  );
 }
 
 function restorePostgres({ artifactDir, manifest }) {
@@ -465,6 +623,11 @@ function runRestoreDrill() {
 }
 
 function createBackup() {
+  if (usingRemoteBackupHost()) {
+    createRemoteBackup();
+    return;
+  }
+
   const envFilePath = process.env.BACKUP_ENV_FILE
     ? resolve(process.cwd(), process.env.BACKUP_ENV_FILE)
     : null;
@@ -489,6 +652,7 @@ function createBackup() {
   const manifest = buildManifest({
     artifactDir,
     envFilePath,
+    envFileContents: envFilePath ? readTextFile(envFilePath) : null,
     envValues,
     postgresDumpFile,
     storageArchiveFile,
@@ -508,7 +672,93 @@ function createBackup() {
   log(`backup artifact created at ${artifactDir}`);
 }
 
+function createRemoteBackup() {
+  const artifactDir = resolveTimestampedArtifactDir(process.env.BACKUP_ROOT);
+  const envFilePath = resolveRemoteEnvFilePath();
+  const envFileContents = readRemoteTextFile(envFilePath);
+  const envValues = parseEnvFileFromText(envFileContents);
+  const postgres = getPostgresSettings(envValues);
+  const storage = getStorageSettings(envValues);
+
+  const postgresDumpFile = createRemotePostgresDump(artifactDir, postgres);
+  let storageArchiveFile = null;
+
+  if (storage.provider === "minio") {
+    storageArchiveFile = createRemoteMinioArchive(artifactDir, storage);
+  } else if (storage.provider === "local") {
+    storageArchiveFile = createRemoteLocalStorageArchive(artifactDir, storage);
+  } else {
+    log(
+      "storage provider is external s3-compatible; recording reconnect-only dependency"
+    );
+  }
+
+  const manifest = buildManifest({
+    artifactDir,
+    envFilePath,
+    envFileContents,
+    envValues,
+    postgresDumpFile,
+    storageArchiveFile,
+    storage
+  });
+
+  writeRemoteTextFile(
+    `${artifactDir}/manifest.json`,
+    `${JSON.stringify(manifest, null, 2)}\n`
+  );
+
+  const checksumFiles = ["manifest.json", postgresDumpFile];
+  if (storageArchiveFile) {
+    checksumFiles.push(storageArchiveFile);
+  }
+
+  runRemote(
+    [
+      "set -euo pipefail",
+      'artifact_dir="$1"',
+      "shift",
+      'cd "$artifact_dir"',
+      'sha256sum "$@" > SHA256SUMS'
+    ].join("; "),
+    [artifactDir, ...checksumFiles]
+  );
+
+  log(
+    `backup artifact created at ${process.env.BACKUP_SSH_TARGET}:${artifactDir}`
+  );
+}
+
+function parseEnvFileFromText(contents) {
+  const result = {};
+
+  for (const line of contents.split(/\r?\n/)) {
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+
+    const separatorIndex = trimmed.indexOf("=");
+
+    if (separatorIndex === -1) {
+      continue;
+    }
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    const value = trimmed.slice(separatorIndex + 1).trim();
+    result[key] = value;
+  }
+
+  return result;
+}
+
 function verifyBackupArtifacts() {
+  if (usingRemoteBackupHost()) {
+    verifyRemoteBackupArtifacts();
+    return;
+  }
+
   const { artifactDir, manifest } = readManifestFromArtifactDir();
 
   if (!existsSync(resolve(artifactDir, manifest.postgres.dumpFile))) {
@@ -528,6 +778,38 @@ function verifyBackupArtifacts() {
 
   verifyChecksums(artifactDir);
   log(`backup artifacts verified in ${artifactDir}`);
+}
+
+function verifyRemoteBackupArtifacts() {
+  const { artifactDir, manifest } = readRemoteManifestFromArtifactDir();
+
+  runRemote(
+    [
+      "set -euo pipefail",
+      'artifact_dir="$1"',
+      'postgres_dump="$2"',
+      'test -f "$artifact_dir/$postgres_dump"',
+      'test -s "$artifact_dir/$postgres_dump"'
+    ].join("; "),
+    [artifactDir, manifest.postgres.dumpFile]
+  );
+
+  if (manifest.storage.archiveFile) {
+    runRemote(
+      [
+        "set -euo pipefail",
+        'artifact_dir="$1"',
+        'archive_file="$2"',
+        'test -f "$artifact_dir/$archive_file"'
+      ].join("; "),
+      [artifactDir, manifest.storage.archiveFile]
+    );
+  }
+
+  verifyRemoteChecksums(artifactDir);
+  log(
+    `backup artifacts verified in ${process.env.BACKUP_SSH_TARGET}:${artifactDir}`
+  );
 }
 
 function restoreBackup() {
