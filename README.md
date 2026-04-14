@@ -36,7 +36,7 @@ Not included yet:
 - SMTP-backed magic-link delivery or polished authenticated product flows
 - collab document persistence or page authorization
 - worker jobs, exports, or cleanup processing
-- backup/restore verification
+- offsite backup replication or PITR
 
 ## Requirements
 
@@ -96,10 +96,47 @@ pnpm typecheck
 pnpm docker:build
 pnpm verify:platform:prereqs
 pnpm verify:platform:infra
+pnpm verify:recovery:prereqs
+pnpm backup:create
+pnpm backup:verify
+pnpm backup:restore
+pnpm backup:restore:drill
 pnpm db:migrate:up
 pnpm db:migrate:status
 pnpm db:reset
 pnpm db:seed
+```
+
+## Backup And Recovery
+
+This slice now includes the MVP backup/recovery baseline:
+
+- Postgres-first backup artifacts using `pg_dump -Fc`
+- conditional self-hosted asset archives for `minio` and `local` storage
+- manifest plus `SHA256SUMS` integrity verification
+- a destructive clean-room restore drill for a disposable local Compose target
+
+Runbooks:
+
+- [`ops/backup-restore-recovery.md`](/Users/ik/repos/openmirage/ops/backup-restore-recovery.md:1)
+- [`ops/staging-vps.md`](/Users/ik/repos/openmirage/ops/staging-vps.md:1)
+- [`ops/backup-restore-drill-evidence.md`](/Users/ik/repos/openmirage/ops/backup-restore-drill-evidence.md:1)
+
+Required prerequisite instruction for this slice:
+
+> Before modifying any code, identify any prerequisites to your work that you cannot accomplish (ex: software installs on the local machine). Check those prerequisites (pass or fail). If any fail, do not proceed. Output the failures and provide procedural, step-by-step instructions on how to complete/fulfill the failing prerequisites.
+
+Typical local recovery flow:
+
+```bash
+pnpm verify:recovery:prereqs
+export BACKUP_ROOT=/tmp/openmirage-backups
+pnpm backup:create
+export BACKUP_ARTIFACT_DIR=/tmp/openmirage-backups/openmirage-backup-<timestamp>
+pnpm backup:verify
+pnpm verify:recovery:prereqs restore-drill
+export OPENMIRAGE_RECOVERY_ALLOW_DESTRUCTIVE=true
+pnpm backup:restore:drill
 ```
 
 Stop local infrastructure when you are done:
