@@ -1,0 +1,141 @@
+name: Staging Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-staging:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_PORT: ${{ secrets.VPS_PORT }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_DEPLOY_DIR: ${{ secrets.VPS_DEPLOY_DIR }}
+      GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+      STAGING_PUBLIC_BASE_URL: ${{ vars.STAGING_PUBLIC_BASE_URL }}
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Derive image references
+        id: images
+        run: |
+          registry_owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "api=ghcr.io/${registry_owner}/openmirage-api:${GITHUB_SHA}"
+            echo "api_tools=ghcr.io/${registry_owner}/openmirage-api-tools:${GITHUB_SHA}"
+            echo "web=ghcr.io/${registry_owner}/openmirage-web:${GITHUB_SHA}"
+            echo "collab=ghcr.io/${registry_owner}/openmirage-collab:${GITHUB_SHA}"
+            echo "worker=ghcr.io/${registry_owner}/openmirage-worker:${GITHUB_SHA}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install SSH key and known hosts
+        env:
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Verify staging deploy prerequisites on VPS
+        run: |
+          ssh -4 \
+            -i ~/.ssh/id_ed25519 \
+            -p "$VPS_PORT" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=10 \
+            "$VPS_USER@$VPS_HOST" <<EOF
+          set -euo pipefail
+          whoami
+          docker --version
+          docker compose version
+          test -d "$VPS_DEPLOY_DIR"
+          test -f "$VPS_DEPLOY_DIR/.env.staging"
+          EOF
+
+      - name: Sync checked-in deploy assets to VPS
+        run: |
+          ssh -4 \
+            -i ~/.ssh/id_ed25519 \
+            -p "$VPS_PORT" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=10 \
+            "$VPS_USER@$VPS_HOST" "mkdir -p \"$VPS_DEPLOY_DIR/docker\""
+
+          scp -4 -i ~/.ssh/id_ed25519 -P "$VPS_PORT" \
+            docker-compose.yml \
+            docker-compose.staging.yml \
+            "$VPS_USER@$VPS_HOST:$VPS_DEPLOY_DIR/"
+
+          scp -4 -i ~/.ssh/id_ed25519 -P "$VPS_PORT" \
+            docker/Caddyfile \
+            "$VPS_USER@$VPS_HOST:$VPS_DEPLOY_DIR/docker/Caddyfile"
+
+      - name: Pull images, run migrations, and update staging services
+        run: |
+          ssh -4 \
+            -i ~/.ssh/id_ed25519 \
+            -p "$VPS_PORT" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=10 \
+            "$VPS_USER@$VPS_HOST" <<EOF
+          set -euo pipefail
+
+          cd "$VPS_DEPLOY_DIR"
+          test -f docker-compose.yml
+          test -f docker-compose.staging.yml
+          test -f docker/Caddyfile
+          test -f .env.staging
+
+          export OPENMIRAGE_API_IMAGE="${{ steps.images.outputs.api }}"
+          export OPENMIRAGE_API_TOOLS_IMAGE="${{ steps.images.outputs.api_tools }}"
+          export OPENMIRAGE_WEB_IMAGE="${{ steps.images.outputs.web }}"
+          export OPENMIRAGE_COLLAB_IMAGE="${{ steps.images.outputs.collab }}"
+          export OPENMIRAGE_WORKER_IMAGE="${{ steps.images.outputs.worker }}"
+
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+
+          docker compose --env-file .env.staging -f docker-compose.yml -f docker-compose.staging.yml pull db-migrate api web collab worker caddy
+          docker compose --env-file .env.staging -f docker-compose.yml -f docker-compose.staging.yml run --rm db-migrate
+          docker compose --env-file .env.staging -f docker-compose.yml -f docker-compose.staging.yml up -d --no-build --no-deps web api collab worker caddy
+          EOF
+
+      - name: Smoke check staging public origin
+        run: |
+          base_url="${STAGING_PUBLIC_BASE_URL%/}"
+          test -n "$base_url"
+
+          curl -fsS "$base_url/" >/dev/null
+          curl -fsS "$base_url/healthz" >/dev/null
+          curl -fsS "$base_url/readyz" >/dev/null
+          curl -fsS "$base_url/collab/healthz" >/dev/null
+          curl -fsS "$base_url/worker/readyz" >/dev/null
+
+          headers_file="$(mktemp)"
+          curl --http1.1 -sS -o /dev/null -D "$headers_file" \
+            -H 'Connection: Upgrade' \
+            -H 'Upgrade: websocket' \
+            -H 'Sec-WebSocket-Key: SGVsbG8sIHdvcmxkIQ==' \
+            -H 'Sec-WebSocket-Version: 13' \
+            "$base_url/collab" || true
+
+          grep -Eq '^HTTP/1\.1 (101|401)' "$headers_file"
