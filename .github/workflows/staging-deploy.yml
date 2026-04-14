@@ -127,8 +127,12 @@ jobs:
           curl -fsS "$base_url/" >/dev/null
           curl -fsS "$base_url/healthz" >/dev/null
           curl -fsS "$base_url/readyz" >/dev/null
+          curl -fsS "$base_url/metrics" >/dev/null
           curl -fsS "$base_url/collab/healthz" >/dev/null
+          curl -fsS "$base_url/collab/metrics" >/dev/null
           curl -fsS "$base_url/worker/readyz" >/dev/null
+          curl -fsS "$base_url/worker/metrics" >/dev/null
+          curl -fsS "$base_url/worker/status" >/dev/null
 
           headers_file="$(mktemp)"
           curl --http1.1 -sS -o /dev/null -D "$headers_file" \

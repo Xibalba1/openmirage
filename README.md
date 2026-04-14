@@ -29,6 +29,8 @@ Included now:
 - Compose-managed migration and development bootstrap jobs
 - Caddy as the single local browser entrypoint with websocket proxying for collab
 - API storage smoke endpoints for upload, list, and delete verification through the abstraction
+- CI image validation and a protected staging deploy workflow that reuses the same checked-in artifacts
+- a step 13 acceptance runbook and external evidence contract for staging and backup/restore closure
 
 Not included yet:
 
@@ -36,7 +38,7 @@ Not included yet:
 - SMTP-backed magic-link delivery or polished authenticated product flows
 - collab document persistence or page authorization
 - worker jobs, exports, or cleanup processing
-- staging deployment automation, backup/restore verification
+- committed staging acceptance evidence and verified backup/restore evidence
 
 ## Requirements
 
@@ -96,6 +98,7 @@ pnpm typecheck
 pnpm docker:build
 pnpm verify:platform:prereqs
 pnpm verify:platform:infra
+pnpm verify:platform:acceptance
 pnpm db:migrate:up
 pnpm db:migrate:status
 pnpm db:reset
@@ -202,7 +205,7 @@ The staging override adds `443:443` for Caddy. The same route model remains in u
 Caddy is the only browser-facing entrypoint in this slice.
 
 - `/` proxies to `web`
-- `/auth*`, `/healthz`, `/readyz`, `/metrics`, `/internal*` proxy to `api`
+- `/auth*`, `/healthz`, `/readyz`, `/metrics`, `/internal*`, and `/__diagnostics*` proxy to `api`
 - `/collab` and `/collab/*` proxy to `collab`, including websocket upgrades
 - `/worker/healthz`, `/worker/readyz`, `/worker/metrics`, and `/worker/status` proxy to `worker`
 
@@ -451,10 +454,39 @@ This command:
 - verifies worker readiness and heartbeat through Caddy
 - verifies the magic-link auth flow through Caddy
 - verifies an authenticated websocket upgrade through Caddy
+- verifies API, collab, and worker metrics through Caddy
+- verifies `docker compose logs` exposes the expected platform activity
+- verifies the diagnostics error route when `OPENMIRAGE_VERIFY_ERROR_ROUTE=true`
 - verifies Postgres and MinIO on their published operator ports
 - tears down the Compose stack when finished
 
-This is the local manual verification path to keep using until CI automation is added in step `9`.
+This remains the base local smoke verifier used by the phase-closing acceptance command.
+
+## Platform Acceptance
+
+The canonical phase-closing acceptance command is:
+
+```bash
+pnpm verify:platform:acceptance
+```
+
+This command:
+
+- prints the mandatory prerequisite policy before doing any work
+- audits the current step 9 and step 13 acceptance assets
+- runs the prerequisite gate
+- runs the full local Caddy-routed smoke path with the diagnostics error route enabled
+- checks for operator-managed staging and backup/restore evidence
+- emits one final `pass`, `fail`, or `blocked` decision
+
+For a full phase close, create `ops/platform-acceptance-evidence.json` from the example contract in [ops/platform-acceptance-evidence.example.json](/Users/ik/repos/openmirage/ops/platform-acceptance-evidence.example.json), then run:
+
+```bash
+OPENMIRAGE_ACCEPTANCE_EVIDENCE_FILE=ops/platform-acceptance-evidence.json \
+pnpm verify:platform:acceptance
+```
+
+The operator runbook lives in [ops/platform-acceptance.md](/Users/ik/repos/openmirage/ops/platform-acceptance.md).
 
 Backend observability envs:
 
@@ -463,6 +495,8 @@ Backend observability envs:
 - `SENTRY_DSN`: enables Sentry only when set and `OPENMIRAGE_ENV` is `staging` or `production`
 - `SENTRY_ENVIRONMENT`: optional override for Sentry environment tagging
 - `SENTRY_RELEASE`: optional override for Sentry release tagging
+
+For Docker Compose, these values are env-overridable for `api`, `collab`, and `worker`, so the acceptance flow can verify the gated diagnostics route locally and the error-reporting path in staging without editing `docker-compose.yml`.
 
 Local defaults keep Sentry off. To verify the reporting path in a staging-like environment, set:
 

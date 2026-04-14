@@ -1,0 +1,21 @@
+{
+  "staging": {
+    "workflowRunUrl": "https://github.com/example/openmirage/actions/runs/1234567890",
+    "gitSha": "0123456789abcdef0123456789abcdef01234567",
+    "publicBaseUrl": "https://staging.example.com",
+    "verifiedAt": "2026-04-14T18:30:00Z",
+    "sameArtifactsAsCi": true,
+    "websocketUpgradeVerified": true,
+    "secureCookiesVerified": true,
+    "observabilityVerified": true,
+    "notes": "Post-deploy smoke checks passed through the public origin."
+  },
+  "backupRestore": {
+    "artifactLocation": "s3://openmirage-backups/postgres/openmirage-2026-04-14T17-45-00Z.dump",
+    "backupCreatedAt": "2026-04-14T17:45:00Z",
+    "restoreVerifiedAt": "2026-04-14T19:10:00Z",
+    "restoreTarget": "staging-restore-drill-2026-04-14",
+    "postRestoreSmokeVerified": true,
+    "notes": "Restore completed into a clean environment and the minimum smoke checks passed."
+  }
+}
