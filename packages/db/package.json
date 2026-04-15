@@ -14,7 +14,7 @@
     "dev": "node ../../scripts/noop-task.mjs dev @openmirage/db",
     "build": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings=0",
-    "test": "node --test --import tsx ./src/index.test.ts",
+    "test": "node --test --import tsx ./src/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/db",
     "migrate:create": "node ./scripts/create-migration.mjs",

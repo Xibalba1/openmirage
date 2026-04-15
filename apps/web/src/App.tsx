@@ -1,11 +1,21 @@
-import { type AuthContext } from "@openmirage/types";
+import {
+  type AuthContext,
+  type CreateFileInput,
+  type CreatePageInput,
+  type CreateProjectInput,
+  type FileDto,
+  type FileOpenResponse,
+  type PageDto,
+  type ProjectDto,
+  type RenameFileInput,
+  type RenamePageInput,
+  type RenameProjectInput,
+  type WorkspaceDetailDto
+} from "@openmirage/types";
 import { type FormEvent, useEffect, useState } from "react";
 import { readRuntimeWebEnv } from "./runtime-env";
 
-const knownRoutes = new Set(["/", "/app", "/auth"]);
 const pendingRedirectStorageKey = "openmirage.pendingRedirect";
-
-type RoutePath = "/" | "/app" | "/auth";
 
 type SessionState =
   | { status: "loading" }
@@ -24,6 +34,22 @@ type MagicLinkRequestState =
     }
   | { status: "error"; message: string };
 
+type AppRoute =
+  | { kind: "root" }
+  | { kind: "auth" }
+  | { kind: "app-home" }
+  | { kind: "workspace"; workspaceId: string }
+  | { kind: "project"; projectId: string; workspaceId: string }
+  | { kind: "file"; fileId: string; projectId: string; workspaceId: string }
+  | {
+      kind: "page";
+      fileId: string;
+      pageId: string;
+      projectId: string;
+      workspaceId: string;
+    }
+  | { kind: "unknown" };
+
 interface BrowserLocationState {
   pathname: string;
   search: string;
@@ -36,6 +62,45 @@ interface MagicLinkRequestResponse {
   ok: boolean;
 }
 
+interface WorkspacesResponse {
+  workspaces: WorkspaceDetailDto[];
+}
+
+interface ProjectListResponse {
+  projects: ProjectDto[];
+  workspace: WorkspaceDetailDto;
+}
+
+interface FileListResponse {
+  files: FileDto[];
+  project: ProjectDto;
+  workspace: WorkspaceDetailDto;
+}
+
+type ResourceState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "loaded"; value: ResourceData };
+
+type ResourceData =
+  | { kind: "workspaces"; workspaces: WorkspaceDetailDto[] }
+  | { kind: "projects"; projects: ProjectDto[]; workspace: WorkspaceDetailDto }
+  | {
+      files: FileDto[];
+      kind: "files";
+      project: ProjectDto;
+      workspace: WorkspaceDetailDto;
+    }
+  | {
+      file: FileDto;
+      kind: "file-open";
+      pages: PageDto[];
+      project: ProjectDto;
+      selectedPageId: string | null;
+      workspace: WorkspaceDetailDto;
+    };
+
 function readBrowserLocation(): BrowserLocationState {
   return {
     pathname: window.location.pathname,
@@ -43,12 +108,91 @@ function readBrowserLocation(): BrowserLocationState {
   };
 }
 
-function normalizeRoutePath(pathname: string): RoutePath {
-  if (knownRoutes.has(pathname)) {
-    return pathname as RoutePath;
+function parseRoute(pathname: string): AppRoute {
+  if (pathname === "/") {
+    return { kind: "root" };
   }
 
-  return "/";
+  if (pathname === "/auth") {
+    return { kind: "auth" };
+  }
+
+  if (pathname === "/app") {
+    return { kind: "app-home" };
+  }
+
+  const pageMatch = pathname.match(
+    /^\/app\/workspaces\/([^/]+)\/projects\/([^/]+)\/files\/([^/]+)\/pages\/([^/]+)$/
+  );
+
+  if (pageMatch) {
+    return {
+      fileId: decodeURIComponent(pageMatch[3] ?? ""),
+      kind: "page",
+      pageId: decodeURIComponent(pageMatch[4] ?? ""),
+      projectId: decodeURIComponent(pageMatch[2] ?? ""),
+      workspaceId: decodeURIComponent(pageMatch[1] ?? "")
+    };
+  }
+
+  const fileMatch = pathname.match(
+    /^\/app\/workspaces\/([^/]+)\/projects\/([^/]+)\/files\/([^/]+)$/
+  );
+
+  if (fileMatch) {
+    return {
+      fileId: decodeURIComponent(fileMatch[3] ?? ""),
+      kind: "file",
+      projectId: decodeURIComponent(fileMatch[2] ?? ""),
+      workspaceId: decodeURIComponent(fileMatch[1] ?? "")
+    };
+  }
+
+  const projectMatch = pathname.match(/^\/app\/workspaces\/([^/]+)\/projects\/([^/]+)$/);
+
+  if (projectMatch) {
+    return {
+      kind: "project",
+      projectId: decodeURIComponent(projectMatch[2] ?? ""),
+      workspaceId: decodeURIComponent(projectMatch[1] ?? "")
+    };
+  }
+
+  const workspaceMatch = pathname.match(/^\/app\/workspaces\/([^/]+)$/);
+
+  if (workspaceMatch) {
+    return {
+      kind: "workspace",
+      workspaceId: decodeURIComponent(workspaceMatch[1] ?? "")
+    };
+  }
+
+  return { kind: "unknown" };
+}
+
+function getRoutePath(route: AppRoute): string {
+  switch (route.kind) {
+    case "root":
+      return "/";
+    case "auth":
+      return "/auth";
+    case "app-home":
+      return "/app";
+    case "workspace":
+      return `/app/workspaces/${encodeURIComponent(route.workspaceId)}`;
+    case "project":
+      return `/app/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}`;
+    case "file":
+      return `/app/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}`;
+    case "page":
+      return `/app/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}/pages/${encodeURIComponent(route.pageId)}`;
+    case "unknown":
+      return "/";
+  }
+}
+
+function isProtectedRoute(route: AppRoute): boolean {
+  return !["root", "auth", "unknown"].includes(route.kind);
 }
 
 function getRedirectTarget(search: string): string {
@@ -98,6 +242,102 @@ async function fetchSession(
   }
 
   return (await response.json()) as AuthContext;
+}
+
+async function fetchJson<T>(
+  apiBaseUrl: string,
+  path: string,
+  init?: RequestInit
+): Promise<T> {
+  const response = await fetch(createApiUrl(apiBaseUrl, path), {
+    credentials: "include",
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...(init?.headers ?? {})
+    }
+  });
+
+  if (!response.ok) {
+    const failure =
+      response.status === 204 ? {} : ((await response.json().catch(() => ({}))) as {
+          error?: string;
+        });
+    throw new Error(failure.error ?? `Request failed with HTTP ${response.status}`);
+  }
+
+  return (await response.json()) as T;
+}
+
+async function fetchRouteResource(
+  apiBaseUrl: string,
+  route: AppRoute
+): Promise<ResourceData> {
+  switch (route.kind) {
+    case "app-home": {
+      const payload = await fetchJson<WorkspacesResponse>(apiBaseUrl, "/v1/workspaces", {
+        method: "GET"
+      });
+
+      return {
+        kind: "workspaces",
+        workspaces: payload.workspaces
+      };
+    }
+    case "workspace": {
+      const payload = await fetchJson<ProjectListResponse>(
+        apiBaseUrl,
+        `/v1/workspaces/${encodeURIComponent(route.workspaceId)}/projects`,
+        {
+          method: "GET"
+        }
+      );
+
+      return {
+        kind: "projects",
+        projects: payload.projects,
+        workspace: payload.workspace
+      };
+    }
+    case "project": {
+      const payload = await fetchJson<FileListResponse>(
+        apiBaseUrl,
+        `/v1/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files`,
+        {
+          method: "GET"
+        }
+      );
+
+      return {
+        files: payload.files,
+        kind: "files",
+        project: payload.project,
+        workspace: payload.workspace
+      };
+    }
+    case "file":
+    case "page": {
+      const payload = await fetchJson<FileOpenResponse>(
+        apiBaseUrl,
+        `/v1/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}`,
+        {
+          method: "GET"
+        }
+      );
+
+      return {
+        file: payload.file,
+        kind: "file-open",
+        pages: payload.pages,
+        project: payload.project,
+        selectedPageId:
+          route.kind === "page" ? route.pageId : payload.defaultPageId ?? null,
+        workspace: payload.workspace
+      };
+    }
+    default:
+      throw new Error("No resource loader for this route");
+  }
 }
 
 export function App() {
@@ -181,15 +421,15 @@ export function App() {
     setLocation(readBrowserLocation());
   }
 
-  const routePath = normalizeRoutePath(location.pathname);
+  const route = parseRoute(location.pathname);
   const searchParams = new URLSearchParams(location.search);
   const authSuccess = searchParams.get("auth") === "success";
 
   useEffect(() => {
-    if (routePath !== location.pathname) {
-      navigateTo(routePath, "replace");
+    if (route.kind === "unknown") {
+      navigateTo("/", "replace");
     }
-  }, [location.pathname, routePath]);
+  }, [route.kind]);
 
   useEffect(() => {
     if (sessionState.status === "loading" || sessionState.status === "error") {
@@ -197,12 +437,12 @@ export function App() {
     }
 
     if (sessionState.status === "unauthenticated") {
-      if (routePath === "/app") {
-        navigateTo("/auth?redirectTo=/app", "replace");
+      if (isProtectedRoute(route)) {
+        navigateTo(`/auth?redirectTo=${encodeURIComponent(getRoutePath(route))}`, "replace");
         return;
       }
 
-      if (routePath === "/") {
+      if (route.kind === "root") {
         const target = authSuccess ? "/auth?error=expired" : "/auth";
         navigateTo(target, "replace");
       }
@@ -214,10 +454,10 @@ export function App() {
       (authSuccess ? consumePendingRedirect() : null) ??
       getRedirectTarget(location.search);
 
-    if (routePath === "/" || routePath === "/auth") {
+    if (route.kind === "root" || route.kind === "auth") {
       navigateTo(pendingRedirect, "replace");
     }
-  }, [authSuccess, location.search, routePath, sessionState.status]);
+  }, [authSuccess, location.search, route, sessionState.status]);
 
   async function refreshSessionState() {
     setSessionState({ status: "loading" });
@@ -241,8 +481,8 @@ export function App() {
 
   async function handleLogout() {
     await fetch(createApiUrl(runtime.urls.apiBaseUrl, `${runtime.urls.authPath}/logout`), {
-      method: "POST",
-      credentials: "include"
+      credentials: "include",
+      method: "POST"
     });
 
     setSessionState({ status: "unauthenticated" });
@@ -256,7 +496,7 @@ export function App() {
           <p className="eyebrow">OpenMirage</p>
           <h1>Loading your workspace</h1>
           <p className="muted">
-            Checking your session and preparing the authenticated shell.
+            Checking your session and preparing metadata navigation.
           </p>
         </section>
       </main>
@@ -296,9 +536,12 @@ export function App() {
   }
 
   return (
-    <AuthenticatedShell
+    <AuthenticatedApp
+      apiBaseUrl={runtime.urls.apiBaseUrl}
       auth={sessionState.auth}
       onLogout={() => void handleLogout()}
+      onNavigate={(nextRoute) => navigateTo(getRoutePath(nextRoute))}
+      route={route}
     />
   );
 }
@@ -327,15 +570,15 @@ function AuthScreen(props: {
       const response = await fetch(
         createApiUrl(props.apiBaseUrl, `${props.authPath}/magic-link/request`),
         {
-          method: "POST",
+          body: JSON.stringify({
+            email,
+            ...(displayName.trim() ? { displayName: displayName.trim() } : {})
+          }),
           credentials: "include",
           headers: {
             "content-type": "application/json"
           },
-          body: JSON.stringify({
-            email,
-            ...(displayName.trim() ? { displayName: displayName.trim() } : {})
-          })
+          method: "POST"
         }
       );
 
@@ -364,24 +607,24 @@ function AuthScreen(props: {
       <section className="auth-layout">
         <article className="auth-copy">
           <p className="eyebrow">OpenMirage MVP foundation</p>
-          <h1>Sign in to the app shell</h1>
+          <h1>Sign in to your workspace</h1>
           <p className="lede">
-            Sprint 1 replaces the empty platform page with the authenticated
-            product shell. Use a magic link to enter the workspace.
+            Sprint 2 adds the first real product flow: navigate workspace,
+            project, file, and page metadata in the authenticated app.
           </p>
           <div className="auth-notes">
             <div className="note-card">
               <h2>What you get now</h2>
               <p>
-                An authenticated shell, stable browser routes, and shared MVP
-                contracts for the product and editor layers.
+                Workspace-scoped metadata APIs, multi-page file creation, and
+                stable browser routes for reopening a file and page after reload.
               </p>
             </div>
             <div className="note-card">
               <h2>What comes next</h2>
               <p>
-                Workspace, project, file, and page navigation will build on
-                this shell in Sprint 2.
+                Sprint 3 will attach real page-scoped collaboration and durable
+                page state to these routes.
               </p>
             </div>
           </div>
@@ -491,18 +734,222 @@ function AuthRequestResult(props: {
   );
 }
 
-function AuthenticatedShell(props: {
+function AuthenticatedApp(props: {
+  apiBaseUrl: string;
   auth: AuthContext;
   onLogout: () => void;
+  onNavigate: (route: AppRoute) => void;
+  route: AppRoute;
 }) {
-  const primaryMembership = props.auth.memberships[0] ?? null;
+  const [resourceState, setResourceState] = useState<ResourceState>({
+    status: "idle"
+  });
+
+  useEffect(() => {
+    if (!isProtectedRoute(props.route)) {
+      setResourceState({ status: "idle" });
+      return;
+    }
+
+    let cancelled = false;
+    setResourceState({ status: "loading" });
+
+    void fetchRouteResource(props.apiBaseUrl, props.route)
+      .then((value) => {
+        if (!cancelled) {
+          setResourceState({ status: "loaded", value });
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setResourceState({
+            status: "error",
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [props.apiBaseUrl, props.route]);
+
+  async function reloadResource() {
+    if (!isProtectedRoute(props.route)) {
+      return;
+    }
+
+    setResourceState({ status: "loading" });
+
+    try {
+      const value = await fetchRouteResource(props.apiBaseUrl, props.route);
+      setResourceState({ status: "loaded", value });
+    } catch (error) {
+      setResourceState({
+        status: "error",
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  async function handleCreateProject(name: string) {
+    if (props.route.kind !== "workspace") {
+      return;
+    }
+
+    const project = await fetchJson<ProjectDto>(
+      props.apiBaseUrl,
+      `/v1/workspaces/${encodeURIComponent(props.route.workspaceId)}/projects`,
+      {
+        body: JSON.stringify({ name } satisfies CreateProjectInput),
+        method: "POST"
+      }
+    );
+    props.onNavigate({
+      kind: "project",
+      projectId: project.id,
+      workspaceId: props.route.workspaceId
+    });
+  }
+
+  async function handleRenameProject(projectId: string, name: string) {
+    const route = props.route;
+    const workspaceId =
+      route.kind === "workspace" ||
+      route.kind === "project" ||
+      route.kind === "file" ||
+      route.kind === "page"
+        ? route.workspaceId
+        : null;
+
+    if (!workspaceId) {
+      return;
+    }
+
+    await fetchJson<ProjectDto>(
+      props.apiBaseUrl,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}`,
+      {
+        body: JSON.stringify({ name } satisfies RenameProjectInput),
+        method: "PATCH"
+      }
+    );
+    await reloadResource();
+  }
+
+  async function handleCreateFile(name: string, pageNames: string[]) {
+    if (props.route.kind !== "project") {
+      return;
+    }
+
+    const payload = await fetchJson<FileOpenResponse>(
+      props.apiBaseUrl,
+      `/v1/workspaces/${encodeURIComponent(props.route.workspaceId)}/projects/${encodeURIComponent(props.route.projectId)}/files`,
+      {
+        body: JSON.stringify({
+          initialPages: pageNames.map((pageName) => ({ name: pageName })),
+          name
+        } satisfies CreateFileInput),
+        method: "POST"
+      }
+    );
+
+    const nextPageId = payload.defaultPageId ?? payload.pages[0]?.id;
+
+    if (nextPageId) {
+      props.onNavigate({
+        fileId: payload.file.id,
+        kind: "page",
+        pageId: nextPageId,
+        projectId: payload.project.id,
+        workspaceId: payload.workspace.id
+      });
+      return;
+    }
+
+    props.onNavigate({
+      fileId: payload.file.id,
+      kind: "file",
+      projectId: payload.project.id,
+      workspaceId: payload.workspace.id
+    });
+  }
+
+  async function handleRenameFile(fileId: string, name: string) {
+    const route = props.route;
+
+    if (
+      route.kind !== "project" &&
+      route.kind !== "file" &&
+      route.kind !== "page"
+    ) {
+      return;
+    }
+
+    await fetchJson<FileDto>(
+      props.apiBaseUrl,
+      `/v1/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(fileId)}`,
+      {
+        body: JSON.stringify({ name } satisfies RenameFileInput),
+        method: "PATCH"
+      }
+    );
+    await reloadResource();
+  }
+
+  async function handleCreatePage(name: string) {
+    const route = props.route;
+
+    if (route.kind !== "file" && route.kind !== "page") {
+      return;
+    }
+
+    const page = await fetchJson<PageDto>(
+      props.apiBaseUrl,
+      `/v1/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}/pages`,
+      {
+        body: JSON.stringify({ name } satisfies CreatePageInput),
+        method: "POST"
+      }
+    );
+
+    props.onNavigate({
+      fileId: route.fileId,
+      kind: "page",
+      pageId: page.id,
+      projectId: route.projectId,
+      workspaceId: route.workspaceId
+    });
+  }
+
+  async function handleRenamePage(pageId: string, name: string) {
+    const route = props.route;
+
+    if (route.kind !== "file" && route.kind !== "page") {
+      return;
+    }
+
+    await fetchJson<PageDto>(
+      props.apiBaseUrl,
+      `/v1/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}/pages/${encodeURIComponent(pageId)}`,
+      {
+        body: JSON.stringify({ name } satisfies RenamePageInput),
+        method: "PATCH"
+      }
+    );
+    await reloadResource();
+  }
 
   return (
     <main className="screen app-screen">
       <header className="app-header">
         <div>
           <p className="eyebrow">OpenMirage</p>
-          <h1>Authenticated app shell</h1>
+          <h1 className="app-title">Metadata navigation MVP</h1>
+          <p className="muted">
+            Navigate workspace, project, file, and page metadata without direct
+            database access.
+          </p>
         </div>
         <div className="header-actions">
           <div className="identity-chip">
@@ -515,16 +962,19 @@ function AuthenticatedShell(props: {
         </div>
       </header>
 
-      <section className="app-grid">
-        <article className="panel">
-          <p className="eyebrow">Workspace context</p>
-          <h2>Ready for product navigation</h2>
-          <p className="muted">
-            This signed-in shell is the new foundation for project, file, and
-            page flows. The platform-status landing page is no longer the
-            authenticated destination.
-          </p>
-          <dl className="detail-list">
+      <section className="app-shell">
+        <aside className="panel sidebar-panel">
+          <p className="eyebrow">Routing</p>
+          <h2>Current route</h2>
+          <p className="route-chip">{getRoutePath(props.route)}</p>
+          <button
+            className="button button-secondary button-full"
+            onClick={() => props.onNavigate({ kind: "app-home" })}
+            type="button"
+          >
+            Back to workspaces
+          </button>
+          <dl className="detail-list compact-list">
             <div>
               <dt>User ID</dt>
               <dd>{props.auth.user.id}</dd>
@@ -534,26 +984,594 @@ function AuthenticatedShell(props: {
               <dd>{new Date(props.auth.session.expiresAt).toLocaleString()}</dd>
             </div>
             <div>
-              <dt>Primary workspace</dt>
-              <dd>{primaryMembership?.workspaceId ?? "No memberships found"}</dd>
-            </div>
-            <div>
-              <dt>Role</dt>
-              <dd>{primaryMembership?.role ?? "n/a"}</dd>
+              <dt>Memberships</dt>
+              <dd>{props.auth.memberships.length}</dd>
             </div>
           </dl>
-        </article>
+        </aside>
 
-        <article className="panel">
-          <p className="eyebrow">Current scope</p>
-          <h2>Sprint 1 completion state</h2>
-          <ul className="feature-list">
-            <li>Session-aware routing is active for `/`, `/auth`, and `/app`.</li>
-            <li>Magic-link authentication happens inside the web app.</li>
-            <li>Shared TypeScript contracts exist for product and editor work.</li>
-          </ul>
-        </article>
+        <section className="main-panel-stack">
+          {resourceState.status === "loading" ? (
+            <article className="panel">
+              <p className="eyebrow">Loading</p>
+              <h2>Fetching metadata</h2>
+              <p className="muted">Reading the current workspace navigation state.</p>
+            </article>
+          ) : null}
+          {resourceState.status === "error" ? (
+            <article className="panel">
+              <p className="eyebrow">Request failed</p>
+              <h2>Metadata load failed</h2>
+              <p className="muted">{resourceState.message}</p>
+              <button
+                className="button button-primary"
+                onClick={() => void reloadResource()}
+                type="button"
+              >
+                Retry
+              </button>
+            </article>
+          ) : null}
+          {resourceState.status === "loaded" ? (
+            <NavigationContent
+              data={resourceState.value}
+              onCreateFile={handleCreateFile}
+              onCreatePage={handleCreatePage}
+              onCreateProject={handleCreateProject}
+              onNavigate={props.onNavigate}
+              onRenameFile={handleRenameFile}
+              onRenamePage={handleRenamePage}
+              onRenameProject={handleRenameProject}
+            />
+          ) : null}
+        </section>
       </section>
     </main>
+  );
+}
+
+function NavigationContent(props: {
+  data: ResourceData;
+  onCreateFile: (name: string, pageNames: string[]) => Promise<void>;
+  onCreatePage: (name: string) => Promise<void>;
+  onCreateProject: (name: string) => Promise<void>;
+  onNavigate: (route: AppRoute) => void;
+  onRenameFile: (fileId: string, name: string) => Promise<void>;
+  onRenamePage: (pageId: string, name: string) => Promise<void>;
+  onRenameProject: (projectId: string, name: string) => Promise<void>;
+}) {
+  switch (props.data.kind) {
+    case "workspaces":
+      return (
+        <article className="panel">
+          <p className="eyebrow">Workspace selection</p>
+          <h2>Available workspaces</h2>
+          <p className="muted">
+            Pick a workspace to list its projects and continue the metadata flow.
+          </p>
+          <ul className="resource-list">
+            {props.data.workspaces.map((workspace) => (
+              <li key={workspace.id}>
+                <button
+                  className="resource-button"
+                  onClick={() =>
+                    props.onNavigate({ kind: "workspace", workspaceId: workspace.id })
+                  }
+                  type="button"
+                >
+                  <strong>{workspace.name}</strong>
+                  <span>
+                    {workspace.slug} · {workspace.role}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </article>
+      );
+    case "projects":
+      {
+        const data = props.data;
+
+      return (
+        <>
+          <article className="panel">
+            <Breadcrumbs
+              items={[
+                {
+                  label: "Workspaces",
+                  route: { kind: "app-home" }
+                },
+                {
+                  label: data.workspace.name,
+                  route: {
+                    kind: "workspace",
+                    workspaceId: data.workspace.id
+                  }
+                }
+              ]}
+              onNavigate={props.onNavigate}
+            />
+            <p className="eyebrow">Projects</p>
+            <h2>{data.workspace.name}</h2>
+            <p className="muted">Create a project or open an existing one.</p>
+            <CreateProjectForm onCreate={props.onCreateProject} />
+          </article>
+          <article className="panel">
+            <ul className="resource-list">
+              {data.projects.map((project) => (
+                <li key={project.id}>
+                  <div className="resource-row">
+                    <button
+                      className="resource-button"
+                      onClick={() =>
+                        props.onNavigate({
+                          kind: "project",
+                          projectId: project.id,
+                          workspaceId: data.workspace.id
+                        })
+                      }
+                      type="button"
+                    >
+                      <strong>{project.name}</strong>
+                      <span>Updated {new Date(project.updatedAt).toLocaleString()}</span>
+                    </button>
+                    <InlineRenameForm
+                      label="Rename project"
+                      onSubmit={(name) => props.onRenameProject(project.id, name)}
+                    />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </article>
+        </>
+      );
+      }
+    case "files":
+      {
+        const data = props.data;
+
+      return (
+        <>
+          <article className="panel">
+            <Breadcrumbs
+              items={[
+                {
+                  label: "Workspaces",
+                  route: { kind: "app-home" }
+                },
+                {
+                  label: data.workspace.name,
+                  route: {
+                    kind: "workspace",
+                    workspaceId: data.workspace.id
+                  }
+                },
+                {
+                  label: data.project.name,
+                  route: {
+                    kind: "project",
+                    projectId: data.project.id,
+                    workspaceId: data.workspace.id
+                  }
+                }
+              ]}
+              onNavigate={props.onNavigate}
+            />
+            <p className="eyebrow">Files</p>
+            <h2>{data.project.name}</h2>
+            <p className="muted">
+              Create a file with multiple pages, then open one of its pages.
+            </p>
+            <CreateFileForm onCreate={props.onCreateFile} />
+          </article>
+          <article className="panel">
+            <ul className="resource-list">
+              {data.files.map((file) => (
+                <li key={file.id}>
+                  <div className="resource-row">
+                    <button
+                      className="resource-button"
+                      onClick={() =>
+                        props.onNavigate({
+                          fileId: file.id,
+                          kind: "file",
+                          projectId: data.project.id,
+                          workspaceId: data.workspace.id
+                        })
+                      }
+                      type="button"
+                    >
+                      <strong>{file.name}</strong>
+                      <span>Updated {new Date(file.updatedAt).toLocaleString()}</span>
+                    </button>
+                    <InlineRenameForm
+                      label="Rename file"
+                      onSubmit={(name) => props.onRenameFile(file.id, name)}
+                    />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </article>
+        </>
+      );
+      }
+    case "file-open":
+      {
+        const data = props.data;
+
+      return (
+        <>
+          <article className="panel">
+            <Breadcrumbs
+              items={[
+                {
+                  label: "Workspaces",
+                  route: { kind: "app-home" }
+                },
+                {
+                  label: data.workspace.name,
+                  route: {
+                    kind: "workspace",
+                    workspaceId: data.workspace.id
+                  }
+                },
+                {
+                  label: data.project.name,
+                  route: {
+                    kind: "project",
+                    projectId: data.project.id,
+                    workspaceId: data.workspace.id
+                  }
+                },
+                {
+                  label: data.file.name,
+                  route: {
+                    fileId: data.file.id,
+                    kind: "file",
+                    projectId: data.project.id,
+                    workspaceId: data.workspace.id
+                  }
+                }
+              ]}
+              onNavigate={props.onNavigate}
+            />
+            <p className="eyebrow">File open</p>
+            <h2>{data.file.name}</h2>
+            <p className="muted">
+              This is the Sprint 2 open flow. The page route is stable and can
+              be reloaded; the editor arrives in a later sprint.
+            </p>
+            <div className="action-strip">
+              <InlineRenameForm
+                label="Rename file"
+                onSubmit={(name) => props.onRenameFile(data.file.id, name)}
+              />
+              <CreatePageForm onCreate={props.onCreatePage} />
+            </div>
+          </article>
+          <article className="panel">
+            <div className="page-open-summary">
+              <div>
+                <p className="eyebrow">Selected page</p>
+                <h3>
+                  {data.pages.find((page) => page.id === data.selectedPageId)
+                    ?.name ?? "No page selected"}
+                </h3>
+              </div>
+              <div className="selected-page-chip">
+                {data.selectedPageId ?? "No default page"}
+              </div>
+            </div>
+            <ul className="resource-list">
+              {data.pages.map((page) => (
+                <li key={page.id}>
+                  <div className="resource-row">
+                    <button
+                      className={`resource-button ${
+                        page.id === data.selectedPageId ? "resource-button-active" : ""
+                      }`}
+                      onClick={() =>
+                        props.onNavigate({
+                          fileId: data.file.id,
+                          kind: "page",
+                          pageId: page.id,
+                          projectId: data.project.id,
+                          workspaceId: data.workspace.id
+                        })
+                      }
+                      type="button"
+                    >
+                      <strong>{page.name}</strong>
+                      <span>Order {page.orderIndex + 1}</span>
+                    </button>
+                    <InlineRenameForm
+                      label="Rename page"
+                      onSubmit={(name) => props.onRenamePage(page.id, name)}
+                    />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </article>
+        </>
+      );
+      }
+  }
+}
+
+function Breadcrumbs(props: {
+  items: Array<{ label: string; route: AppRoute }>;
+  onNavigate: (route: AppRoute) => void;
+}) {
+  return (
+    <nav className="breadcrumbs" aria-label="Breadcrumb">
+      {props.items.map((item) => (
+        <button
+          className="breadcrumb-link"
+          key={`${item.label}:${getRoutePath(item.route)}`}
+          onClick={() => props.onNavigate(item.route)}
+          type="button"
+        >
+          {item.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function CreateProjectForm(props: { onCreate: (name: string) => Promise<void> }) {
+  const [name, setName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmed = name.trim();
+
+    if (!trimmed) {
+      setError("Project name is required.");
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      await props.onCreate(trimmed);
+      setName("");
+    } catch (submissionError) {
+      setError(
+        submissionError instanceof Error
+          ? submissionError.message
+          : String(submissionError)
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form className="inline-form" onSubmit={(event) => void handleSubmit(event)}>
+      <input
+        onChange={(event) => setName(event.target.value)}
+        placeholder="New project name"
+        type="text"
+        value={name}
+      />
+      <button className="button button-primary" disabled={submitting} type="submit">
+        {submitting ? "Creating..." : "Create project"}
+      </button>
+      {error ? <p className="form-error">{error}</p> : null}
+    </form>
+  );
+}
+
+function CreateFileForm(props: {
+  onCreate: (name: string, pageNames: string[]) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [pageNames, setPageNames] = useState(["Page 1", "Page 2"]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function updatePageName(index: number, value: string) {
+    setPageNames((current) =>
+      current.map((entry, currentIndex) => (currentIndex === index ? value : entry))
+    );
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmedName = name.trim();
+    const trimmedPages = pageNames.map((pageName) => pageName.trim()).filter(Boolean);
+
+    if (!trimmedName) {
+      setError("File name is required.");
+      return;
+    }
+
+    if (trimmedPages.length < 2) {
+      setError("Add at least two pages for the initial file.");
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      await props.onCreate(trimmedName, trimmedPages);
+      setName("");
+      setPageNames(["Page 1", "Page 2"]);
+    } catch (submissionError) {
+      setError(
+        submissionError instanceof Error
+          ? submissionError.message
+          : String(submissionError)
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form className="stack-form" onSubmit={(event) => void handleSubmit(event)}>
+      <input
+        onChange={(event) => setName(event.target.value)}
+        placeholder="New file name"
+        type="text"
+        value={name}
+      />
+      <div className="page-grid">
+        {pageNames.map((pageName, index) => (
+          <input
+            key={`page-${index}`}
+            onChange={(event) => updatePageName(index, event.target.value)}
+            placeholder={`Page ${index + 1}`}
+            type="text"
+            value={pageName}
+          />
+        ))}
+      </div>
+      <div className="action-strip">
+        <button
+          className="button button-secondary"
+          onClick={() =>
+            setPageNames((current) => [...current, `Page ${current.length + 1}`])
+          }
+          type="button"
+        >
+          Add page field
+        </button>
+        <button className="button button-primary" disabled={submitting} type="submit">
+          {submitting ? "Creating..." : "Create file"}
+        </button>
+      </div>
+      {error ? <p className="form-error">{error}</p> : null}
+    </form>
+  );
+}
+
+function CreatePageForm(props: { onCreate: (name: string) => Promise<void> }) {
+  const [name, setName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmed = name.trim();
+
+    if (!trimmed) {
+      setError("Page name is required.");
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      await props.onCreate(trimmed);
+      setName("");
+    } catch (submissionError) {
+      setError(
+        submissionError instanceof Error
+          ? submissionError.message
+          : String(submissionError)
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form className="inline-form" onSubmit={(event) => void handleSubmit(event)}>
+      <input
+        onChange={(event) => setName(event.target.value)}
+        placeholder="New page name"
+        type="text"
+        value={name}
+      />
+      <button className="button button-primary" disabled={submitting} type="submit">
+        {submitting ? "Creating..." : "Create page"}
+      </button>
+      {error ? <p className="form-error">{error}</p> : null}
+    </form>
+  );
+}
+
+function InlineRenameForm(props: {
+  label: string;
+  onSubmit: (name: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmed = name.trim();
+
+    if (!trimmed) {
+      setError("Name is required.");
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      await props.onSubmit(trimmed);
+      setEditing(false);
+      setName("");
+    } catch (submissionError) {
+      setError(
+        submissionError instanceof Error
+          ? submissionError.message
+          : String(submissionError)
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <button
+        className="button button-secondary"
+        onClick={() => setEditing(true)}
+        type="button"
+      >
+        {props.label}
+      </button>
+    );
+  }
+
+  return (
+    <form className="rename-form" onSubmit={(event) => void handleSubmit(event)}>
+      <input
+        onChange={(event) => setName(event.target.value)}
+        placeholder="New name"
+        type="text"
+        value={name}
+      />
+      <button className="button button-primary" disabled={submitting} type="submit">
+        Save
+      </button>
+      <button
+        className="button button-secondary"
+        onClick={() => {
+          setEditing(false);
+          setName("");
+          setError(null);
+        }}
+        type="button"
+      >
+        Cancel
+      </button>
+      {error ? <p className="form-error">{error}</p> : null}
+    </form>
   );
 }

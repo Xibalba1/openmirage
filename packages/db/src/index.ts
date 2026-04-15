@@ -29,6 +29,19 @@ export {
   type MagicLinkRequestResult,
   type UpsertUserInput
 } from "./auth.js";
+export {
+  createFileWithPages,
+  createPage,
+  createProject,
+  getFileOpenDetails,
+  listAuthorizedWorkspaces,
+  listFilePages,
+  listProjectFiles,
+  listWorkspaceProjects,
+  renameFile,
+  renamePage,
+  renameProject
+} from "./metadata.js";
 
 export function getApplicationVersionInfo(
   release: string

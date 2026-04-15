@@ -242,6 +242,10 @@ h3 {
   margin: 0 auto;
 }
 
+.app-title {
+  font-size: clamp(2.2rem, 4vw, 4.2rem);
+}
+
 .app-header {
   display: flex;
   align-items: center;
@@ -296,6 +300,134 @@ h3 {
   padding-left: 18px;
 }
 
+.app-shell {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  gap: 24px;
+}
+
+.sidebar-panel,
+.main-panel-stack {
+  display: grid;
+  gap: 24px;
+  align-content: start;
+}
+
+.route-chip,
+.selected-page-chip {
+  display: inline-flex;
+  padding: 10px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(247, 241, 231, 0.88);
+  word-break: break-word;
+}
+
+.button-full {
+  width: 100%;
+}
+
+.compact-list div + div {
+  margin-top: 12px;
+}
+
+.breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.breadcrumb-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #f0b26a;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgba(240, 178, 106, 0.4);
+}
+
+.resource-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 14px;
+}
+
+.resource-row {
+  display: grid;
+  gap: 12px;
+}
+
+.resource-button {
+  width: 100%;
+  display: grid;
+  gap: 6px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.resource-button span {
+  color: rgba(247, 241, 231, 0.7);
+}
+
+.resource-button-active {
+  border-color: rgba(240, 178, 106, 0.5);
+  background: rgba(240, 178, 106, 0.12);
+}
+
+.inline-form,
+.rename-form,
+.stack-form {
+  display: grid;
+  gap: 12px;
+}
+
+.inline-form input,
+.rename-form input,
+.stack-form input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+}
+
+.action-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: start;
+}
+
+.page-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.form-error {
+  margin: 0;
+  color: #ffb7ac;
+  font-size: 0.92rem;
+}
+
+.page-open-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
 @media (max-width: 960px) {
   .screen {
     padding: 18px;
@@ -319,5 +451,14 @@ h3 {
     width: 100%;
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .page-open-summary {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
