@@ -144,7 +144,11 @@ function validateExternalEvidence() {
     "workflowRunUrl",
     "gitSha",
     "publicBaseUrl",
-    "verifiedAt"
+    "verifiedAt",
+    "freshVpsVerifiedAt",
+    "freshVpsTarget",
+    "errorReportingVerifiedAt",
+    "errorReportingReference"
   ];
   const backupFields = [
     "artifactLocation",
@@ -165,7 +169,9 @@ function validateExternalEvidence() {
     ["sameArtifactsAsCi", staging.sameArtifactsAsCi],
     ["websocketUpgradeVerified", staging.websocketUpgradeVerified],
     ["secureCookiesVerified", staging.secureCookiesVerified],
-    ["observabilityVerified", staging.observabilityVerified]
+    ["observabilityVerified", staging.observabilityVerified],
+    ["freshVpsPreparedFromRunbook", staging.freshVpsPreparedFromRunbook],
+    ["errorReportingSinkVerified", staging.errorReportingSinkVerified]
   ].filter(([, value]) => !validateBoolean(value));
   const backupBooleans = [
     ["postRestoreSmokeVerified", backupRestore.postRestoreSmokeVerified]
@@ -176,7 +182,7 @@ function validateExternalEvidence() {
       ? {
           name: "staging acceptance",
           status: "pass",
-          detail: `workflow ${staging.workflowRunUrl} verified ${staging.publicBaseUrl} at ${staging.verifiedAt}`
+          detail: `workflow ${staging.workflowRunUrl} verified ${staging.publicBaseUrl} at ${staging.verifiedAt}; fresh VPS proof recorded for ${staging.freshVpsTarget} at ${staging.freshVpsVerifiedAt}; error reporting verified at ${staging.errorReportingVerifiedAt}`
         }
       : {
           name: "staging acceptance",
@@ -260,14 +266,18 @@ async function main() {
 
   if (prereqs.ok) {
     log("running local acceptance flow");
-    const localAcceptance = run("node", ["./scripts/verify-platform-infra.mjs"], {
-      env: {
-        ...process.env,
-        ENABLE_TEST_ERROR_ROUTES: "true",
-        OPENMIRAGE_VERIFY_ERROR_ROUTE: "true"
-      },
-      maxBuffer: 1024 * 1024 * 20
-    });
+    const localAcceptance = run(
+      "node",
+      ["./scripts/verify-platform-infra.mjs"],
+      {
+        env: {
+          ...process.env,
+          ENABLE_TEST_ERROR_ROUTES: "true",
+          OPENMIRAGE_VERIFY_ERROR_ROUTE: "true"
+        },
+        maxBuffer: 1024 * 1024 * 20
+      }
+    );
 
     results.push({
       name: "local acceptance",

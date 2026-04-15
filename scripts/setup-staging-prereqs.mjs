@@ -53,7 +53,9 @@ try {
   const envExists = remoteFileExists(options, envFilePath);
 
   if (envExists && !options.force) {
-    log(`remote env file already exists at ${envFilePath}; use --force to overwrite it`);
+    log(
+      `remote env file already exists at ${envFilePath}; use --force to overwrite it`
+    );
     process.exit(0);
   }
 
@@ -62,7 +64,9 @@ try {
 
   try {
     writeFileSync(localEnvFile, envFileContent, "utf8");
-    log(`${envExists ? "overwriting" : "creating"} remote env file ${envFilePath}`);
+    log(
+      `${envExists ? "overwriting" : "creating"} remote env file ${envFilePath}`
+    );
     runChecked(
       "scp",
       createScpArgs(

@@ -73,7 +73,10 @@ export function readStagingPrereqOptions(argv = process.argv.slice(2)) {
   const port = readOption(args, "port", "VPS_PORT", "22");
   const user = readOption(args, "user", "VPS_USER");
   const sshKeyPath = readOption(args, "ssh-key-path", "VPS_SSH_KEY_PATH");
-  const force = parseBoolean(readOption(args, "force", "OPENMIRAGE_FORCE"), false);
+  const force = parseBoolean(
+    readOption(args, "force", "OPENMIRAGE_FORCE"),
+    false
+  );
   const sessionCookieName = readOption(
     args,
     "session-cookie-name",
@@ -124,7 +127,9 @@ export function readStagingPrereqOptions(argv = process.argv.slice(2)) {
   }
 
   if (!deployDir) {
-    throw new Error("missing deploy directory; set --deploy-dir or VPS_DEPLOY_DIR");
+    throw new Error(
+      "missing deploy directory; set --deploy-dir or VPS_DEPLOY_DIR"
+    );
   }
 
   if (!publicBaseUrl) {
@@ -198,7 +203,9 @@ export function runChecked(command, args, input) {
   });
 
   if (result.status !== 0) {
-    throw new Error(result.stderr.trim() || result.stdout.trim() || `${command} failed`);
+    throw new Error(
+      result.stderr.trim() || result.stdout.trim() || `${command} failed`
+    );
   }
 
   return result.stdout.trim();

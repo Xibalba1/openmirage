@@ -525,6 +525,19 @@ pnpm verify:platform:acceptance
 
 The operator runbook lives in [ops/platform-acceptance.md](/Users/ik/repos/openmirage/ops/platform-acceptance.md).
 
+The staging evidence file must include explicit proof for the remaining operator-only closure items:
+
+- fresh-VPS rehearsal proof:
+  - `freshVpsPreparedFromRunbook=true`
+  - `freshVpsVerifiedAt`
+  - `freshVpsTarget`
+- error-reporting proof:
+  - `errorReportingSinkVerified=true`
+  - `errorReportingVerifiedAt`
+  - `errorReportingReference`
+
+Without those fields, `pnpm verify:platform:acceptance` will report staging acceptance as `blocked` even if the existing deploy and smoke checks already passed.
+
 Backend observability envs:
 
 - `APP_VERSION`: release/version string included in logs and metrics

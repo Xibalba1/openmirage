@@ -8,7 +8,13 @@
     "websocketUpgradeVerified": true,
     "secureCookiesVerified": true,
     "observabilityVerified": true,
-    "notes": "Post-deploy smoke checks passed through the public origin."
+    "freshVpsPreparedFromRunbook": true,
+    "freshVpsVerifiedAt": "2026-04-15T09:10:00Z",
+    "freshVpsTarget": "staging-vps-rehearsal-2026-04-15",
+    "errorReportingSinkVerified": true,
+    "errorReportingVerifiedAt": "2026-04-15T09:35:00Z",
+    "errorReportingReference": "https://sentry.example.com/issues/1234567890/events/abcdef1234567890/",
+    "notes": "Post-deploy smoke checks passed through the public origin, a fresh VPS was prepared from the runbook without undocumented steps, and the forced diagnostics error appeared in the configured sink."
   },
   "backupRestore": {
     "artifactLocation": "s3://openmirage-backups/postgres/openmirage-2026-04-14T17-45-00Z.dump",
