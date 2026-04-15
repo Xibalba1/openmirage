@@ -129,10 +129,27 @@ jobs:
           export OPENMIRAGE_COLLAB_IMAGE="${{ steps.images.outputs.collab }}"
           export OPENMIRAGE_WORKER_IMAGE="${{ steps.images.outputs.worker }}"
 
+          set -a
+          . ./.env.staging
+          set +a
+
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
           trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
 
-          docker compose --env-file .env.staging -f docker-compose.yml -f docker-compose.staging.yml pull db-migrate api web collab worker caddy
+          docker pull "$OPENMIRAGE_API_IMAGE"
+          docker pull "$OPENMIRAGE_API_TOOLS_IMAGE"
+          docker pull "$OPENMIRAGE_WEB_IMAGE"
+          docker pull "$OPENMIRAGE_COLLAB_IMAGE"
+          docker pull "$OPENMIRAGE_WORKER_IMAGE"
+
+          docker compose --env-file .env.staging -f docker-compose.yml -f docker-compose.staging.yml pull postgres caddy
+
+          if [ "${STORAGE_PROVIDER:-minio}" = "minio" ]; then
+            docker compose --env-file .env.staging -f docker-compose.yml -f docker-compose.staging.yml pull minio minio-init
+            docker compose --env-file .env.staging -f docker-compose.yml -f docker-compose.staging.yml up -d minio
+            docker compose --env-file .env.staging -f docker-compose.yml -f docker-compose.staging.yml up minio-init
+          fi
+
           docker compose --env-file .env.staging -f docker-compose.yml -f docker-compose.staging.yml run --rm db-migrate
           docker compose --env-file .env.staging -f docker-compose.yml -f docker-compose.staging.yml up -d --no-build --no-deps web api collab worker caddy
           EOF

@@ -114,6 +114,7 @@ Preferred storage default:
 Optional supported variant:
 
 - self-hosted MinIO on the VPS, only if explicitly chosen
+- when using self-hosted MinIO, keep the `STORAGE_*` values in `.env.staging` aligned to the checked-in example so the deploy workflow can bootstrap `minio` and `minio-init` before starting the long-running app services
 
 ## Fresh VPS Preparation
 
@@ -146,7 +147,9 @@ Default deploy flow:
    - verifies SSH access plus the required VPS files
    - copies `docker-compose.yml`, `docker-compose.staging.yml`, and `docker/Caddyfile` into `$VPS_DEPLOY_DIR`
    - logs the VPS into GHCR
-   - runs `docker compose pull`
+   - explicitly pulls the immutable GHCR application images used for the release
+   - pulls the Compose-managed infrastructure images
+   - conditionally starts `minio` and runs `minio-init` when `.env.staging` sets `STORAGE_PROVIDER=minio`
    - runs `docker compose run --rm db-migrate`
    - runs `docker compose up -d --no-build --no-deps web api collab worker caddy`
    - executes the public smoke verification sequence
