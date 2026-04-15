@@ -5,12 +5,14 @@ This runbook closes the platform phase without expanding product scope. It stays
 ## Guardrails
 
 Will do:
+
 - reuse the existing step 9 local/staging verification assets as the baseline
 - add one canonical acceptance command for local verification
 - treat staging verification and backup/restore proof as operator-managed evidence
 - keep verification inside the documented `web`, `api`, `collab`, `worker`, Postgres, blob storage, and Caddy seams
 
 Won't do:
+
 - no product routes, editor features, or Figma-parity work
 - no replacement of Docker Compose, Caddy, GHCR, or the single-VPS deploy model
 - no second staging pipeline when [`.github/workflows/staging-deploy.yml`](/Users/ik/repos/openmirage/.github/workflows/staging-deploy.yml) already provides the canonical path
@@ -47,6 +49,7 @@ pnpm verify:platform:acceptance
 ```
 
 The acceptance command always:
+
 - prints the mandatory prerequisite rule
 - audits the step 9 assets
 - runs the prerequisite gate
@@ -93,7 +96,35 @@ Use the existing GitHub Actions deployment path. Do not create a second deploy p
    - `/metrics` is reachable for API, collab, and worker
    - the forced diagnostics route is only enabled when intentionally gated
    - error reporting is visible in the configured sink when `SENTRY_DSN` is set
-7. Record the workflow run URL, commit SHA, staging URL, and verification booleans in `ops/platform-acceptance-evidence.json`.
+7. Verify fresh-VPS repeatability:
+   - start from a clean or disposable VPS with only base VM provisioning completed
+   - follow [`ops/staging-vps.md`](/Users/ik/repos/openmirage/ops/staging-vps.md:1) exactly to install Docker and Compose, create `$VPS_DEPLOY_DIR`, create `.env.staging`, validate SSH, DNS, and public ports, and run the canonical `Staging Deploy` workflow
+   - confirm the run required no undocumented shell history, manual repo changes, or ad hoc deploy steps
+8. Record the workflow run URL, commit SHA, staging URL, verification booleans, fresh-VPS proof fields, and error-reporting proof fields in `ops/platform-acceptance-evidence.json`.
+
+Staging proof is incomplete unless the evidence file records all of these as concrete proof:
+
+- `freshVpsPreparedFromRunbook=true`
+- `freshVpsVerifiedAt`
+- `freshVpsTarget`
+- `errorReportingSinkVerified=true`
+- `errorReportingVerifiedAt`
+- `errorReportingReference`
+
+## Staging Error-Reporting Verification
+
+Record the explicit step 11 proof during a staging verification run:
+
+1. Confirm `SENTRY_DSN` is configured in the staging `.env.staging` file.
+2. Intentionally enable `ENABLE_TEST_ERROR_ROUTES=true` for the verification deploy only.
+3. Run the canonical `Staging Deploy` workflow so the env change is applied through the checked-in deploy path.
+4. Trigger the forced diagnostics route through the public origin:
+   ```bash
+   curl -i https://<public staging host>/__diagnostics/error
+   ```
+5. Confirm the route returns `500` and the corresponding event appears in the configured error-reporting sink.
+6. Record the verification timestamp plus a stable event reference such as an event URL, issue URL, or event ID in `ops/platform-acceptance-evidence.json`.
+7. Restore `ENABLE_TEST_ERROR_ROUTES=false` and rerun the canonical deploy path so the diagnostics route returns to its normal disabled state.
 
 ## Backup / Restore Evidence
 

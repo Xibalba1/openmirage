@@ -26,7 +26,9 @@ function readRemoteDirectoryStatus(options, remotePath) {
 
 function verifyEqual(actual, expected, key, failures) {
   if (actual !== expected) {
-    failures.push(`${key} expected ${JSON.stringify(expected)} but found ${JSON.stringify(actual ?? "")}`);
+    failures.push(
+      `${key} expected ${JSON.stringify(expected)} but found ${JSON.stringify(actual ?? "")}`
+    );
   }
 }
 
@@ -38,11 +40,17 @@ try {
   log(`verifying remote deploy directory ${options.deployDir}`);
 
   if (readRemoteDirectoryStatus(options, options.deployDir) !== "ok") {
-    failures.push(`missing or non-writable deploy directory ${options.deployDir}`);
+    failures.push(
+      `missing or non-writable deploy directory ${options.deployDir}`
+    );
   }
 
-  if (readRemoteDirectoryStatus(options, `${options.deployDir}/docker`) !== "ok") {
-    failures.push(`missing or non-writable docker subdirectory ${options.deployDir}/docker`);
+  if (
+    readRemoteDirectoryStatus(options, `${options.deployDir}/docker`) !== "ok"
+  ) {
+    failures.push(
+      `missing or non-writable docker subdirectory ${options.deployDir}/docker`
+    );
   }
 
   log("verifying remote .env.production content");
@@ -70,6 +78,8 @@ try {
   }
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
-  console.error(`[openmirage] production prerequisite verification failed: ${message}`);
+  console.error(
+    `[openmirage] production prerequisite verification failed: ${message}`
+  );
   process.exitCode = 1;
 }

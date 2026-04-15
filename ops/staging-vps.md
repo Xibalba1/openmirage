@@ -203,6 +203,29 @@ The deployment procedure is considered correct only if:
 - a previous immutable tag can be redeployed through the workflow input
 - post-deploy verification proves web, API, collab, worker, database readiness, and storage connectivity
 
+## Fresh VPS Verification
+
+Step 10 is not considered closed until one disposable or newly provisioned VPS has been prepared strictly from this runbook and the proof has been recorded in [`ops/platform-acceptance-evidence.json`](/Users/ik/repos/openmirage/ops/platform-acceptance-evidence.json:1).
+
+Use this procedure:
+
+1. Start from a clean VPS with only base VM provisioning completed.
+2. Install Docker Engine and `docker compose`.
+3. Create `$VPS_DEPLOY_DIR` and `$VPS_DEPLOY_DIR/docker`.
+4. Create `$VPS_DEPLOY_DIR/.env.staging` from [.env.staging.example](/Users/ik/repos/openmirage/.env.staging.example:1) and fill in the operator-managed values.
+5. Confirm the deploy user can run Docker commands.
+6. Confirm DNS, ports `80` and `443`, and GitHub Actions SSH access are working.
+7. Run the canonical `Staging Deploy` workflow without adding undocumented shell commands on the VPS.
+8. Confirm the public smoke checks pass and the deployed stack is reachable through the documented staging routes.
+9. Record the following in `ops/platform-acceptance-evidence.json`:
+   - `freshVpsPreparedFromRunbook=true`
+   - `freshVpsVerifiedAt`
+   - `freshVpsTarget`
+   - the workflow run URL used for the rehearsal
+   - whether any undocumented shell history, manual repo changes, or ad hoc deploy steps were needed
+
+If any undocumented step is required, stop and update this runbook before treating the rehearsal as proof.
+
 ## Failure Triage
 
 If the deploy or smoke verification fails, inspect these first on the VPS:
