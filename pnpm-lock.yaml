@@ -122,12 +122,21 @@ importers:
       '@openmirage/types':
         specifier: workspace:*
         version: link:../../packages/types
+      lib0:
+        specifier: ^0.2.114
+        version: 0.2.117
       react:
         specifier: ^19.1.0
         version: 19.2.5
       react-dom:
         specifier: ^19.1.0
         version: 19.2.5(react@19.2.5)
+      y-protocols:
+        specifier: ^1.0.6
+        version: 1.0.7(yjs@13.6.30)
+      yjs:
+        specifier: ^13.6.27
+        version: 13.6.30
     devDependencies:
       '@vitejs/plugin-react':
         specifier: ^4.4.1
@@ -185,6 +194,9 @@ importers:
       pg:
         specifier: ^8.13.1
         version: 8.20.0
+      yjs:
+        specifier: ^13.6.27
+        version: 13.6.30
     devDependencies:
       '@types/pg':
         specifier: ^8.15.5

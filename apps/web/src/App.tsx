@@ -10,9 +10,11 @@ import {
   type RenameFileInput,
   type RenamePageInput,
   type RenameProjectInput,
+  type RuntimeUrls,
   type WorkspaceDetailDto
 } from "@openmirage/types";
 import { type FormEvent, useEffect, useState } from "react";
+import { PageEditorScreen } from "./editor/PageEditorScreen";
 import { readRuntimeWebEnv } from "./runtime-env";
 
 const pendingRedirectStorageKey = "openmirage.pendingRedirect";
@@ -100,6 +102,8 @@ type ResourceData =
       selectedPageId: string | null;
       workspace: WorkspaceDetailDto;
     };
+
+type FileOpenResource = Extract<ResourceData, { kind: "file-open" }>;
 
 function readBrowserLocation(): BrowserLocationState {
   return {
@@ -542,6 +546,7 @@ export function App() {
       onLogout={() => void handleLogout()}
       onNavigate={(nextRoute) => navigateTo(getRoutePath(nextRoute))}
       route={route}
+      runtimeUrls={runtime.urls}
     />
   );
 }
@@ -740,6 +745,7 @@ function AuthenticatedApp(props: {
   onLogout: () => void;
   onNavigate: (route: AppRoute) => void;
   route: AppRoute;
+  runtimeUrls: RuntimeUrls;
 }) {
   const [resourceState, setResourceState] = useState<ResourceState>({
     status: "idle"
@@ -940,15 +946,31 @@ function AuthenticatedApp(props: {
     await reloadResource();
   }
 
+  const editorData: FileOpenResource | null =
+    props.route.kind === "page" &&
+    resourceState.status === "loaded" &&
+    resourceState.value.kind === "file-open"
+      ? resourceState.value
+      : null;
+  const isEditorRoute = Boolean(editorData);
+  const currentPageId = props.route.kind === "page" ? props.route.pageId : null;
+  const editorPage =
+    editorData && currentPageId
+      ? editorData.pages.find((page) => page.id === currentPageId) ?? null
+      : null;
+
   return (
-    <main className="screen app-screen">
+    <main className={`screen app-screen ${isEditorRoute ? "app-screen-editor" : ""}`}>
       <header className="app-header">
         <div>
           <p className="eyebrow">OpenMirage</p>
-          <h1 className="app-title">Metadata navigation MVP</h1>
+          <h1 className="app-title">
+            {isEditorRoute ? "Canvas editor MVP" : "Metadata navigation MVP"}
+          </h1>
           <p className="muted">
-            Navigate workspace, project, file, and page metadata without direct
-            database access.
+            {isEditorRoute
+              ? "Hydrate page content from collaboration state into a browser-owned scene graph and canvas renderer."
+              : "Navigate workspace, project, file, and page metadata without direct database access."}
           </p>
         </div>
         <div className="header-actions">
@@ -962,70 +984,86 @@ function AuthenticatedApp(props: {
         </div>
       </header>
 
-      <section className="app-shell">
-        <aside className="panel sidebar-panel">
-          <p className="eyebrow">Routing</p>
-          <h2>Current route</h2>
-          <p className="route-chip">{getRoutePath(props.route)}</p>
-          <button
-            className="button button-secondary button-full"
-            onClick={() => props.onNavigate({ kind: "app-home" })}
-            type="button"
-          >
-            Back to workspaces
-          </button>
-          <dl className="detail-list compact-list">
-            <div>
-              <dt>User ID</dt>
-              <dd>{props.auth.user.id}</dd>
-            </div>
-            <div>
-              <dt>Session expires</dt>
-              <dd>{new Date(props.auth.session.expiresAt).toLocaleString()}</dd>
-            </div>
-            <div>
-              <dt>Memberships</dt>
-              <dd>{props.auth.memberships.length}</dd>
-            </div>
-          </dl>
-        </aside>
+      {editorData && editorPage && props.route.kind === "page" ? (
+        <PageEditorScreen
+          collab={props.runtimeUrls}
+          file={editorData.file}
+          onCreatePage={handleCreatePage}
+          onNavigate={props.onNavigate}
+          onRenameFile={handleRenameFile}
+          onRenamePage={handleRenamePage}
+          page={editorPage}
+          pages={editorData.pages}
+          project={editorData.project}
+          route={props.route}
+          workspace={editorData.workspace}
+        />
+      ) : (
+        <section className="app-shell">
+          <aside className="panel sidebar-panel">
+            <p className="eyebrow">Routing</p>
+            <h2>Current route</h2>
+            <p className="route-chip">{getRoutePath(props.route)}</p>
+            <button
+              className="button button-secondary button-full"
+              onClick={() => props.onNavigate({ kind: "app-home" })}
+              type="button"
+            >
+              Back to workspaces
+            </button>
+            <dl className="detail-list compact-list">
+              <div>
+                <dt>User ID</dt>
+                <dd>{props.auth.user.id}</dd>
+              </div>
+              <div>
+                <dt>Session expires</dt>
+                <dd>{new Date(props.auth.session.expiresAt).toLocaleString()}</dd>
+              </div>
+              <div>
+                <dt>Memberships</dt>
+                <dd>{props.auth.memberships.length}</dd>
+              </div>
+            </dl>
+          </aside>
 
-        <section className="main-panel-stack">
-          {resourceState.status === "loading" ? (
-            <article className="panel">
-              <p className="eyebrow">Loading</p>
-              <h2>Fetching metadata</h2>
-              <p className="muted">Reading the current workspace navigation state.</p>
-            </article>
-          ) : null}
-          {resourceState.status === "error" ? (
-            <article className="panel">
-              <p className="eyebrow">Request failed</p>
-              <h2>Metadata load failed</h2>
-              <p className="muted">{resourceState.message}</p>
-              <button
-                className="button button-primary"
-                onClick={() => void reloadResource()}
-                type="button"
-              >
-                Retry
-              </button>
-            </article>
-          ) : null}
-          {resourceState.status === "loaded" ? (
-            <NavigationContent
-              data={resourceState.value}
-              onCreateFile={handleCreateFile}
-              onCreatePage={handleCreatePage}
-              onCreateProject={handleCreateProject}
-              onNavigate={props.onNavigate}
-              onRenameFile={handleRenameFile}
-              onRenamePage={handleRenamePage}
-              onRenameProject={handleRenameProject}
-            />
-          ) : null}
+          <section className="main-panel-stack">
+            {resourceState.status === "loading" ? (
+              <article className="panel">
+                <p className="eyebrow">Loading</p>
+                <h2>Fetching metadata</h2>
+                <p className="muted">Reading the current workspace navigation state.</p>
+              </article>
+            ) : null}
+            {resourceState.status === "error" ? (
+              <article className="panel">
+                <p className="eyebrow">Request failed</p>
+                <h2>Metadata load failed</h2>
+                <p className="muted">{resourceState.message}</p>
+                <button
+                  className="button button-primary"
+                  onClick={() => void reloadResource()}
+                  type="button"
+                >
+                  Retry
+                </button>
+              </article>
+            ) : null}
+            {resourceState.status === "loaded" ? (
+              <NavigationContent
+                data={resourceState.value}
+                onCreateFile={handleCreateFile}
+                onCreatePage={handleCreatePage}
+                onCreateProject={handleCreateProject}
+                onNavigate={props.onNavigate}
+                onRenameFile={handleRenameFile}
+                onRenamePage={handleRenamePage}
+                onRenameProject={handleRenameProject}
+              />
+            ) : null}
+          </section>
         </section>
-      </section>
+      )}
     </main>
   );
 }
