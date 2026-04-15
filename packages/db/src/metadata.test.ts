@@ -5,6 +5,7 @@ import {
   createDatabasePool,
   createFileWithPages,
   createPage,
+  getAuthorizedCollabPageSession,
   listAuthorizedWorkspaces,
   listWorkspaceProjects,
   renameProject
@@ -233,6 +234,105 @@ test("renameProject does not rename projects outside the authorized workspace", 
       client
     );
     assert.equal(hiddenRename, null);
+  });
+
+  if (!ran) {
+    t.skip("database unavailable");
+  }
+});
+
+test("getAuthorizedCollabPageSession stays page/file/workspace scoped", async (t) => {
+  const ran = await withDatabaseTransaction(async (client) => {
+    const visibleUserId = await insertUser(
+      client,
+      `collab-visible-${Date.now()}@example.com`,
+      "Visible User"
+    );
+    const hiddenUserId = await insertUser(
+      client,
+      `collab-hidden-${Date.now()}@example.com`,
+      "Hidden User"
+    );
+    const workspaceId = await insertWorkspace(
+      client,
+      "Collab Workspace",
+      `collab-${Date.now()}`
+    );
+    const otherWorkspaceId = await insertWorkspace(
+      client,
+      "Other Workspace",
+      `collab-other-${Date.now()}`
+    );
+
+    await insertMembership(client, workspaceId, visibleUserId, "owner");
+    await insertMembership(client, otherWorkspaceId, hiddenUserId, "owner");
+
+    const projectId = await insertProject(client, workspaceId, "Collab Project");
+    const otherProjectId = await insertProject(
+      client,
+      otherWorkspaceId,
+      "Other Project"
+    );
+
+    const visibleFile = await createFileWithPages(
+      visibleUserId,
+      workspaceId,
+      projectId,
+      "Visible File",
+      [{ name: "Page A" }, { name: "Page B" }],
+      client
+    );
+    const hiddenFile = await createFileWithPages(
+      hiddenUserId,
+      otherWorkspaceId,
+      otherProjectId,
+      "Hidden File",
+      [{ name: "Page Hidden" }],
+      client
+    );
+
+    const visiblePageId = visibleFile?.pages[0]?.id as string;
+    const otherVisiblePageId = visibleFile?.pages[1]?.id as string;
+    const visibleFileId = visibleFile?.file.id as string;
+    const hiddenPageId = hiddenFile?.pages[0]?.id as string;
+
+    const visibleSession = await getAuthorizedCollabPageSession(
+      visibleUserId,
+      workspaceId,
+      visibleFileId,
+      visiblePageId,
+      client
+    );
+    assert.equal(visibleSession?.pageId, visiblePageId);
+    assert.equal(visibleSession?.fileId, visibleFileId);
+    assert.equal(visibleSession?.workspaceId, workspaceId);
+
+    const wrongPage = await getAuthorizedCollabPageSession(
+      visibleUserId,
+      workspaceId,
+      visibleFileId,
+      hiddenPageId,
+      client
+    );
+    assert.equal(wrongPage, null);
+
+    const wrongVisiblePage = await getAuthorizedCollabPageSession(
+      visibleUserId,
+      workspaceId,
+      hiddenFile?.file.id as string,
+      otherVisiblePageId,
+      client
+    );
+    assert.equal(wrongVisiblePage, null);
+
+    const nonMember = await getAuthorizedCollabPageSession(
+      hiddenUserId,
+      workspaceId,
+      visibleFileId,
+      visiblePageId,
+      client
+    );
+    assert.equal(nonMember, null);
   });
 
   if (!ran) {

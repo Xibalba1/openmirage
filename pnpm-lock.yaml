@@ -92,6 +92,9 @@ importers:
       '@openmirage/config-env':
         specifier: workspace:*
         version: link:../../packages/config-env
+      '@openmirage/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@openmirage/observability':
         specifier: workspace:*
         version: link:../../packages/observability

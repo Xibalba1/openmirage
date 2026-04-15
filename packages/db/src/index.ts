@@ -32,6 +32,7 @@ export {
 export {
   createFileWithPages,
   createPage,
+  getAuthorizedCollabPageSession,
   createProject,
   getFileOpenDetails,
   listAuthorizedWorkspaces,

@@ -42,6 +42,7 @@ export interface ApiEnv extends BaseServiceEnv {
 
 export interface CollabEnv extends BaseServiceEnv {
   authPath: string;
+  databaseUrl: string;
   service: "collab";
   port: number;
   apiBaseUrl: string;
@@ -353,6 +354,11 @@ export function readCollabEnv(source: EnvSource = process.env): CollabEnv {
   return {
     ...readBaseServiceEnv("collab", source),
     authPath: readUrlPath(source, "AUTH_PATH", "/auth"),
+    databaseUrl: readRequiredString(
+      source,
+      "DATABASE_URL",
+      "postgres://openmirage:openmirage@localhost:5432/openmirage"
+    ),
     service: "collab",
     port: readNumber(source, "COLLAB_PORT", 4100),
     apiBaseUrl: readRequiredString(

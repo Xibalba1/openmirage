@@ -163,6 +163,14 @@ export interface FileOpenResponse {
   workspace: WorkspaceDetailDto;
 }
 
+export interface CollabPageSessionDto {
+  documentName: string;
+  fileId: string;
+  pageId: string;
+  user: AuthenticatedUser;
+  workspaceId: string;
+}
+
 export interface AssetDto {
   id: string;
   workspaceId: string;
@@ -471,6 +479,10 @@ export interface AuthContext {
   session: AuthenticatedSession;
   user: AuthenticatedUser;
   memberships: WorkspaceMembershipSummary[];
+}
+
+export function createCollabDocumentName(pageId: string): string {
+  return `page:${pageId}`;
 }
 
 export interface ServiceCheck {

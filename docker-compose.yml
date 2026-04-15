@@ -142,6 +142,10 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     environment:
       OPENMIRAGE_ENV: ${OPENMIRAGE_ENV:-development}
       SERVICE_HOST: 0.0.0.0
@@ -152,6 +156,7 @@ services:
       API_BASE_URL: http://api:4000
       AUTH_PATH: ${AUTH_PATH:-/auth}
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-openmirage_session}
+      DATABASE_URL: postgres://openmirage:openmirage@postgres:5432/openmirage
       ENABLE_TEST_ERROR_ROUTES: "${ENABLE_TEST_ERROR_ROUTES:-false}"
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
