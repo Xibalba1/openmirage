@@ -59,6 +59,7 @@ import {
   type StorageConfig
 } from "@openmirage/types";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import { resolveCollabPageSession } from "./collab-session.js";
 
 interface StorageSmokeBody {
   bodyBase64: string;
@@ -89,6 +90,11 @@ interface FileParams extends ProjectParams {
 
 interface PageParams extends FileParams {
   pageId: string;
+}
+
+interface CollabPageSessionQuerystring {
+  fileId?: string;
+  workspaceId?: string;
 }
 
 function createAuthUnauthorizedReply(reply: FastifyReply) {
@@ -651,6 +657,30 @@ async function startApiServer(): Promise<void> {
     }
 
     return authContext;
+  });
+  app.get<{
+    Params: Pick<PageParams, "pageId">;
+    Querystring: CollabPageSessionQuerystring;
+  }>("/internal/collab/pages/:pageId/session", async (request, reply) => {
+    const authContext = await readAuthContextFromRequest(
+      request,
+      databasePool,
+      sessionContract
+    );
+    const resolution = await resolveCollabPageSession(
+      authContext,
+      {
+        pageId: request.params.pageId,
+        ...(request.query.fileId ? { fileId: request.query.fileId } : {}),
+        ...(request.query.workspaceId
+          ? { workspaceId: request.query.workspaceId }
+          : {})
+      },
+      databasePool
+    );
+
+    reply.status(resolution.status);
+    return resolution.body;
   });
   app.post(`${env.authPath}/logout`, async (request, reply) => {
     const token = readSessionTokenFromCookie(

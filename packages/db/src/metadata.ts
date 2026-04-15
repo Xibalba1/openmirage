@@ -1,10 +1,12 @@
 import {
+  type CollabPageSessionDto,
   type CreateFilePageInput,
   type FileDto,
   type FileOpenResponse,
   type PageDto,
   type ProjectDto,
-  type WorkspaceDetailDto
+  type WorkspaceDetailDto,
+  createCollabDocumentName
 } from "@openmirage/types";
 import { type Pool, type PoolClient } from "pg";
 import { createDatabasePool } from "./client.js";
@@ -52,6 +54,16 @@ interface PageRow {
   order_index: number;
   updated_at: Date;
   width: number | null;
+}
+
+interface AuthorizedCollabPageRow {
+  file_id: string;
+  page_id: string;
+  user_avatar_url: string | null;
+  user_display_name: string;
+  user_email: string;
+  user_id: string;
+  workspace_id: string;
 }
 
 function mapWorkspace(row: WorkspaceRow): WorkspaceDetailDto {
@@ -711,4 +723,58 @@ export async function renamePage(
   );
 
   return result.rows[0] ? mapPage(result.rows[0]) : null;
+}
+
+export async function getAuthorizedCollabPageSession(
+  userId: string,
+  workspaceId: string,
+  fileId: string,
+  pageId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<CollabPageSessionDto | null> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<AuthorizedCollabPageRow>(
+    `
+      select
+        files.id as file_id,
+        pages.id as page_id,
+        users.avatar_url as user_avatar_url,
+        users.display_name as user_display_name,
+        users.email as user_email,
+        users.id as user_id,
+        files.workspace_id
+      from pages
+      inner join files
+        on files.id = pages.file_id
+      inner join memberships
+        on memberships.workspace_id = files.workspace_id
+      inner join users
+        on users.id = memberships.user_id
+      where memberships.user_id = $1
+        and files.workspace_id = $2
+        and files.id = $3
+        and pages.id = $4
+        and files.deleted_at is null
+      limit 1
+    `,
+    [userId, workspaceId, fileId, pageId]
+  );
+  const row = result.rows[0];
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    documentName: createCollabDocumentName(row.page_id),
+    fileId: row.file_id,
+    pageId: row.page_id,
+    user: {
+      avatarUrl: row.user_avatar_url,
+      displayName: row.user_display_name,
+      email: row.user_email,
+      id: row.user_id
+    },
+    workspaceId: row.workspace_id
+  };
 }

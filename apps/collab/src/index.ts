@@ -4,6 +4,7 @@ import {
   readSessionTokenFromCookie
 } from "@openmirage/auth";
 import { readCollabEnv } from "@openmirage/config-env";
+import { checkDatabaseConnection, createDatabasePool } from "@openmirage/db";
 import {
   createErrorLogFields,
   createHttpMetrics,
@@ -12,25 +13,44 @@ import {
   createServiceLogger,
   initErrorReporter,
   registerProcessErrorHandlers,
+  summarizeChecks,
   registerServiceInfoMetrics
 } from "@openmirage/observability";
-import { type HealthStatus } from "@openmirage/types";
+import { createCollabDocumentName, type HealthStatus, type ReadyStatus } from "@openmirage/types";
 import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
 import { WebSocketServer } from "ws";
+import {
+  authorizeCollabConnection,
+  readCollabConnectionRequest,
+  rewriteRequestUrlWithDocumentName
+} from "./collab-auth.js";
+import { PgCollabPersistence } from "./persistence.js";
 
-function createCollabHealthStatus(
+async function createCollabHealthStatus(
   documentsCount: number,
   connectionsCount: number
-): HealthStatus {
+): Promise<HealthStatus> {
   const env = readCollabEnv();
   const session = createSessionContract({
     sessionCookieName: env.sessionCookieName
   });
+  const checks = {
+    env: {
+      ok: true,
+      summary: "environment loaded"
+    },
+    authBoundary: {
+      ok: true,
+      summary: `connection auth delegated to API/session layer at ${env.apiBaseUrl}`
+    },
+    persistence: await checkDatabaseConnection(env.databaseUrl)
+  };
+  const ok = Object.values(checks).every((check) => check.ok);
 
   return {
     service: "collab",
-    ok: true,
+    ok,
     environment: env.environment,
     timestamp: new Date().toISOString(),
     details: {
@@ -40,19 +60,51 @@ function createCollabHealthStatus(
       sessionCookieName: session.sessionCookieName,
       websocketPath: env.wsPath,
       activeDocuments: String(documentsCount),
-      activeConnections: String(connectionsCount)
+      activeConnections: String(connectionsCount),
+      ...summarizeChecks(checks)
     },
-    checks: {
-      env: {
-        ok: true,
-        summary: "environment loaded"
-      },
-      authBoundary: {
-        ok: true,
-        summary: `connection auth delegated to API/session layer at ${env.apiBaseUrl}`
-      }
-    }
+    checks
   };
+}
+
+async function createCollabReadyStatus(
+  documentsCount: number,
+  connectionsCount: number
+): Promise<ReadyStatus> {
+  const health = await createCollabHealthStatus(documentsCount, connectionsCount);
+
+  return {
+    ...health,
+    ready: health.ok
+  };
+}
+
+function readPageIdFromDocumentName(documentName: string): string | null {
+  return documentName.startsWith("page:")
+    ? documentName.slice("page:".length)
+    : null;
+}
+
+function writeUpgradeError(
+  socket: {
+    destroy(): void;
+    write(chunk: string): void;
+  },
+  statusCode: number
+): void {
+  const reason =
+    statusCode === 400
+      ? "Bad Request"
+      : statusCode === 401
+        ? "Unauthorized"
+        : statusCode === 403
+          ? "Forbidden"
+          : statusCode === 404
+            ? "Not Found"
+            : "Service Unavailable";
+
+  socket.write(`HTTP/1.1 ${statusCode} ${reason}\r\nConnection: close\r\n\r\n`);
+  socket.destroy();
 }
 
 async function startCollabServer(): Promise<void> {
@@ -112,13 +164,15 @@ async function startCollabServer(): Promise<void> {
     schemaVersion: "unmigrated"
   });
   serviceHealth.set({ service: "collab" }, 1);
-  serviceReady.set({ service: "collab" }, 1);
+  serviceReady.set({ service: "collab" }, 0);
   totalConnections.inc({ service: "collab" }, 0);
   disconnectsTotal.inc({ service: "collab" }, 0);
 
   const requestStartedAt = new WeakMap<object, bigint>();
   const socketConnectionIds = new WeakMap<object, string>();
   let activeSocketCount = 0;
+  const databasePool = createDatabasePool(env.databaseUrl);
+  const persistence = new PgCollabPersistence(databasePool);
 
   function syncRealtimeMetrics(): void {
     activeConnections.set({ service: "collab" }, activeSocketCount);
@@ -134,6 +188,8 @@ async function startCollabServer(): Promise<void> {
   });
 
   const hocuspocus = new Hocuspocus({
+    debounce: 2_000,
+    maxDebounce: 10_000,
     name: "openmirage-collab",
     quiet: true,
     async onConnect(data) {
@@ -151,15 +207,40 @@ async function startCollabServer(): Promise<void> {
     },
     async onLoadDocument(data) {
       syncRealtimeMetrics();
+      const pageId = readPageIdFromDocumentName(data.documentName);
+
+      if (!pageId) {
+        throw new Error(`Invalid collab document name: ${data.documentName}`);
+      }
+
+      const loaded = await persistence.loadPageDocument(pageId);
       logger.info("collab document load requested", {
         documentName: data.documentName,
+        lastSequence: loaded.lastSequence,
+        pageId,
         socketId: data.socketId
       });
+      return loaded.document;
     },
     async onChange(data) {
+      const pageId = readPageIdFromDocumentName(data.documentName);
+
+      if (!pageId) {
+        throw new Error(`Invalid collab document name: ${data.documentName}`);
+      }
+
+      const sequence = await persistence.appendUpdate(pageId, data.update);
+      const compacted = await persistence.compactPageDocument(
+        pageId,
+        data.document
+      );
+
       logger.debug("collab document changed", {
         clientsCount: data.clientsCount,
+        compacted,
         documentName: data.documentName,
+        pageId,
+        sequence,
         socketId: data.socketId
       });
     },
@@ -250,6 +331,19 @@ async function startCollabServer(): Promise<void> {
       hocuspocus.getConnectionsCount()
     )
   );
+  app.get("/readyz", async (_request, reply) => {
+    const ready = await createCollabReadyStatus(
+      hocuspocus.getDocumentsCount(),
+      hocuspocus.getConnectionsCount()
+    );
+    serviceReady.set({ service: "collab" }, ready.ready ? 1 : 0);
+
+    if (!ready.ready) {
+      reply.status(503);
+    }
+
+    return ready;
+  });
   app.get("/metrics", async (_request, reply) => {
     syncRealtimeMetrics();
     reply.header("content-type", "text/plain; version=0.0.4; charset=utf-8");
@@ -283,13 +377,14 @@ async function startCollabServer(): Promise<void> {
       request.headers.cookie,
       sessionContract
     );
-    const documentName =
-      requestUrl.searchParams.get("documentName") ?? "unknown";
-    const workspaceId = requestUrl.searchParams.get("workspaceId") ?? undefined;
+    const connectionRequest = readCollabConnectionRequest(
+      requestUrl.searchParams
+    );
+    const documentName = connectionRequest.documentName ?? "unknown";
+    const workspaceId = connectionRequest.workspaceId;
 
     if (!sessionToken) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-      socket.destroy();
+      writeUpgradeError(socket, 401);
       logger.warn("collab websocket rejected", {
         connectionReason: "missing-session-cookie",
         documentName,
@@ -297,51 +392,31 @@ async function startCollabServer(): Promise<void> {
       });
       return;
     }
+    const authorized = await authorizeCollabConnection(connectionRequest, {
+      apiBaseUrl: env.apiBaseUrl,
+      cookieHeader: request.headers.cookie ?? ""
+    });
 
-    const authCheckUrl = new URL(`${env.apiBaseUrl}${env.authPath}/session`);
-
-    if (workspaceId) {
-      authCheckUrl.searchParams.set("workspaceId", workspaceId);
-    }
-
-    let authResponse: Response;
-
-    try {
-      authResponse = await fetch(authCheckUrl, {
-        headers: {
-          cookie: request.headers.cookie ?? ""
-        }
-      });
-    } catch (error) {
-      socket.write(
-        "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n"
-      );
-      socket.destroy();
-      logger.error("collab websocket auth check failed", {
-        documentName,
-        error: error instanceof Error ? error.message : String(error),
-        workspaceId
-      });
-      return;
-    }
-
-    if (!authResponse.ok) {
-      socket.write(
-        `HTTP/1.1 ${authResponse.status} ${
-          authResponse.status === 403 ? "Forbidden" : "Unauthorized"
-        }\r\nConnection: close\r\n\r\n`
-      );
-      socket.destroy();
+    if (!authorized.ok) {
+      writeUpgradeError(socket, authorized.status);
       logger.warn("collab websocket rejected", {
-        connectionReason:
-          authResponse.status === 403
-            ? "missing-workspace-membership"
-            : "invalid-session",
+        connectionReason: authorized.reason,
         documentName,
+        fileId: connectionRequest.fileId,
+        pageId: connectionRequest.pageId,
         workspaceId
       });
       return;
     }
+
+    const canonicalDocumentName = createCollabDocumentName(
+      authorized.session.pageId
+    );
+    request.url = rewriteRequestUrlWithDocumentName(
+      request.url ?? env.wsPath,
+      canonicalDocumentName,
+      `http://${request.headers.host ?? `${env.host}:${env.port}`}`
+    );
 
     websocketServer.handleUpgrade(request, socket, head, (websocket) => {
       const closableSocket = websocket as {
@@ -356,7 +431,10 @@ async function startCollabServer(): Promise<void> {
       logger.info("collab websocket accepted", {
         authenticated: true,
         connectionId,
-        documentName
+        documentName: canonicalDocumentName,
+        fileId: authorized.session.fileId,
+        pageId: authorized.session.pageId,
+        workspaceId: authorized.session.workspaceId
       });
 
       closableSocket.once("close", () => {
@@ -368,12 +446,13 @@ async function startCollabServer(): Promise<void> {
         syncRealtimeMetrics();
         logger.info("collab websocket closed", {
           connectionId: closedConnectionId,
-          documentName
+          documentName: canonicalDocumentName
         });
       });
 
       hocuspocus.handleConnection(websocket, request, {
-        connectedAt: new Date().toISOString()
+        connectedAt: new Date().toISOString(),
+        user: authorized.session.user
       });
     });
   });
