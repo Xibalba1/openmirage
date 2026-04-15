@@ -103,6 +103,66 @@ export interface PageDto {
   updatedAt: string;
 }
 
+export interface WorkspaceDetailDto extends WorkspaceDto {
+  membershipId: string;
+  role: MembershipRole;
+}
+
+export interface ProjectListResponse {
+  projects: ProjectDto[];
+  workspace: WorkspaceDetailDto;
+}
+
+export interface FileListResponse {
+  files: FileDto[];
+  project: ProjectDto;
+  workspace: WorkspaceDetailDto;
+}
+
+export interface PageListResponse {
+  file: FileDto;
+  pages: PageDto[];
+  project: ProjectDto;
+  workspace: WorkspaceDetailDto;
+}
+
+export interface CreateProjectInput {
+  name: string;
+}
+
+export interface RenameProjectInput {
+  name: string;
+}
+
+export interface CreateFilePageInput {
+  name: string;
+}
+
+export interface CreateFileInput {
+  initialPages: CreateFilePageInput[];
+  name: string;
+}
+
+export interface RenameFileInput {
+  name: string;
+}
+
+export interface CreatePageInput {
+  name: string;
+}
+
+export interface RenamePageInput {
+  name: string;
+}
+
+export interface FileOpenResponse {
+  defaultPageId: string | null;
+  file: FileDto;
+  pages: PageDto[];
+  project: ProjectDto;
+  workspace: WorkspaceDetailDto;
+}
+
 export interface AssetDto {
   id: string;
   workspaceId: string;

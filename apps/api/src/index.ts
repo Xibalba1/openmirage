@@ -13,13 +13,24 @@ import {
   checkDatabaseConnection,
   checkMetadataStore,
   consumeMagicLinkToken,
+  createFileWithPages,
+  createPage,
+  createProject,
   createDatabasePool,
   createMetadataStoreContract,
   deriveDisplayName,
+  getFileOpenDetails,
   getAuthContextForSessionToken,
   getApplicationVersionInfo,
   issueMagicLinkForEmail,
+  listAuthorizedWorkspaces,
+  listFilePages,
+  listProjectFiles,
+  listWorkspaceProjects,
   refreshSession,
+  renameFile,
+  renamePage,
+  renameProject,
   revokeSession
 } from "@openmirage/db";
 import {
@@ -35,7 +46,13 @@ import {
 } from "@openmirage/observability";
 import { createStorage } from "@openmirage/storage";
 import {
+  type CreateFileInput,
+  type CreatePageInput,
+  type CreateProjectInput,
   type AuthContext,
+  type RenameFileInput,
+  type RenamePageInput,
+  type RenameProjectInput,
   type HealthStatus,
   type ReadyStatus,
   type ServiceCheck,
@@ -58,6 +75,22 @@ interface SessionQuerystring {
   workspaceId?: string;
 }
 
+interface WorkspaceParams {
+  workspaceId: string;
+}
+
+interface ProjectParams extends WorkspaceParams {
+  projectId: string;
+}
+
+interface FileParams extends ProjectParams {
+  fileId: string;
+}
+
+interface PageParams extends FileParams {
+  pageId: string;
+}
+
 function createAuthUnauthorizedReply(reply: FastifyReply) {
   reply.status(401);
   return {
@@ -69,6 +102,13 @@ function createAuthForbiddenReply(reply: FastifyReply) {
   reply.status(403);
   return {
     error: "forbidden"
+  };
+}
+
+function createNotFoundReply(reply: FastifyReply) {
+  reply.status(404);
+  return {
+    error: "not_found"
   };
 }
 
@@ -134,6 +174,48 @@ function hasWorkspaceMembership(
   return authContext.memberships.some(
     (membership) => membership.workspaceId === workspaceId
   );
+}
+
+async function requireAuthContext(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  databasePool: ReturnType<typeof createDatabasePool>,
+  sessionContract = createSessionContractFromEnv()
+): Promise<AuthContext | null> {
+  const authContext = await readAuthContextFromRequest(
+    request,
+    databasePool,
+    sessionContract
+  );
+
+  if (!authContext) {
+    createAuthUnauthorizedReply(reply);
+    return null;
+  }
+
+  return authContext;
+}
+
+function requireWorkspaceMembership(
+  authContext: AuthContext,
+  workspaceId: string,
+  reply: FastifyReply
+): boolean {
+  if (hasWorkspaceMembership(authContext, workspaceId)) {
+    return true;
+  }
+
+  createAuthForbiddenReply(reply);
+  return false;
+}
+
+function readNonEmptyName(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function describeConfiguredStorage(storageConfig: StorageConfig): ServiceCheck {
@@ -586,6 +668,445 @@ async function startApiServer(): Promise<void> {
       ok: true
     };
   });
+  app.get("/v1/workspaces", async (request, reply) => {
+    const authContext = await requireAuthContext(
+      request,
+      reply,
+      databasePool,
+      sessionContract
+    );
+
+    if (!authContext) {
+      return reply;
+    }
+
+    return {
+      workspaces: await listAuthorizedWorkspaces(authContext.user.id, databasePool)
+    };
+  });
+  app.get<{ Params: WorkspaceParams }>(
+    "/v1/workspaces/:workspaceId/projects",
+    async (request, reply) => {
+      const authContext = await requireAuthContext(
+        request,
+        reply,
+        databasePool,
+        sessionContract
+      );
+
+      if (!authContext) {
+        return reply;
+      }
+
+      if (
+        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+      ) {
+        return reply;
+      }
+
+      const result = await listWorkspaceProjects(
+        authContext.user.id,
+        request.params.workspaceId,
+        databasePool
+      );
+
+      if (!result) {
+        return createNotFoundReply(reply);
+      }
+
+      return result;
+    }
+  );
+  app.post<{ Body: CreateProjectInput; Params: WorkspaceParams }>(
+    "/v1/workspaces/:workspaceId/projects",
+    async (request, reply) => {
+      const authContext = await requireAuthContext(
+        request,
+        reply,
+        databasePool,
+        sessionContract
+      );
+
+      if (!authContext) {
+        return reply;
+      }
+
+      if (
+        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+      ) {
+        return reply;
+      }
+
+      const name = readNonEmptyName(request.body?.name);
+
+      if (!name) {
+        reply.status(400);
+        return {
+          error: "name is required"
+        };
+      }
+
+      const project = await createProject(
+        authContext.user.id,
+        request.params.workspaceId,
+        name,
+        databasePool
+      );
+
+      if (!project) {
+        return createNotFoundReply(reply);
+      }
+
+      reply.status(201);
+      return project;
+    }
+  );
+  app.patch<{ Body: RenameProjectInput; Params: ProjectParams }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId",
+    async (request, reply) => {
+      const authContext = await requireAuthContext(
+        request,
+        reply,
+        databasePool,
+        sessionContract
+      );
+
+      if (!authContext) {
+        return reply;
+      }
+
+      if (
+        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+      ) {
+        return reply;
+      }
+
+      const name = readNonEmptyName(request.body?.name);
+
+      if (!name) {
+        reply.status(400);
+        return {
+          error: "name is required"
+        };
+      }
+
+      const project = await renameProject(
+        authContext.user.id,
+        request.params.workspaceId,
+        request.params.projectId,
+        name,
+        databasePool
+      );
+
+      if (!project) {
+        return createNotFoundReply(reply);
+      }
+
+      return project;
+    }
+  );
+  app.get<{ Params: ProjectParams }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files",
+    async (request, reply) => {
+      const authContext = await requireAuthContext(
+        request,
+        reply,
+        databasePool,
+        sessionContract
+      );
+
+      if (!authContext) {
+        return reply;
+      }
+
+      if (
+        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+      ) {
+        return reply;
+      }
+
+      const result = await listProjectFiles(
+        authContext.user.id,
+        request.params.workspaceId,
+        request.params.projectId,
+        databasePool
+      );
+
+      if (!result) {
+        return createNotFoundReply(reply);
+      }
+
+      return result;
+    }
+  );
+  app.post<{ Body: CreateFileInput; Params: ProjectParams }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files",
+    async (request, reply) => {
+      const authContext = await requireAuthContext(
+        request,
+        reply,
+        databasePool,
+        sessionContract
+      );
+
+      if (!authContext) {
+        return reply;
+      }
+
+      if (
+        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+      ) {
+        return reply;
+      }
+
+      const name = readNonEmptyName(request.body?.name);
+      const initialPages = Array.isArray(request.body?.initialPages)
+        ? request.body.initialPages
+            .map((page) => {
+              const pageName = readNonEmptyName(page?.name);
+              return pageName ? { name: pageName } : null;
+            })
+            .filter((page): page is { name: string } => page !== null)
+        : [];
+
+      if (!name) {
+        reply.status(400);
+        return {
+          error: "name is required"
+        };
+      }
+
+      if (initialPages.length === 0) {
+        reply.status(400);
+        return {
+          error: "initialPages must contain at least one named page"
+        };
+      }
+
+      const file = await createFileWithPages(
+        authContext.user.id,
+        request.params.workspaceId,
+        request.params.projectId,
+        name,
+        initialPages,
+        databasePool
+      );
+
+      if (!file) {
+        return createNotFoundReply(reply);
+      }
+
+      reply.status(201);
+      return file;
+    }
+  );
+  app.patch<{ Body: RenameFileInput; Params: FileParams }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId",
+    async (request, reply) => {
+      const authContext = await requireAuthContext(
+        request,
+        reply,
+        databasePool,
+        sessionContract
+      );
+
+      if (!authContext) {
+        return reply;
+      }
+
+      if (
+        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+      ) {
+        return reply;
+      }
+
+      const name = readNonEmptyName(request.body?.name);
+
+      if (!name) {
+        reply.status(400);
+        return {
+          error: "name is required"
+        };
+      }
+
+      const file = await renameFile(
+        authContext.user.id,
+        request.params.workspaceId,
+        request.params.projectId,
+        request.params.fileId,
+        name,
+        databasePool
+      );
+
+      if (!file) {
+        return createNotFoundReply(reply);
+      }
+
+      return file;
+    }
+  );
+  app.get<{ Params: FileParams }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId",
+    async (request, reply) => {
+      const authContext = await requireAuthContext(
+        request,
+        reply,
+        databasePool,
+        sessionContract
+      );
+
+      if (!authContext) {
+        return reply;
+      }
+
+      if (
+        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+      ) {
+        return reply;
+      }
+
+      const result = await getFileOpenDetails(
+        authContext.user.id,
+        request.params.workspaceId,
+        request.params.projectId,
+        request.params.fileId,
+        databasePool
+      );
+
+      if (!result) {
+        return createNotFoundReply(reply);
+      }
+
+      return result;
+    }
+  );
+  app.get<{ Params: FileParams }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/pages",
+    async (request, reply) => {
+      const authContext = await requireAuthContext(
+        request,
+        reply,
+        databasePool,
+        sessionContract
+      );
+
+      if (!authContext) {
+        return reply;
+      }
+
+      if (
+        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+      ) {
+        return reply;
+      }
+
+      const result = await listFilePages(
+        authContext.user.id,
+        request.params.workspaceId,
+        request.params.projectId,
+        request.params.fileId,
+        databasePool
+      );
+
+      if (!result) {
+        return createNotFoundReply(reply);
+      }
+
+      return result;
+    }
+  );
+  app.post<{ Body: CreatePageInput; Params: FileParams }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/pages",
+    async (request, reply) => {
+      const authContext = await requireAuthContext(
+        request,
+        reply,
+        databasePool,
+        sessionContract
+      );
+
+      if (!authContext) {
+        return reply;
+      }
+
+      if (
+        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+      ) {
+        return reply;
+      }
+
+      const name = readNonEmptyName(request.body?.name);
+
+      if (!name) {
+        reply.status(400);
+        return {
+          error: "name is required"
+        };
+      }
+
+      const page = await createPage(
+        authContext.user.id,
+        request.params.workspaceId,
+        request.params.projectId,
+        request.params.fileId,
+        name,
+        databasePool
+      );
+
+      if (!page) {
+        return createNotFoundReply(reply);
+      }
+
+      reply.status(201);
+      return page;
+    }
+  );
+  app.patch<{ Body: RenamePageInput; Params: PageParams }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/pages/:pageId",
+    async (request, reply) => {
+      const authContext = await requireAuthContext(
+        request,
+        reply,
+        databasePool,
+        sessionContract
+      );
+
+      if (!authContext) {
+        return reply;
+      }
+
+      if (
+        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+      ) {
+        return reply;
+      }
+
+      const name = readNonEmptyName(request.body?.name);
+
+      if (!name) {
+        reply.status(400);
+        return {
+          error: "name is required"
+        };
+      }
+
+      const page = await renamePage(
+        authContext.user.id,
+        request.params.workspaceId,
+        request.params.projectId,
+        request.params.fileId,
+        request.params.pageId,
+        name,
+        databasePool
+      );
+
+      if (!page) {
+        return createNotFoundReply(reply);
+      }
+
+      return page;
+    }
+  );
   app.get("/internal/storage/smoke", async () => {
     await storage.ensureBucket();
 

@@ -105,9 +105,10 @@ This Epic is organized into 10 Sprints. Each Sprint leaves the repo in a usable,
 
 10. **Sprint 10: Hardening, staging closure, and Epic acceptance**  
     Delivery: `Codex + Operator`  
-    Close gaps across auth flows, deploy config, observability, sample data, test coverage, and runbooks; then run the full MVP acceptance pass locally and in staging. Done when the app satisfies the `plan/mvp` docs end-to-end and remaining work is polish or explicit non-goals.
+    Close gaps across auth flows, deploy config, observability, sample data, test coverage, and runbooks; formally establish real app-level automated test infrastructure for `apps/api` and `apps/web`; then run the full MVP acceptance pass locally and in staging. Done when the app satisfies the `plan/mvp` docs end-to-end and remaining work is polish or explicit non-goals.
     Success conditions:
     - The documented static validation suite and targeted MVP tests all pass at the repo root.
+    - `apps/api` and `apps/web` use real automated test harnesses rather than placeholder package test commands, with app-level coverage for the highest-value MVP API and browser flows wired into the normal repo verification path.
     - The full MVP smoke flow passes locally: sign in, create/open a file, edit multiple pages, collaborate, comment, inspect, share, upload an asset, and complete an export.
     - The same MVP smoke flow is verified in staging with operator-owned environment steps completed, and any remaining open items are explicitly documented as polish or out-of-scope non-goals rather than MVP blockers.
 
