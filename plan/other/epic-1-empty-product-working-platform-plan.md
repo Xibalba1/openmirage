@@ -48,9 +48,9 @@ The phase is complete when:
   - shared packages cannot depend on apps
   - infra config is centralized, not duplicated per app
 - Success conditions:
-  - From a clean checkout, `pnpm install` exits with code `0` without manual manifest edits.
-  - `pnpm build`, `pnpm lint`, and `pnpm typecheck` each exit with code `0` at the repo root.
-  - The root `README.md` explicitly lists every top-level app and shared package category expected for this phase.
+  - workspace install succeeds from a clean checkout
+  - `pnpm build`, `pnpm lint`, and `pnpm typecheck` resolve every workspace package
+  - app/package boundaries are documented in the root README
 
 ### 2. Add shared TypeScript, linting, formatting, and editor tooling
 
@@ -58,9 +58,9 @@ The phase is complete when:
 - Standardize ESLint, Prettier, ignore files, and optional commit hooks/check scripts.
 - Add import/path conventions and a strict-enough TS baseline to prevent early drift without blocking scaffolding.
 - Success conditions:
-  - Every workspace `tsconfig.json` extends a shared config package rather than defining a standalone compiler baseline.
-  - `pnpm lint` and `pnpm typecheck` both exit with code `0` on the empty scaffolding.
-  - One repo-level formatting command exists, is documented, and `pnpm format:check` exits with code `0` immediately after `pnpm format`.
+  - all packages inherit from shared config rather than bespoke local config
+  - lint/typecheck pass on the empty scaffolding
+  - one formatting command rewrites the whole repo consistently
 
 ### 3. Scaffold the runtime services with health contracts
 
@@ -69,9 +69,9 @@ The phase is complete when:
 - Wire the frontend shell to talk to the API and expose environment-driven service URLs.
 - Keep product routes empty; only include a landing shell, auth entrypoint, and service-status plumbing.
 - Success conditions:
-  - `pnpm --filter @openmirage/web dev`, `pnpm --filter @openmirage/api dev`, `pnpm --filter @openmirage/collab dev`, and `pnpm --filter @openmirage/worker dev` each start successfully on their own.
-  - The web shell renders in a browser and displays successful reachability checks for the API and collab services using configured runtime URLs.
-  - API, collab, and worker logs each include the service name and environment on startup and on at least one handled request or event.
+  - each service starts independently in dev mode
+  - the frontend can load and confirm API/collab reachability
+  - logs clearly identify the service, environment, and request or event context
 
 ### 4. Define the database baseline and migration workflow
 
@@ -80,9 +80,9 @@ The phase is complete when:
 - Choose one migration tool and standardize commands for create/apply/status/reset.
 - Add a minimal seed/bootstrap path that creates one workspace and one test user flow for local verification.
 - Success conditions:
-  - Against a blank Postgres instance, `pnpm db:migrate:up` exits with code `0` without manual SQL execution.
-  - The applied schema contains tables for users, workspaces, memberships, projects, files, pages, sessions, magic-link artifacts, assets, comments, share links, and export jobs, and contains no relational node-content tables for page scene graph data.
-  - After `pnpm db:reset` and `pnpm db:seed`, the documented bootstrap workspace, project, file, page, and test-user records exist and can be queried successfully.
+  - migrations run from a blank Postgres instance without manual SQL
+  - schema reflects the documented product-domain boundaries
+  - a fresh local stack can bootstrap to a known initial state
 
 ### 5. Build the auth and session foundation
 
@@ -95,9 +95,9 @@ The phase is complete when:
   - route protection primitives for API and collab connection checks
 - Defer invites and full share-link UX; only add the underlying session and membership enforcement needed to support future product work.
 - Success conditions:
-  - In local development, posting to the magic-link request endpoint returns a valid dev delivery artifact or logged-link fallback for a known test user.
-  - Session create, validate, refresh, and logout flows each return the expected HTTP status and cookie behavior both through Caddy and by calling the API service directly.
-  - A collab websocket upgrade attempt without a valid session cookie is rejected with `401`, and an authenticated attempt for an allowed workspace succeeds.
+  - a user can request a magic link in local dev using a dev mail capture path or logged-link fallback
+  - session creation, refresh/validation, and logout work through Caddy and direct dev mode
+  - collab connection authorization can reject unauthenticated access
 
 ### 6. Add the storage abstraction and local object storage
 
@@ -106,9 +106,9 @@ The phase is complete when:
 - Support a local filesystem fallback only behind the same interface, not as a separate code path scattered across services.
 - Add asset bucket/bootstrap helpers and health checks.
 - Success conditions:
-  - With the local stack running, the configured bucket is created automatically and the storage health check reports `ok: true`.
-  - The API storage smoke path can upload an object, list it, and delete it successfully in one run using the shared storage abstraction.
-  - Switching between `minio`, `s3-compatible`, and `local` storage providers requires env changes only and no application code changes.
+  - local stack can create and reach the configured bucket automatically
+  - API can perform a basic upload/list/delete smoke path through the abstraction
+  - staging config can switch providers without application code changes
 
 ### 7. Add Dockerfiles and Compose for local one-command boot
 
@@ -116,9 +116,9 @@ The phase is complete when:
 - Create a local `docker-compose` stack for web, API, collab, worker, Postgres, MinIO, and Caddy.
 - Make one documented command the default local bootstrap path, including dependency install, service startup, migrations, and seed/bootstrap where appropriate.
 - Success conditions:
-  - On a machine that satisfies the documented prerequisites, the documented one-command bootstrap path completes successfully from the repo root.
-  - Browser and HTTP access to the stack works through Caddy, and bypassing Caddy is not required for any documented local verification flow.
-  - Web, API, collab websocket, worker, Postgres, and MinIO are each reachable on their documented local hostnames or ports after the stack boots.
+  - a new machine can boot the full stack with one command from the repo root
+  - Caddy is the single local entrypoint
+  - API, collab websocket, Postgres, and MinIO are reachable through the expected hostnames/ports
 
 ### 8. Add Caddy and staging-facing runtime wiring
 
@@ -129,9 +129,9 @@ The phase is complete when:
   - static frontend serving or frontend proxying, depending on chosen container layout
 - Normalize forwarded headers, secure cookies, and origin handling so auth/session behavior matches staging reality early.
 - Success conditions:
-  - Local verification of `/`, `/healthz`, `/readyz`, `/metrics`, `/collab/healthz`, and websocket upgrade at `/collab` succeeds through Caddy.
-  - In staging, the public domain routes web, API, and collab websocket traffic to the correct services without path rewriting bugs.
-  - Session cookies set behind the reverse proxy remain valid across magic-link consume, session read, refresh, and logout flows.
+  - local routing works through Caddy only
+  - staging domain routes web, API, and websocket traffic correctly
+  - cookie/session behavior is stable behind the reverse proxy
 
 ### 9. Add CI for validation and deploy packaging
 
@@ -143,9 +143,9 @@ The phase is complete when:
   - staging deploy trigger on the protected branch/environment
 - Keep CI lean; it should prove reproducibility of the monorepo and deployment artifacts, not add heavy platform machinery.
 - Success conditions:
-  - Every pull request or mainline change triggers a CI workflow that runs the documented static validation commands and fails the run on any non-zero exit code.
-  - CI builds the same checked-in Docker images used by local Compose and staging deploys.
-  - Staging deployment is initiated by one documented workflow using environment-scoped secrets, with no required manual image build step on the VPS.
+  - every PR or mainline change runs static validation
+  - CI can build the same images used locally and in staging
+  - staging deploy is one pipeline action with environment-specific secrets, not a manual snowflake process
 
 ### 10. Define staging deployment procedure for the VPS
 
@@ -157,9 +157,9 @@ The phase is complete when:
 - Prefer immutable image deploys with Compose pull/up rather than building ad hoc on the server.
 - Include migration execution, rollback expectations, and post-deploy verification steps.
 - Success conditions:
-  - Following the written procedure on a fresh VPS produces a running staging stack without relying on undocumented manual steps.
-  - A second staging deploy using the same procedure completes successfully without changing the procedure itself.
-  - Post-deploy verification confirms successful connectivity for web, API, collab, database, and storage using the documented checks.
+  - a fresh VPS can be provisioned from the written procedure
+  - staging update is repeatable and does not require undocumented shell history
+  - post-deploy checks confirm web, API, collab, database, and storage connectivity
 
 ### 11. Add logging, metrics, and error-reporting basics
 
@@ -168,9 +168,9 @@ The phase is complete when:
 - Add one error-reporting path suitable for MVP operations, with clear environment gating.
 - Do not add heavyweight observability infrastructure beyond what helps an operator debug the VPS deployment.
 - Success conditions:
-  - API, collab, and worker logs are readable via `docker compose logs` and include structured fields for service identity and request or event context.
-  - Health and metrics endpoints for the main services return successful responses locally and in staging.
-  - Triggering one forced test error in an environment with error reporting enabled produces a visible event in the configured error-reporting sink.
+  - service logs are readable through `docker compose logs`
+  - metrics and health endpoints can be queried locally and in staging
+  - one forced test error is visible in the configured error-reporting sink
 
 ### 12. Add backup, restore, and recovery runbooks
 
@@ -182,9 +182,9 @@ The phase is complete when:
 - Write and execute a one-time restore drill into a disposable environment.
 - Record the exact commands, expected artifacts, and verification checks.
 - Success conditions:
-  - At least one backup artifact set exists and contains the documented manifest, checksum data, Postgres backup, and any required self-hosted asset/config artifacts.
-  - A restore drill into a clean target environment completes successfully and the documented post-restore app checks pass.
-  - The recovery runbook contains enough exact commands and prerequisites for an operator to reprovision the stack without consulting shell history.
+  - at least one successful backup artifact exists from staging or a staging-equivalent environment
+  - restore has been performed once into a clean target and basic app checks passed afterward
+  - the recovery runbook is complete enough to reprovision a failed VPS
 
 ### 13. Close the phase with an “empty product, working platform” acceptance pass
 
@@ -199,9 +199,9 @@ The phase is complete when:
   - logs, metrics, and error reporting are visible
   - backup artifact exists and restore has been validated once
 - Success conditions:
-  - Every checklist item above passes in both local and staging verification without mid-run env edits or ad hoc manual fixes.
-  - Any remaining open issues are explicitly classified as product-scope gaps rather than platform or deployment blockers.
-  - The acceptance evidence and runbooks are complete enough that the next Epic can begin product implementation without additional platform foundation work.
+  - every checklist item passes without hand-editing the environment mid-run
+  - remaining gaps are product features, not platform blockers
+  - the repo is ready for feature implementation on top of stable platform seams
 
 ## Step Dependencies and Parallelization
 
