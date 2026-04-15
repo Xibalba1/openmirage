@@ -24,8 +24,9 @@
     "seed": "node --import tsx ./scripts/seed.mjs"
   },
   "dependencies": {
+    "@openmirage/types": "workspace:*",
     "pg": "^8.13.1",
-    "@openmirage/types": "workspace:*"
+    "yjs": "^13.6.27"
   },
   "devDependencies": {
     "@types/pg": "^8.15.5",

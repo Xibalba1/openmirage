@@ -1,5 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
+import { type PageDocumentDto } from "@openmirage/types";
 import { type PoolClient } from "pg";
+import * as Y from "yjs";
 import { createDatabasePool } from "./client.js";
 
 const DEFAULT_USER_EMAIL = "dev@openmirage.local";
@@ -72,6 +74,7 @@ export async function seedDevelopmentBootstrap(
       user.id
     );
     const page = await findOrCreatePage(client, file.id);
+    await ensurePageCollabDocument(client, page.id);
     const session = await findOrCreateSession(client, user.id);
     const magicLinkToken = await findOrCreateMagicLinkToken(client, user.id);
     const summary = {
@@ -327,6 +330,233 @@ async function findOrCreatePage(
     created: true,
     id: requireRow(inserted.rows, "inserted page").id
   };
+}
+
+function buildBootstrapPageDocument(pageId: string): PageDocumentDto {
+  const timestamp = new Date().toISOString();
+
+  return {
+    nodes: {
+      "frame-root": {
+        background: {
+          color: { alpha: 1, hex: "#ffffff" }
+        },
+        childIds: ["title-text", "hero-card", "hero-group", "accent-line"],
+        clipsContent: false,
+        cornerRadius: 28,
+        createdAt: timestamp,
+        height: 760,
+        id: "frame-root",
+        locked: false,
+        name: "App Frame",
+        opacity: 1,
+        pageId,
+        parentId: null,
+        rotation: 0,
+        stroke: {
+          color: { alpha: 1, hex: "#d7e0e8" },
+          width: 1
+        },
+        type: "frame",
+        updatedAt: timestamp,
+        visible: true,
+        width: 1180,
+        x: 120,
+        y: 120,
+        zIndex: 0
+      },
+      "title-text": {
+        content: "OpenMirage Sprint 4",
+        createdAt: timestamp,
+        height: 48,
+        id: "title-text",
+        locked: false,
+        name: "Title",
+        opacity: 1,
+        pageId,
+        parentId: "frame-root",
+        rotation: 0,
+        typography: {
+          color: { alpha: 1, hex: "#132c35" },
+          fontFamily: "IBM Plex Sans",
+          fontSize: 32,
+          fontWeight: 700,
+          lineHeight: 40,
+          textAlign: "left"
+        },
+        type: "text",
+        updatedAt: timestamp,
+        visible: true,
+        width: 420,
+        x: 48,
+        y: 40,
+        zIndex: 0
+      },
+      "hero-card": {
+        cornerRadius: 24,
+        createdAt: timestamp,
+        fill: {
+          color: { alpha: 1, hex: "#f5a24a" }
+        },
+        height: 220,
+        id: "hero-card",
+        locked: false,
+        name: "Hero Card",
+        opacity: 1,
+        pageId,
+        parentId: "frame-root",
+        rotation: 0,
+        shadow: null,
+        stroke: null,
+        type: "rectangle",
+        updatedAt: timestamp,
+        visible: true,
+        width: 360,
+        x: 56,
+        y: 128,
+        zIndex: 0
+      },
+      "hero-group": {
+        childIds: ["group-ellipse", "group-image"],
+        createdAt: timestamp,
+        height: 300,
+        id: "hero-group",
+        locked: false,
+        name: "Hero Cluster",
+        opacity: 1,
+        pageId,
+        parentId: "frame-root",
+        rotation: 0,
+        type: "group",
+        updatedAt: timestamp,
+        visible: true,
+        width: 360,
+        x: 580,
+        y: 160,
+        zIndex: 1
+      },
+      "group-ellipse": {
+        createdAt: timestamp,
+        fill: {
+          color: { alpha: 1, hex: "#5fabc0" }
+        },
+        height: 180,
+        id: "group-ellipse",
+        locked: false,
+        name: "Accent Ellipse",
+        opacity: 0.95,
+        pageId,
+        parentId: "hero-group",
+        rotation: 0,
+        shadow: null,
+        stroke: null,
+        type: "ellipse",
+        updatedAt: timestamp,
+        visible: true,
+        width: 180,
+        x: 36,
+        y: 16,
+        zIndex: 0
+      },
+      "group-image": {
+        assetId: "seed-image-placeholder",
+        createdAt: timestamp,
+        fitMode: "cover",
+        height: 220,
+        id: "group-image",
+        locked: false,
+        name: "Image Placeholder",
+        opacity: 1,
+        pageId,
+        parentId: "hero-group",
+        rotation: 0,
+        type: "image",
+        updatedAt: timestamp,
+        visible: true,
+        width: 220,
+        x: 92,
+        y: 62,
+        zIndex: 1
+      },
+      "accent-line": {
+        createdAt: timestamp,
+        height: 0,
+        id: "accent-line",
+        locked: false,
+        name: "Divider",
+        opacity: 1,
+        pageId,
+        parentId: "frame-root",
+        rotation: 0,
+        stroke: {
+          color: { alpha: 1, hex: "#132c35" },
+          width: 4
+        },
+        type: "line",
+        updatedAt: timestamp,
+        visible: true,
+        width: 0,
+        x: 56,
+        x2: 520,
+        y: 404,
+        y2: 404,
+        zIndex: 2
+      }
+    },
+    pageId,
+    rootNodeIds: ["frame-root"]
+  };
+}
+
+async function ensurePageCollabDocument(
+  client: PoolClient,
+  pageId: string
+): Promise<void> {
+  const existing = await client.query<{ has_state: boolean }>(
+    `
+      select exists (
+        select 1
+        from collab_page_snapshots
+        where page_id = $1
+      ) or exists (
+        select 1
+        from collab_page_updates
+        where page_id = $1
+      ) as has_state
+    `,
+    [pageId]
+  );
+
+  if (existing.rows[0]?.has_state) {
+    return;
+  }
+
+  const document = new Y.Doc();
+  const pageMap = document.getMap<unknown>("page");
+  const pageDocument = buildBootstrapPageDocument(pageId);
+  pageMap.set("rootNodeIds", pageDocument.rootNodeIds);
+  pageMap.set("nodes", pageDocument.nodes);
+
+  await client.query(
+    `
+      insert into collab_page_snapshots (
+        page_id,
+        snapshot_update,
+        state_vector,
+        update_count,
+        last_compacted_seq,
+        created_at,
+        updated_at
+      )
+      values ($1, $2, $3, 0, 0, now(), now())
+      on conflict (page_id) do nothing
+    `,
+    [
+      pageId,
+      Buffer.from(Y.encodeStateAsUpdate(document)),
+      Buffer.from(Y.encodeStateVector(document))
+    ]
+  );
 }
 
 async function findOrCreateSession(

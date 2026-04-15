@@ -7,15 +7,18 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.json && vite build",
     "lint": "eslint . --max-warnings=0",
-    "test": "node ../../scripts/check-workspace.mjs .",
+    "test": "node --test --import tsx ./src/**/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "docker:build": "docker build -f Dockerfile -t openmirage-web:local ../.."
   },
   "dependencies": {
     "@openmirage/config-env": "workspace:*",
     "@openmirage/types": "workspace:*",
+    "lib0": "^0.2.114",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.27"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.4.1"
