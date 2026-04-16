@@ -41,6 +41,26 @@ jobs:
             echo "worker=ghcr.io/${registry_owner}/openmirage-worker:${GITHUB_SHA}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Verify requested production images exist in GHCR
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+
+          for image in \
+            "${{ steps.images.outputs.api }}" \
+            "${{ steps.images.outputs.api_tools }}" \
+            "${{ steps.images.outputs.web }}" \
+            "${{ steps.images.outputs.collab }}" \
+            "${{ steps.images.outputs.worker }}"
+          do
+            echo "[openmirage] checking published image $image"
+            if ! docker manifest inspect "$image" >/dev/null 2>&1; then
+              echo "::error::Published image not found: $image"
+              echo "::error::Wait for CI image publication to complete before running production deploy."
+              exit 1
+            fi
+          done
+
       - name: Install SSH key and known hosts
         env:
           VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}

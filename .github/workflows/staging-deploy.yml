@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Immutable image tag to deploy or redeploy. Defaults to the current commit SHA."
+        description: "Image tag to deploy or redeploy. Defaults to `main`, the latest published main image set."
         required: false
         type: string
 
@@ -48,7 +48,7 @@ jobs:
           registry_owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           image_tag="$(printf '%s' "${{ inputs.image_tag }}" | xargs)"
           if [ -z "$image_tag" ]; then
-            image_tag="${GITHUB_SHA}"
+            image_tag="main"
           fi
           {
             echo "tag=${image_tag}"
@@ -58,6 +58,26 @@ jobs:
             echo "collab=ghcr.io/${registry_owner}/openmirage-collab:${image_tag}"
             echo "worker=ghcr.io/${registry_owner}/openmirage-worker:${image_tag}"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Verify requested staging images exist in GHCR
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+
+          for image in \
+            "${{ steps.images.outputs.api }}" \
+            "${{ steps.images.outputs.api_tools }}" \
+            "${{ steps.images.outputs.web }}" \
+            "${{ steps.images.outputs.collab }}" \
+            "${{ steps.images.outputs.worker }}"
+          do
+            echo "[openmirage] checking published image $image"
+            if ! docker manifest inspect "$image" >/dev/null 2>&1; then
+              echo "::error::Published image not found: $image"
+              echo "::error::Wait for CI image publication to complete or rerun this workflow with a known-good image_tag."
+              exit 1
+            fi
+          done
 
       - name: Install SSH key and known hosts
         env:
