@@ -114,9 +114,12 @@ jobs:
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
           trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
 
+          docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.staging.yml config | grep 'image:'
           docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.staging.yml pull db-migrate api web collab worker caddy
           docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.staging.yml run --rm db-migrate
-          docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.staging.yml up -d --no-build --no-deps web api collab worker caddy
+          docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.staging.yml up -d --force-recreate --no-build --no-deps web api collab worker caddy
+          docker inspect "$(docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.staging.yml ps -q web)" --format '{{.Config.Image}}'
+          docker inspect "$(docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.staging.yml ps -q api)" --format '{{.Config.Image}}'
           EOF
 
       - name: Smoke check production public origin
