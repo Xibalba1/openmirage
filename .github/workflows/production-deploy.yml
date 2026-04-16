@@ -118,8 +118,8 @@ jobs:
           docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.staging.yml pull db-migrate api web collab worker caddy
           docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.staging.yml run --rm db-migrate
           docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.staging.yml up -d --force-recreate --no-build --no-deps web api collab worker caddy
-          docker inspect "$(docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.staging.yml ps -q web)" --format '{{.Config.Image}}'
-          docker inspect "$(docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.staging.yml ps -q api)" --format '{{.Config.Image}}'
+          docker inspect "\$(docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.staging.yml ps -q web)" --format '{{.Config.Image}}'
+          docker inspect "\$(docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.staging.yml ps -q api)" --format '{{.Config.Image}}'
           EOF
 
       - name: Smoke check production public origin
