@@ -25,7 +25,15 @@ import {
 
 const MESSAGE_SYNC = 0;
 const MESSAGE_AWARENESS = 1;
+const MESSAGE_AUTH = 2;
+const MESSAGE_QUERY_AWARENESS = 3;
+const MESSAGE_SYNC_REPLY = 4;
+const MESSAGE_CLOSE = 7;
+const AUTH_TOKEN = 0;
+const AUTH_PERMISSION_DENIED = 1;
+const AUTHENTICATED = 2;
 const CURSOR_THROTTLE_MS = 50;
+const RECONNECT_DELAY_MS = 1_000;
 
 function readBinaryMessage(
   data: Blob | ArrayBuffer | Uint8Array
@@ -76,6 +84,15 @@ function writeAwarenessMessage(
     encoder,
     awarenessProtocol.encodeAwarenessUpdate(awareness, clientIds)
   );
+  return encoding.toUint8Array(encoder);
+}
+
+function writeAuthMessage(documentName: string, token = ""): Uint8Array {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarString(encoder, documentName);
+  encoding.writeVarUint(encoder, MESSAGE_AUTH);
+  encoding.writeVarUint(encoder, AUTH_TOKEN);
+  encoding.writeVarString(encoder, token);
   return encoding.toUint8Array(encoder);
 }
 
@@ -210,7 +227,10 @@ export function createEditorSession(
   let socket: WebSocket | null = null;
   let destroyed = false;
   let cursorFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingCursor: Point | null | undefined;
+  let isSocketAuthenticated = false;
+  let authDenied = false;
   let snapshot: EditorSessionSnapshot = {
     canRedo: false,
     canUndo: false,
@@ -234,7 +254,12 @@ export function createEditorSession(
   };
 
   const handleDocUpdate = (update: Uint8Array, origin: unknown) => {
-    if (origin !== "remote" && socket && socket.readyState === WebSocket.OPEN) {
+    if (
+      origin !== "remote" &&
+      socket &&
+      socket.readyState === WebSocket.OPEN &&
+      isSocketAuthenticated
+    ) {
       socket.send(writeSyncUpdateMessage(documentName, update));
     }
 
@@ -258,7 +283,8 @@ export function createEditorSession(
       changedClients.length > 0 &&
       origin !== "remote" &&
       socket &&
-      socket.readyState === WebSocket.OPEN
+      socket.readyState === WebSocket.OPEN &&
+      isSocketAuthenticated
     ) {
       socket.send(
         writeAwarenessMessage(documentName, awareness, changedClients)
@@ -356,40 +382,69 @@ export function createEditorSession(
     });
   }
 
-  function connect(): void {
-    if (destroyed || !input.transport) {
+  function clearReconnectTimer(): void {
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  }
+
+  function scheduleReconnect(): void {
+    if (destroyed || !input.transport || reconnectTimer !== null || authDenied) {
       return;
     }
 
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, RECONNECT_DELAY_MS);
+  }
+
+  function sendInitialSync(activeSocket: WebSocket): void {
+    if (!isSocketAuthenticated || activeSocket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    if (awareness.getLocalState()) {
+      activeSocket.send(
+        writeAwarenessMessage(documentName, awareness, [doc.clientID])
+      );
+    }
+    activeSocket.send(
+      writeSyncMessage(documentName, doc, (encoder) => {
+        syncProtocol.writeSyncStep1(encoder, doc);
+      })
+    );
+  }
+
+  function connect(): void {
+    if (destroyed || !input.transport || socket) {
+      return;
+    }
+
+    clearReconnectTimer();
+    authDenied = false;
+    isSocketAuthenticated = false;
     onStatus?.("connecting");
-    socket = new WebSocket(
+    const activeSocket = new WebSocket(
       buildPageCollabWebSocketUrl(
         input.transport.collabWsUrl,
         input.transport.collabWsPath,
         input.transport.location
       )
     );
-    socket.binaryType = "arraybuffer";
+    socket = activeSocket;
+    activeSocket.binaryType = "arraybuffer";
 
-    socket.addEventListener("open", () => {
-      if (!socket) {
+    activeSocket.addEventListener("open", () => {
+      if (socket !== activeSocket) {
         return;
       }
 
-      onStatus?.("connected");
-      if (awareness.getLocalState()) {
-        socket.send(
-          writeAwarenessMessage(documentName, awareness, [doc.clientID])
-        );
-      }
-      socket.send(
-        writeSyncMessage(documentName, doc, (encoder) => {
-          syncProtocol.writeSyncStep1(encoder, doc);
-        })
-      );
+      activeSocket.send(writeAuthMessage(documentName));
     });
 
-    socket.addEventListener("message", (event) => {
+    activeSocket.addEventListener("message", (event) => {
       void readBinaryMessage(event.data as Blob | ArrayBuffer | Uint8Array)
         .then((message) => {
           try {
@@ -402,7 +457,34 @@ export function createEditorSession(
 
             const messageType = decoding.readVarUint(decoder);
 
-            if ((messageType === MESSAGE_SYNC || messageType === 4) && socket) {
+            if (messageType === MESSAGE_AUTH && socket === activeSocket) {
+              const authType = decoding.readVarUint(decoder);
+
+              if (authType === AUTH_TOKEN) {
+                activeSocket.send(writeAuthMessage(documentName));
+                return;
+              }
+
+              if (authType === AUTH_PERMISSION_DENIED) {
+                authDenied = true;
+                onStatus?.("error");
+                activeSocket.close();
+                return;
+              }
+
+              if (authType === AUTHENTICATED) {
+                isSocketAuthenticated = true;
+                onStatus?.("connected");
+                sendInitialSync(activeSocket);
+              }
+              return;
+            }
+
+            if (
+              (messageType === MESSAGE_SYNC ||
+                messageType === MESSAGE_SYNC_REPLY) &&
+              socket === activeSocket
+            ) {
               const encoder = encoding.createEncoder();
               encoding.writeVarString(encoder, documentName);
               encoding.writeVarUint(encoder, MESSAGE_SYNC);
@@ -420,6 +502,24 @@ export function createEditorSession(
                 decoding.readVarUint8Array(decoder),
                 "remote"
               );
+              return;
+            }
+
+            if (
+              messageType === MESSAGE_QUERY_AWARENESS &&
+              socket === activeSocket &&
+              awareness.getLocalState()
+            ) {
+              activeSocket.send(
+                writeAwarenessMessage(documentName, awareness, [doc.clientID])
+              );
+              return;
+            }
+
+            if (messageType === MESSAGE_CLOSE) {
+              authDenied = true;
+              onStatus?.("error");
+              activeSocket.close();
             }
           } catch {
             // Ignore malformed websocket frames instead of breaking the session loop.
@@ -428,13 +528,21 @@ export function createEditorSession(
         .catch(() => undefined);
     });
 
-    socket.addEventListener("close", () => {
-      socket = null;
+    activeSocket.addEventListener("close", () => {
+      if (socket === activeSocket) {
+        socket = null;
+      }
+      isSocketAuthenticated = false;
       clearRemotePresence();
-      awareness.setLocalState(null);
-      onStatus?.(destroyed ? "disconnected" : "error");
+      if (destroyed) {
+        onStatus?.("disconnected");
+        return;
+      }
+
+      onStatus?.("error");
+      scheduleReconnect();
     });
-    socket.addEventListener("error", () => {
+    activeSocket.addEventListener("error", () => {
       onStatus?.("error");
     });
   }
@@ -500,11 +608,13 @@ export function createEditorSession(
       onStatus?.("disconnected");
       doc.off("update", handleDocUpdate);
       awareness.off("update", handleAwarenessUpdate);
+      clearReconnectTimer();
       if (cursorFlushTimer !== null) {
         clearTimeout(cursorFlushTimer);
       }
       const activeSocket = socket;
       socket = null;
+      isSocketAuthenticated = false;
       awareness.setLocalState(null);
       clearRemotePresence();
       activeSocket?.close();

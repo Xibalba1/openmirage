@@ -70,6 +70,72 @@ async function requestJson(url, init) {
   };
 }
 
+async function createAuthenticatedCollabFixture(baseUrl, sessionCookie) {
+  const sessionResponse = await requestJson(`${baseUrl}/auth/session`, {
+    headers: {
+      cookie: sessionCookie
+    }
+  });
+  const workspaceId = sessionResponse.body.memberships?.[0]?.workspaceId;
+
+  if (typeof workspaceId !== "string" || workspaceId.length === 0) {
+    fail(
+      "seed bootstrap did not provide a workspace membership for collab verification"
+    );
+  }
+
+  const projectResponse = await requestJson(
+    `${baseUrl}/v1/workspaces/${encodeURIComponent(workspaceId)}/projects`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: sessionCookie
+      },
+      body: JSON.stringify({
+        name: `Collab Verify ${Date.now()}`
+      })
+    }
+  );
+  const projectId = projectResponse.body.id;
+
+  if (typeof projectId !== "string" || projectId.length === 0) {
+    fail("collab verification project creation did not return an id");
+  }
+
+  const fileResponse = await requestJson(
+    `${baseUrl}/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/files`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: sessionCookie
+      },
+      body: JSON.stringify({
+        initialPages: [{ name: "Verification Page" }],
+        name: `Collab Verify File ${Date.now()}`
+      })
+    }
+  );
+  const fileId = fileResponse.body.file?.id;
+  const pageId =
+    fileResponse.body.defaultPageId ?? fileResponse.body.pages?.[0]?.id;
+
+  if (typeof fileId !== "string" || fileId.length === 0) {
+    fail("collab verification file creation did not return a file id");
+  }
+
+  if (typeof pageId !== "string" || pageId.length === 0) {
+    fail("collab verification file creation did not return a page id");
+  }
+
+  return {
+    fileId,
+    pageId,
+    workspaceId
+  };
+}
+
 function cleanup() {
   spawnSync("docker", ["compose", "down", "--remove-orphans"], {
     cwd: process.cwd(),
@@ -297,18 +363,10 @@ async function verifyAuthAndWebsocket() {
   }
 
   const sessionCookie = setCookieHeader.split(";")[0];
-  const sessionResponse = await requestJson(`${caddyBaseUrl}/auth/session`, {
-    headers: {
-      cookie: sessionCookie
-    }
-  });
-  const workspaceId = sessionResponse.body.memberships?.[0]?.workspaceId;
-
-  if (typeof workspaceId !== "string" || workspaceId.length === 0) {
-    fail(
-      "seed bootstrap did not provide a workspace membership for websocket verification"
-    );
-  }
+  const collabFixture = await createAuthenticatedCollabFixture(
+    caddyBaseUrl,
+    sessionCookie
+  );
 
   const websocketProbe = spawnSync(
     "pnpm",
@@ -320,17 +378,65 @@ async function verifyAuthAndWebsocket() {
       "--input-type=module",
       "-e",
       `import WebSocket from "ws";
-const ws = new WebSocket("ws://127.0.0.1/collab?documentName=runtime-check&workspaceId=${workspaceId}", {
+import * as decoding from "lib0/decoding";
+import * as encoding from "lib0/encoding";
+import * as syncProtocol from "y-protocols/sync";
+import * as Y from "yjs";
+const documentName = ${JSON.stringify(`page:${collabFixture.pageId}`)};
+const ws = new WebSocket(${JSON.stringify(`ws://127.0.0.1/collab?documentName=${encodeURIComponent(`page:${collabFixture.pageId}`)}&fileId=${encodeURIComponent(collabFixture.fileId)}&pageId=${encodeURIComponent(collabFixture.pageId)}&workspaceId=${encodeURIComponent(collabFixture.workspaceId)}`)}, {
   headers: { Cookie: ${JSON.stringify(sessionCookie)} }
 });
+const doc = new Y.Doc();
+let authenticated = false;
+function writeAuth() {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarString(encoder, documentName);
+  encoding.writeVarUint(encoder, 2);
+  encoding.writeVarUint(encoder, 0);
+  encoding.writeVarString(encoder, "");
+  return encoding.toUint8Array(encoder);
+}
+function writeSyncStep1() {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarString(encoder, documentName);
+  encoding.writeVarUint(encoder, 0);
+  syncProtocol.writeSyncStep1(encoder, doc);
+  return encoding.toUint8Array(encoder);
+}
 const timer = setTimeout(() => {
   console.error("timeout");
   process.exit(1);
 }, 5000);
 ws.on("open", () => {
-  clearTimeout(timer);
-  console.log("open");
-  ws.close();
+  ws.send(writeAuth());
+});
+ws.on("message", (raw) => {
+  const message = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+  const decoder = decoding.createDecoder(message);
+  const incomingDocumentName = decoding.readVarString(decoder);
+  if (incomingDocumentName !== documentName) {
+    return;
+  }
+  const messageType = decoding.readVarUint(decoder);
+  if (messageType === 2) {
+    const authType = decoding.readVarUint(decoder);
+    if (authType === 2) {
+      authenticated = true;
+      ws.send(writeSyncStep1());
+      return;
+    }
+    console.error("unexpected-auth");
+    process.exit(1);
+  }
+  if ((messageType === 0 || messageType === 4) && authenticated) {
+    const encoder = encoding.createEncoder();
+    encoding.writeVarString(encoder, documentName);
+    encoding.writeVarUint(encoder, 0);
+    syncProtocol.readSyncMessage(decoder, encoder, doc, "remote");
+    clearTimeout(timer);
+    console.log("open+sync");
+    ws.close();
+  }
 });
 ws.on("error", (error) => {
   clearTimeout(timer);
@@ -364,7 +470,7 @@ ws.on("close", () => process.exit(0));`
       "--input-type=module",
       "-e",
       `import WebSocket from "ws";
-const ws = new WebSocket("ws://127.0.0.1/collab?documentName=runtime-check&workspaceId=${workspaceId}");
+const ws = new WebSocket(${JSON.stringify(`ws://127.0.0.1/collab?documentName=${encodeURIComponent(`page:${collabFixture.pageId}`)}&fileId=${encodeURIComponent(collabFixture.fileId)}&pageId=${encodeURIComponent(collabFixture.pageId)}&workspaceId=${encodeURIComponent(collabFixture.workspaceId)}`)});
 const timer = setTimeout(() => {
   console.error("timeout");
   process.exit(1);

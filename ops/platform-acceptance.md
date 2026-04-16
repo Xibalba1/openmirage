@@ -87,20 +87,27 @@ Use the existing GitHub Actions deployment path. Do not create a second deploy p
    - `/readyz`
    - `/collab/healthz`
    - `/worker/readyz`
-   - websocket upgrade behavior at `/collab`
+   - authenticated page-scoped collab handshake and sync at `/collab`
 5. Verify auth/session behavior on the public HTTPS origin:
    - magic-link origin uses the public host
    - session cookies are `Secure`
-6. Verify observability on staging:
+   - a signed-in user can create a verification project/file/page and reach `Collab: connected`
+6. Run the Sprint 6 manual collaboration smoke on staging with two editor-capable users:
+   - both users open the same page and see each other in the presence strip
+   - cursor movement and node selection appear remotely in real time
+   - rectangle, frame, and text creation/mutation appear remotely without refresh
+   - file, page, and node comments survive refresh and resolving a comment does not alter page content
+   - after both users disconnect and reopen, page content and comments persist but stale cursor/selection state does not
+7. Verify observability on staging:
    - logs are visible through `docker compose logs`
    - `/metrics` is reachable for API, collab, and worker
    - the forced diagnostics route is only enabled when intentionally gated
    - error reporting is visible in the configured sink when `SENTRY_DSN` is set
-7. Verify fresh-VPS repeatability:
+8. Verify fresh-VPS repeatability:
    - start from a clean or disposable VPS with only base VM provisioning completed
    - follow [`ops/staging-vps.md`](/Users/ik/repos/openmirage/ops/staging-vps.md:1) exactly to install Docker and Compose, create `$VPS_DEPLOY_DIR`, create `.env.staging`, validate SSH, DNS, and public ports, and run the canonical `Staging Deploy` workflow
    - confirm the run required no undocumented shell history, manual repo changes, or ad hoc deploy steps
-8. Record the workflow run URL, commit SHA, staging URL, verification booleans, fresh-VPS proof fields, and error-reporting proof fields in `ops/platform-acceptance-evidence.json`.
+9. Record the workflow run URL, commit SHA, staging URL, verification booleans, fresh-VPS proof fields, and error-reporting proof fields in `ops/platform-acceptance-evidence.json`.
 
 Staging proof is incomplete unless the evidence file records all of these as concrete proof:
 
