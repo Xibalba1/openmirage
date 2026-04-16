@@ -355,11 +355,20 @@ export const editorCommandTypes = [
   "resize-node",
   "reorder-node",
   "group-nodes",
-  "ungroup-node",
-  "set-selection"
+  "ungroup-node"
 ] as const;
 
 export type EditorCommandType = (typeof editorCommandTypes)[number];
+
+export interface NodeGeometryUpdate {
+  nodeId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  x2?: number | null;
+  y2?: number | null;
+}
 
 export interface CreateNodeCommand {
   type: "create-node";
@@ -379,23 +388,20 @@ export interface UpdateNodeCommand {
 export interface DeleteNodeCommand {
   type: "delete-node";
   pageId: string;
-  nodeId: string;
+  nodeIds: string[];
 }
 
 export interface MoveNodeCommand {
   type: "move-node";
   pageId: string;
-  nodeId: string;
-  x: number;
-  y: number;
+  updates: NodeGeometryUpdate[];
 }
 
 export interface ResizeNodeCommand {
   type: "resize-node";
   pageId: string;
   nodeId: string;
-  width: number;
-  height: number;
+  updates: NodeGeometryUpdate[];
 }
 
 export interface ReorderNodeCommand {
@@ -411,18 +417,13 @@ export interface GroupNodesCommand {
   pageId: string;
   nodeIds: string[];
   group: GroupNode;
+  index: number | null;
 }
 
 export interface UngroupNodeCommand {
   type: "ungroup-node";
   pageId: string;
   nodeId: string;
-}
-
-export interface SetSelectionCommand {
-  type: "set-selection";
-  pageId: string;
-  selection: SelectionPayload;
 }
 
 export type EditorCommand =
@@ -433,8 +434,7 @@ export type EditorCommand =
   | ResizeNodeCommand
   | ReorderNodeCommand
   | GroupNodesCommand
-  | UngroupNodeCommand
-  | SetSelectionCommand;
+  | UngroupNodeCommand;
 
 export interface SelectionPayload {
   pageId: string;

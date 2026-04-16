@@ -1,7 +1,34 @@
-import { type FileDto, type PageDocumentDto, type PageDto, type ProjectDto, type RuntimeUrls, type WorkspaceDetailDto } from "@openmirage/types";
-import { type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
-import { subscribeToPageDocument } from "./collab-client";
-import { hitTestPaintRecords } from "./hit-test";
+import {
+  type FileDto,
+  type GroupNode,
+  type GroupNodesCommand,
+  type PageDocumentDto,
+  type PageDto,
+  type ProjectDto,
+  type RuntimeUrls,
+  type SceneGraphNode,
+  type WorkspaceDetailDto
+} from "@openmirage/types";
+import {
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
+import { applyEditorCommand, getNodeAbsolutePosition, getTopLevelNodeIds, isContainerNode } from "./commands";
+import {
+  hitTestPaintRecords,
+  hitTestResizeHandle,
+  selectPaintRecordsInMarquee
+} from "./hit-test";
+import {
+  createEmptyDocument,
+  createNodeCommandForInsert,
+  deriveMoveUpdates,
+  deriveResizeUpdates,
+  getContainerInsertionTarget
+} from "./interactions";
 import { renderSceneToCanvas } from "./render";
 import {
   createPaintRecords,
@@ -13,24 +40,17 @@ import { createEditorSession } from "./session";
 import {
   clampZoom,
   createInitialViewport,
+  pagePointToScreenPoint,
   screenPointToPagePoint,
   zoomViewportAtPoint
 } from "./viewport";
-import { type ViewportState } from "./types";
+import { type ActiveInteraction, type ActiveTextEdit, type EditorSession, type EditorSessionSnapshot, type Point, type ViewportState } from "./types";
 
 interface AppPageRoute {
   fileId: string;
   pageId: string;
   projectId: string;
   workspaceId: string;
-}
-
-function createEmptyDocument(pageId: string): PageDocumentDto {
-  return {
-    nodes: {},
-    pageId,
-    rootNodeIds: []
-  };
 }
 
 function useCanvasResizeVersion(canvasRef: React.RefObject<HTMLCanvasElement | null>) {
@@ -52,6 +72,146 @@ function useCanvasResizeVersion(canvasRef: React.RefObject<HTMLCanvasElement | n
   }, [canvasRef]);
 
   return version;
+}
+
+function toggleSelectedIds(selectedIds: string[], nodeId: string): string[] {
+  return selectedIds.includes(nodeId)
+    ? selectedIds.filter((candidateId) => candidateId !== nodeId)
+    : [...selectedIds, nodeId];
+}
+
+function buildGroupCommand(
+  document: PageDocumentDto,
+  pageId: string,
+  selectedIds: string[]
+): GroupNodesCommand | null {
+  const topLevelIds = getTopLevelNodeIds(document, selectedIds);
+
+  if (topLevelIds.length < 2) {
+    return null;
+  }
+
+  const firstNodeId = topLevelIds[0];
+
+  if (!firstNodeId) {
+    return null;
+  }
+
+  const firstNode = document.nodes[firstNodeId];
+
+  if (!firstNode) {
+    return null;
+  }
+
+  const timestamp = new Date().toISOString();
+  const group: GroupNode = {
+    childIds: [],
+    createdAt: timestamp,
+    height: 1,
+    id: crypto.randomUUID(),
+    locked: false,
+    name: "Group",
+    opacity: 1,
+    pageId,
+    parentId: firstNode.parentId,
+    rotation: 0,
+    type: "group",
+    updatedAt: timestamp,
+    visible: true,
+    width: 1,
+    x: 0,
+    y: 0,
+    zIndex: 0
+  };
+
+  return {
+    group,
+    index: null,
+    nodeIds: topLevelIds,
+    pageId,
+    type: "group-nodes"
+  };
+}
+
+function getInteractionPreview(
+  interaction: ActiveInteraction | null,
+  snapshot: PageDocumentDto,
+  selectedIds: string[],
+  point: Point | null
+): PageDocumentDto {
+  if (!interaction || !point) {
+    return snapshot;
+  }
+
+  switch (interaction.type) {
+    case "move": {
+      const delta = {
+        x: point.x - interaction.startPagePoint.x,
+        y: point.y - interaction.startPagePoint.y
+      };
+
+      if (!delta.x && !delta.y) {
+        return snapshot;
+      }
+
+      return applyEditorCommand(snapshot, {
+        pageId: snapshot.pageId,
+        type: "move-node",
+        updates: deriveMoveUpdates(interaction.originalDocument, selectedIds, delta)
+      });
+    }
+    case "resize":
+      return applyEditorCommand(snapshot, {
+        nodeId: interaction.record.node.id,
+        pageId: snapshot.pageId,
+        type: "resize-node",
+        updates: deriveResizeUpdates(
+          interaction.originalDocument,
+          interaction.record,
+          interaction.handle,
+          point
+        )
+      });
+    default:
+      return snapshot;
+  }
+}
+
+function resolvePrimarySelectionId(selectedIds: string[], preferredId: string | null): string | null {
+  if (preferredId && selectedIds.includes(preferredId)) {
+    return preferredId;
+  }
+
+  return selectedIds.at(-1) ?? null;
+}
+
+function getLayerOrder(document: PageDocumentDto, parentId: string | null): string[] {
+  if (!parentId) {
+    return document.rootNodeIds;
+  }
+
+  const parent = document.nodes[parentId];
+  return parent && isContainerNode(parent) ? parent.childIds : [];
+}
+
+function flattenLayerTree(document: PageDocumentDto, parentId: string | null, depth = 0): Array<{ depth: number; node: SceneGraphNode }> {
+  const items: Array<{ depth: number; node: SceneGraphNode }> = [];
+
+  for (const nodeId of getLayerOrder(document, parentId)) {
+    const node = document.nodes[nodeId];
+
+    if (!node) {
+      continue;
+    }
+
+    items.push({ depth, node });
+
+    if (isContainerNode(node)) {
+      items.push(...flattenLayerTree(document, node.id, depth + 1));
+    }
+  }
+
+  return items;
 }
 
 export function PageEditorScreen(props: {
@@ -85,14 +245,17 @@ export function PageEditorScreen(props: {
   const [collabStatus, setCollabStatus] = useState<
     "connecting" | "connected" | "disconnected" | "error"
   >("connecting");
-  const [isPanning, setIsPanning] = useState(false);
-  const panStartRef = useRef<{ panX: number; panY: number; x: number; y: number } | null>(
-    null
-  );
+  const [activeScopeId, setActiveScopeId] = useState<string | null>(null);
+  const [activeTextEdit, setActiveTextEdit] = useState<ActiveTextEdit | null>(null);
+  const [activeInteraction, setActiveInteraction] = useState<ActiveInteraction | null>(null);
   const resizeVersion = useCanvasResizeVersion(canvasRef);
 
   useEffect(() => {
-    setDocumentState(createEmptyDocument(props.page.id));
+    setSessionSnapshot({
+      canRedo: false,
+      canUndo: false,
+      document: createEmptyDocument(props.page.id)
+    });
     setSelectedIds([]);
     setPrimarySelectionId(null);
     setHoveredId(null);
@@ -104,7 +267,7 @@ export function PageEditorScreen(props: {
     primarySelectionIdRef.current = null;
     setActiveInteraction(null);
 
-    const subscription = subscribeToPageDocument(
+    const session = createEditorSession(
       {
         pageId: props.page.id,
         transport: {
@@ -117,29 +280,42 @@ export function PageEditorScreen(props: {
           }
         }
       },
-      (nextDocument) => {
-        setDocumentState(nextDocument);
-      },
       setCollabStatus
     );
+    const unsubscribe = session.subscribe((nextSnapshot) => {
+      setSessionSnapshot(nextSnapshot);
+    });
 
-    subscription.connect();
+    sessionRef.current = session;
+    session.connect();
 
     return () => {
-      subscription.destroy();
+      unsubscribe();
+      session.destroy();
+      sessionRef.current = null;
     };
   }, [
     props.collab.collabWsPath,
     props.collab.collabWsUrl,
+    props.page.id,
     props.route.fileId,
     props.route.pageId,
-    props.route.workspaceId,
-    props.page.id
+    props.route.workspaceId
   ]);
 
+  const previewDocument = useMemo(
+    () =>
+      getInteractionPreview(
+        activeInteraction,
+        sessionSnapshot.document,
+        selectedIds,
+        activeInteraction?.currentPagePoint ?? null
+      ),
+    [activeInteraction, selectedIds, sessionSnapshot.document]
+  );
   const scene = useMemo(
-    () => hydratePageDocument(props.page, documentState),
-    [documentState, props.page]
+    () => hydratePageDocument(props.page, previewDocument),
+    [previewDocument, props.page]
   );
   const paintRecords = useMemo(() => createPaintRecords(scene), [scene]);
   const scopedRecords = useMemo(
@@ -226,7 +402,15 @@ export function PageEditorScreen(props: {
       paintRecords,
       {
         hoveredId,
-        selectedIds
+        marquee:
+          activeInteraction?.type === "marquee" && activeInteraction.currentPagePoint
+            ? {
+                end: activeInteraction.currentPagePoint,
+                start: activeInteraction.startPagePoint
+              }
+            : null,
+        primarySelectionId: effectivePrimarySelectionId,
+        selectedIds: effectiveSelectedIds
       }
     );
   }, [
@@ -360,10 +544,21 @@ export function PageEditorScreen(props: {
     };
   }
 
-  function handlePointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
+  function readPagePoint(event: { clientX: number; clientY: number }): Point | null {
     const screenPoint = readCanvasPoint(event);
 
     if (!screenPoint) {
+      return null;
+    }
+
+    return screenPointToPagePoint(screenPoint, viewport);
+  }
+
+  function commitTextEdit() {
+    const session = sessionRef.current;
+
+    if (!session || !activeTextEdit || !activeTextNode) {
+      setActiveTextEdit(null);
       return;
     }
 
@@ -384,15 +579,46 @@ export function PageEditorScreen(props: {
       return;
     }
 
-    const pagePoint = screenPointToPagePoint(screenPoint, viewport);
-    const hit = hitTestPaintRecords(paintRecords, pagePoint, viewport.zoom);
+    const hit = hitTestPaintRecords(scopedRecords, pagePoint, viewport.zoom);
     setHoveredId(hit?.node.id ?? null);
   }
 
   function handlePointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const session = sessionRef.current;
+    const pagePoint = readPagePoint(event);
     const screenPoint = readCanvasPoint(event);
 
-    if (!screenPoint) {
+    if (!session || !screenPoint) {
+      return;
+    }
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+
+    if (event.button === 1 || event.button === 2 || event.altKey || event.metaKey || event.ctrlKey) {
+      setActiveInteraction({
+        startScreenPoint: screenPoint,
+        startViewport: viewport,
+        type: "pan"
+      });
+      return;
+    }
+
+    const primaryScopedRecord = primaryRecord && scopedRecords.some((record) => record.node.id === primaryRecord.node.id)
+      ? primaryRecord
+      : null;
+    const handleHit = pagePoint
+      ? hitTestResizeHandle(primaryScopedRecord, pagePoint, viewport.zoom)
+      : null;
+
+    if (handleHit && primaryScopedRecord && pagePoint) {
+      setActiveInteraction({
+        currentPagePoint: pagePoint,
+        handle: handleHit.handle,
+        originalDocument: sessionSnapshot.document,
+        record: primaryScopedRecord,
+        startPagePoint: pagePoint,
+        type: "resize"
+      });
       return;
     }
 
@@ -722,8 +948,8 @@ export function PageEditorScreen(props: {
         <p className="eyebrow">Editor</p>
         <h2>{props.file.name}</h2>
         <p className="muted">
-          Canvas-first page route with collab-backed hydration, viewport pan and zoom,
-          and paint-order hit testing.
+          Command-backed local editing with collab persistence, local undo/redo, and
+          DOM-overlay text editing.
         </p>
         <div className="action-strip">
           <InlineRenameForm
@@ -765,6 +991,62 @@ export function PageEditorScreen(props: {
             ))}
           </ul>
         </div>
+        <div className="editor-sidebar-section">
+          <p className="eyebrow">Layers</p>
+          <div className="layer-list">
+            {layerItems.map(({ depth, node }) => {
+              const order = getLayerOrder(sessionSnapshot.document, node.parentId);
+              const index = order.indexOf(node.id);
+
+              return (
+                <div
+                  className={`layer-row ${selectedIds.includes(node.id) ? "layer-row-active" : ""}`}
+                  key={node.id}
+                  style={{ paddingLeft: `${12 + depth * 16}px` }}
+                >
+                  <button
+                    className="layer-label"
+                    onClick={() => updateSelection([node.id], node.id)}
+                    type="button"
+                  >
+                    <strong>{node.name}</strong>
+                    <span>{node.type}</span>
+                  </button>
+                  <div className="layer-actions">
+                    <button className="button button-secondary button-icon" onClick={() => reorderNode(node.id, -1)} type="button">
+                      ↑
+                    </button>
+                    <button className="button button-secondary button-icon" onClick={() => reorderNode(node.id, 1)} type="button">
+                      ↓
+                    </button>
+                    <button
+                      className="button button-secondary button-icon"
+                      onClick={() => toggleNodeFlag(node.id, { locked: !node.locked } as Partial<SceneGraphNode>)}
+                      type="button"
+                    >
+                      {node.locked ? "Unlock" : "Lock"}
+                    </button>
+                    <button
+                      className="button button-secondary button-icon"
+                      onClick={() => toggleNodeFlag(node.id, { visible: !node.visible } as Partial<SceneGraphNode>)}
+                      type="button"
+                    >
+                      {node.visible ? "Hide" : "Show"}
+                    </button>
+                    <button
+                      className="button button-secondary button-icon"
+                      onClick={() => deleteNodes([node.id])}
+                      type="button"
+                    >
+                      Del
+                    </button>
+                  </div>
+                  <span className="layer-order">#{index + 1}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </aside>
 
       <section className="panel editor-panel">
@@ -774,12 +1056,44 @@ export function PageEditorScreen(props: {
             <h2>{props.page.name}</h2>
           </div>
           <div className="toolbar-strip">
+            <button className="button button-secondary" onClick={() => createNode("frame")} type="button">
+              Frame
+            </button>
+            <button className="button button-secondary" onClick={() => createNode("rectangle")} type="button">
+              Rectangle
+            </button>
+            <button className="button button-secondary" onClick={() => createNode("ellipse")} type="button">
+              Ellipse
+            </button>
+            <button className="button button-secondary" onClick={() => createNode("line")} type="button">
+              Line
+            </button>
+            <button className="button button-secondary" onClick={() => createNode("text")} type="button">
+              Text
+            </button>
             <button
               className="button button-secondary"
-              onClick={() => setViewport((current) => ({ ...current, zoom: Math.max(0.25, current.zoom * 0.9) }))}
+              disabled={selectedIds.length < 2}
+              onClick={groupSelection}
               type="button"
             >
-              Zoom out
+              Group
+            </button>
+            <button
+              className="button button-secondary"
+              disabled={sessionSnapshot.document.nodes[primarySelectionId ?? ""]?.type !== "group"}
+              onClick={ungroupSelection}
+              type="button"
+            >
+              Ungroup
+            </button>
+            <button
+              className="button button-secondary"
+              disabled={!sessionSnapshot.canUndo}
+              onClick={() => sessionRef.current?.undo()}
+              type="button"
+            >
+              Undo
             </button>
             <button
               className="button button-secondary"
@@ -817,7 +1131,7 @@ export function PageEditorScreen(props: {
             </button>
             <button
               className="button button-secondary"
-              onClick={() => setViewport((current) => ({ ...current, zoom: Math.min(4, current.zoom * 1.1) }))}
+              onClick={() => setViewport((current) => ({ ...current, zoom: clampZoom(current.zoom * 1.1) }))}
               type="button"
             >
               Zoom in
@@ -832,24 +1146,54 @@ export function PageEditorScreen(props: {
             {Math.round(viewport.panY)}
           </span>
           <span>Nodes: {paintRecords.length}</span>
-          <span>Selection: {primarySelectionId ?? "None"}</span>
+          <span>Selection: {effectivePrimarySelectionId ?? "None"}</span>
+          <span>Scope: {activeScopeId ?? "Root"}</span>
         </div>
 
-        <div className="editor-canvas-shell">
+        <div className="editor-canvas-shell" ref={canvasShellRef}>
           <canvas
             className="editor-canvas"
             onDoubleClick={handleCanvasDoubleClick}
             onPointerCancel={() => updateActiveInteraction(null)}
             onPointerDown={handlePointerDown}
             onPointerLeave={() => {
-              stopPanning();
               setHoveredId(null);
             }}
             onPointerMove={handlePointerMove}
-            onPointerUp={stopPanning}
+            onPointerUp={stopInteraction}
             onWheel={handleWheel}
             ref={canvasRef}
           />
+          {activeTextEdit && textEditStyle && activeTextNode ? (
+            <textarea
+              autoFocus
+              className="editor-text-overlay"
+              onBlur={commitTextEdit}
+              onChange={(event) =>
+                setActiveTextEdit((current) =>
+                  current
+                    ? {
+                        ...current,
+                        draft: event.target.value
+                      }
+                    : current
+                )
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setActiveTextEdit(null);
+                }
+
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                  event.preventDefault();
+                  commitTextEdit();
+                }
+              }}
+              style={textEditStyle}
+              value={activeTextEdit.draft}
+            />
+          ) : null}
         </div>
       </section>
     </section>

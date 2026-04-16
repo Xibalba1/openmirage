@@ -11,6 +11,7 @@ import {
   DEFAULT_PAGE_WIDTH,
   type FlattenedSceneNode,
   type HydratedPageScene,
+  type NodeBounds,
   type PaintRecord
 } from "./types";
 
@@ -145,39 +146,178 @@ function flattenNode(
   parentX: number,
   parentY: number,
   records: FlattenedSceneNode[]
-): void {
+): NodeBounds | null {
   const node = scene.nodesById[nodeId];
 
   if (!node || !node.visible) {
-    return;
+    return null;
   }
 
   const absoluteX = parentX + node.x;
   const absoluteY = parentY + node.y;
-  const record: FlattenedSceneNode = {
-    absoluteX,
-    absoluteX2: node.type === "line" ? parentX + node.x2 : null,
-    absoluteY,
-    absoluteY2: node.type === "line" ? parentY + node.y2 : null,
-    node
-  };
 
   if (node.type === "frame") {
-    records.push(record);
+    const bounds: NodeBounds = {
+      height: Math.max(1, node.height),
+      width: Math.max(1, node.width),
+      x: absoluteX,
+      y: absoluteY
+    };
+
+    records.push({
+      absoluteX,
+      absoluteX2: null,
+      absoluteY,
+      absoluteY2: null,
+      bounds,
+      node
+    });
+
     for (const childId of node.childIds) {
       flattenNode(scene, childId, absoluteX, absoluteY, records);
     }
-    return;
+
+    return bounds;
   }
 
   if (node.type === "group") {
-    for (const childId of node.childIds) {
-      flattenNode(scene, childId, absoluteX, absoluteY, records);
-    }
-    return;
+    const childBounds = node.childIds
+      .map((childId) => flattenNode(scene, childId, absoluteX, absoluteY, records))
+      .filter((value): value is NodeBounds => value !== null);
+    const bounds =
+      childBounds.length === 0
+        ? {
+            height: Math.max(1, node.height),
+            width: Math.max(1, node.width),
+            x: absoluteX,
+            y: absoluteY
+          }
+        : {
+            height: Math.max(
+              1,
+              Math.max(...childBounds.map((bounds) => bounds.y + bounds.height)) -
+                Math.min(...childBounds.map((bounds) => bounds.y))
+            ),
+            width: Math.max(
+              1,
+              Math.max(...childBounds.map((bounds) => bounds.x + bounds.width)) -
+                Math.min(...childBounds.map((bounds) => bounds.x))
+            ),
+            x: Math.min(...childBounds.map((bounds) => bounds.x)),
+            y: Math.min(...childBounds.map((bounds) => bounds.y))
+          };
+
+    records.push({
+      absoluteX,
+      absoluteX2: null,
+      absoluteY,
+      absoluteY2: null,
+      bounds,
+      node
+    });
+
+    return bounds;
   }
 
-  records.push(record);
+  if (node.type === "line") {
+    const absoluteX2 = parentX + node.x2;
+    const absoluteY2 = parentY + node.y2;
+    const bounds: NodeBounds = {
+      height: Math.max(1, Math.abs(absoluteY2 - absoluteY)),
+      width: Math.max(1, Math.abs(absoluteX2 - absoluteX)),
+      x: Math.min(absoluteX, absoluteX2),
+      y: Math.min(absoluteY, absoluteY2)
+    };
+
+    records.push({
+      absoluteX,
+      absoluteX2,
+      absoluteY,
+      absoluteY2,
+      bounds,
+      node
+    });
+
+    return bounds;
+  }
+
+  const bounds: NodeBounds = {
+    height: Math.max(1, node.height),
+    width: Math.max(1, node.width),
+    x: absoluteX,
+    y: absoluteY
+  };
+
+  records.push({
+    absoluteX,
+    absoluteX2: null,
+    absoluteY,
+    absoluteY2: null,
+    bounds,
+    node
+  });
+
+  return bounds;
+}
+
+export function getNodePaintRecord(
+  records: PaintRecord[],
+  nodeId: string
+): PaintRecord | null {
+  return records.find((record) => record.node.id === nodeId) ?? null;
+}
+
+export function getNodePath(
+  scene: HydratedPageScene,
+  nodeId: string
+): string[] {
+  const path: string[] = [];
+  let current = scene.nodesById[nodeId];
+
+  while (current) {
+    path.push(current.id);
+
+    if (!current.parentId) {
+      break;
+    }
+
+    current = scene.nodesById[current.parentId];
+  }
+
+  return path.reverse();
+}
+
+export function isNodeWithinScope(
+  scene: HydratedPageScene,
+  nodeId: string,
+  scopeId: string | null
+): boolean {
+  if (!scopeId) {
+    return true;
+  }
+
+  return getNodePath(scene, nodeId).includes(scopeId);
+}
+
+export function getScopedPaintRecords(
+  records: PaintRecord[],
+  scene: HydratedPageScene,
+  scopeId: string | null
+): PaintRecord[] {
+  return records.filter((record) => isNodeWithinScope(scene, record.node.id, scopeId));
+}
+
+export function getPaintOrderNodeIds(scene: HydratedPageScene): string[] {
+  return flattenSceneInPaintOrder(scene).map((record) => record.node.id);
+}
+
+export function createPaintRecords(scene: HydratedPageScene): PaintRecord[] {
+  return flattenSceneInPaintOrder(scene).map((record) => ({
+    ...record,
+    isContainer: record.node.type === "frame" || record.node.type === "group",
+    painted: record.node.type !== "group",
+    selectable: !record.node.locked
+  }));
 }
 
 export function flattenSceneInPaintOrder(scene: HydratedPageScene): FlattenedSceneNode[] {
@@ -191,10 +331,9 @@ export function flattenSceneInPaintOrder(scene: HydratedPageScene): FlattenedSce
   return records;
 }
 
-export function createPaintRecords(scene: HydratedPageScene): PaintRecord[] {
-  return flattenSceneInPaintOrder(scene).map((record) => ({
-    ...record,
-    selectable: !record.node.locked
-  }));
+export function getAbsoluteNodeBounds(
+  scene: HydratedPageScene,
+  nodeId: string
+): NodeBounds | null {
+  return getNodePaintRecord(createPaintRecords(scene), nodeId)?.bounds ?? null;
 }
-

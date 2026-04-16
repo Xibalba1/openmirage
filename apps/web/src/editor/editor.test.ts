@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type PageDocumentDto, type PageDto } from "@openmirage/types";
-import { hitTestPaintRecords } from "./hit-test";
+import { hitTestPaintRecords, hitTestResizeHandle, selectPaintRecordsInMarquee } from "./hit-test";
 import { createPaintRecords, flattenSceneInPaintOrder, hydratePageDocument } from "./scene";
 import { pagePointToScreenPoint, screenPointToPagePoint, zoomViewportAtPoint } from "./viewport";
 
@@ -183,4 +183,106 @@ test("hitTestPaintRecords skips locked and hidden nodes and still works after zo
   const hit = hitTestPaintRecords(records, { x: 90, y: 100 }, 2);
 
   assert.equal(hit?.node.id, "rect-1");
+});
+
+test("group paint records expose derived bounds from visible descendants", () => {
+  const document = createDocument();
+  document.nodes["group-1"] = {
+    childIds: ["group-rect", "group-text"],
+    createdAt: "2026-04-15T00:00:00.000Z",
+    height: 1,
+    id: "group-1",
+    locked: false,
+    name: "Group",
+    opacity: 1,
+    pageId: "page-1",
+    parentId: null,
+    rotation: 0,
+    type: "group",
+    updatedAt: "2026-04-15T00:00:00.000Z",
+    visible: true,
+    width: 1,
+    x: 0,
+    y: 0,
+    zIndex: 2
+  };
+  document.nodes["group-rect"] = {
+    cornerRadius: 0,
+    createdAt: "2026-04-15T00:00:00.000Z",
+    fill: {
+      color: { alpha: 1, hex: "#000000" }
+    },
+    height: 40,
+    id: "group-rect",
+    locked: false,
+    name: "Group Rect",
+    opacity: 1,
+    pageId: "page-1",
+    parentId: "group-1",
+    rotation: 0,
+    shadow: null,
+    stroke: null,
+    type: "rectangle",
+    updatedAt: "2026-04-15T00:00:00.000Z",
+    visible: true,
+    width: 60,
+    x: 500,
+    y: 200,
+    zIndex: 0
+  };
+  document.nodes["group-text"] = {
+    content: "Grouped",
+    createdAt: "2026-04-15T00:00:00.000Z",
+    height: 24,
+    id: "group-text",
+    locked: false,
+    name: "Group Text",
+    opacity: 1,
+    pageId: "page-1",
+    parentId: "group-1",
+    rotation: 0,
+    typography: {
+      color: { alpha: 1, hex: "#000000" },
+      fontFamily: "IBM Plex Sans",
+      fontSize: 16,
+      fontWeight: 400,
+      lineHeight: 20,
+      textAlign: "left"
+    },
+    type: "text",
+    updatedAt: "2026-04-15T00:00:00.000Z",
+    visible: true,
+    width: 90,
+    x: 570,
+    y: 250,
+    zIndex: 1
+  };
+  document.rootNodeIds.push("group-1");
+  const scene = hydratePageDocument(page, document);
+  const groupRecord = createPaintRecords(scene).find((record) => record.node.id === "group-1");
+
+  assert.deepEqual(groupRecord?.bounds, {
+    height: 74,
+    width: 160,
+    x: 500,
+    y: 200
+  });
+});
+
+test("selectPaintRecordsInMarquee returns fully enclosed records", () => {
+  const scene = hydratePageDocument(page, createDocument());
+  const records = createPaintRecords(scene);
+  const selected = selectPaintRecordsInMarquee(records, { x: 55, y: 80 }, { x: 260, y: 220 });
+
+  assert.deepEqual(selected, ["rect-1", "ellipse-1"]);
+});
+
+test("hitTestResizeHandle detects primary selection handles", () => {
+  const scene = hydratePageDocument(page, createDocument());
+  const record = createPaintRecords(scene).find((candidate) => candidate.node.id === "rect-1") ?? null;
+
+  const hit = hitTestResizeHandle(record, { x: 64, y: 84 }, 1);
+
+  assert.equal(hit?.handle, "nw");
+  assert.equal(hit?.nodeId, "rect-1");
 });

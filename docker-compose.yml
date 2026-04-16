@@ -51,7 +51,6 @@ services:
 
   db-migrate:
     image: ${OPENMIRAGE_API_TOOLS_IMAGE:-openmirage-api-tools:local}
-    pull_policy: never
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -68,7 +67,6 @@ services:
 
   db-seed:
     image: ${OPENMIRAGE_API_TOOLS_IMAGE:-openmirage-api-tools:local}
-    pull_policy: never
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -85,7 +83,6 @@ services:
 
   api:
     image: ${OPENMIRAGE_API_IMAGE:-openmirage-api:local}
-    pull_policy: never
     build:
       context: .
       dockerfile: apps/api/Dockerfile
