@@ -1,13 +1,21 @@
-import type { PageDocumentDto } from "@openmirage/types";
+import {
+  createCollabDocumentName,
+  type PageDocumentDto
+} from "@openmirage/types";
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
 import * as syncProtocol from "y-protocols/sync";
 import * as Y from "yjs";
-import { buildPageCollabWebSocketUrl, type PageCollabLocation } from "../collab";
+import {
+  buildPageCollabWebSocketUrl,
+  type PageCollabLocation
+} from "../collab";
 
 const MESSAGE_SYNC = 0;
 
-function readBinaryMessage(data: Blob | ArrayBuffer | Uint8Array): Promise<Uint8Array> {
+function readBinaryMessage(
+  data: Blob | ArrayBuffer | Uint8Array
+): Promise<Uint8Array> {
   if (data instanceof Uint8Array) {
     return Promise.resolve(data);
   }
@@ -20,13 +28,22 @@ function readBinaryMessage(data: Blob | ArrayBuffer | Uint8Array): Promise<Uint8
 }
 
 function writeSyncMessage(
+  documentName: string,
   doc: Y.Doc,
   write: (encoder: encoding.Encoder) => void
 ): Uint8Array {
   const encoder = encoding.createEncoder();
+  encoding.writeVarString(encoder, documentName);
   encoding.writeVarUint(encoder, MESSAGE_SYNC);
   write(encoder);
   return encoding.toUint8Array(encoder);
+}
+
+function getFramedSyncMessageLength(documentName: string): number {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarString(encoder, documentName);
+  encoding.writeVarUint(encoder, MESSAGE_SYNC);
+  return encoding.length(encoder);
 }
 
 function readPageDocument(doc: Y.Doc, pageId: string): PageDocumentDto {
@@ -34,10 +51,15 @@ function readPageDocument(doc: Y.Doc, pageId: string): PageDocumentDto {
   const raw = pageMap.toJSON() as Partial<PageDocumentDto>;
 
   return {
-    nodes: typeof raw.nodes === "object" && raw.nodes ? (raw.nodes as PageDocumentDto["nodes"]) : {},
+    nodes:
+      typeof raw.nodes === "object" && raw.nodes
+        ? (raw.nodes as PageDocumentDto["nodes"])
+        : {},
     pageId,
     rootNodeIds: Array.isArray(raw.rootNodeIds)
-      ? raw.rootNodeIds.filter((value): value is string => typeof value === "string")
+      ? raw.rootNodeIds.filter(
+          (value): value is string => typeof value === "string"
+        )
       : []
   };
 }
@@ -54,9 +76,13 @@ export function subscribeToPageDocument(
     location: PageCollabLocation;
   },
   onDocument: (document: PageDocumentDto) => void,
-  onStatus?: (status: "connecting" | "connected" | "disconnected" | "error") => void
+  onStatus?: (
+    status: "connecting" | "connected" | "disconnected" | "error"
+  ) => void
 ): PageDocumentSubscription {
   const doc = new Y.Doc();
+  const documentName = createCollabDocumentName(input.location.pageId);
+  const minSyncMessageLength = getFramedSyncMessageLength(documentName);
   let socket: WebSocket | null = null;
   let destroyed = false;
 
@@ -94,31 +120,38 @@ export function subscribeToPageDocument(
 
         onStatus?.("connected");
         socket.send(
-          writeSyncMessage(doc, (encoder) => {
+          writeSyncMessage(documentName, doc, (encoder) => {
             syncProtocol.writeSyncStep1(encoder, doc);
           })
         );
       });
 
       socket.addEventListener("message", (event) => {
-        void readBinaryMessage(event.data as Blob | ArrayBuffer | Uint8Array).then(
-          (message) => {
-            const decoder = decoding.createDecoder(message);
-            const messageType = decoding.readVarUint(decoder);
+        void readBinaryMessage(
+          event.data as Blob | ArrayBuffer | Uint8Array
+        ).then((message) => {
+          const decoder = decoding.createDecoder(message);
+          const incomingDocumentName = decoding.readVarString(decoder);
 
-            if (messageType !== MESSAGE_SYNC || !socket) {
-              return;
-            }
-
-            const encoder = encoding.createEncoder();
-            encoding.writeVarUint(encoder, MESSAGE_SYNC);
-            syncProtocol.readSyncMessage(decoder, encoder, doc, null);
-
-            if (encoding.length(encoder) > 1) {
-              socket.send(encoding.toUint8Array(encoder));
-            }
+          if (incomingDocumentName !== documentName) {
+            return;
           }
-        );
+
+          const messageType = decoding.readVarUint(decoder);
+
+          if ((messageType !== MESSAGE_SYNC && messageType !== 4) || !socket) {
+            return;
+          }
+
+          const encoder = encoding.createEncoder();
+          encoding.writeVarString(encoder, documentName);
+          encoding.writeVarUint(encoder, MESSAGE_SYNC);
+          syncProtocol.readSyncMessage(decoder, encoder, doc, null);
+
+          if (encoding.length(encoder) > minSyncMessageLength) {
+            socket.send(encoding.toUint8Array(encoder));
+          }
+        });
       });
 
       socket.addEventListener("close", () => {
@@ -138,4 +171,3 @@ export function subscribeToPageDocument(
     }
   };
 }
-

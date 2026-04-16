@@ -3,6 +3,7 @@ import type {
   PageDocumentDto,
   PresencePayload
 } from "@openmirage/types";
+import { createCollabDocumentName } from "@openmirage/types";
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
 import * as awarenessProtocol from "y-protocols/awareness";
@@ -41,26 +42,48 @@ function readBinaryMessage(
 }
 
 function writeSyncMessage(
+  documentName: string,
   doc: Y.Doc,
   write: (encoder: encoding.Encoder) => void
 ): Uint8Array {
   const encoder = encoding.createEncoder();
+  encoding.writeVarString(encoder, documentName);
   encoding.writeVarUint(encoder, MESSAGE_SYNC);
   write(encoder);
   return encoding.toUint8Array(encoder);
 }
 
+function writeSyncUpdateMessage(
+  documentName: string,
+  update: Uint8Array
+): Uint8Array {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarString(encoder, documentName);
+  encoding.writeVarUint(encoder, MESSAGE_SYNC);
+  syncProtocol.writeUpdate(encoder, update);
+  return encoding.toUint8Array(encoder);
+}
+
 function writeAwarenessMessage(
+  documentName: string,
   awareness: awarenessProtocol.Awareness,
   clientIds: number[]
 ): Uint8Array {
   const encoder = encoding.createEncoder();
+  encoding.writeVarString(encoder, documentName);
   encoding.writeVarUint(encoder, MESSAGE_AWARENESS);
   encoding.writeVarUint8Array(
     encoder,
     awarenessProtocol.encodeAwarenessUpdate(awareness, clientIds)
   );
   return encoding.toUint8Array(encoder);
+}
+
+function getFramedSyncMessageLength(documentName: string): number {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarString(encoder, documentName);
+  encoding.writeVarUint(encoder, MESSAGE_SYNC);
+  return encoding.length(encoder);
 }
 
 function isPresencePayload(
@@ -178,6 +201,8 @@ export function createEditorSession(
   ) => void
 ): EditorSession {
   const doc = input.doc ?? new Y.Doc();
+  const documentName = createCollabDocumentName(input.pageId);
+  const minSyncMessageLength = getFramedSyncMessageLength(documentName);
   const awareness = new awarenessProtocol.Awareness(doc);
   const listeners = new Set<(snapshot: EditorSessionSnapshot) => void>();
   const past: HistoryEntry[] = [];
@@ -208,7 +233,11 @@ export function createEditorSession(
     }
   };
 
-  const handleDocUpdate = () => {
+  const handleDocUpdate = (update: Uint8Array, origin: unknown) => {
+    if (origin !== "remote" && socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(writeSyncUpdateMessage(documentName, update));
+    }
+
     emit();
   };
   const handleAwarenessUpdate = (
@@ -231,7 +260,9 @@ export function createEditorSession(
       socket &&
       socket.readyState === WebSocket.OPEN
     ) {
-      socket.send(writeAwarenessMessage(awareness, changedClients));
+      socket.send(
+        writeAwarenessMessage(documentName, awareness, changedClients)
+      );
     }
 
     emit();
@@ -347,41 +378,54 @@ export function createEditorSession(
 
       onStatus?.("connected");
       if (awareness.getLocalState()) {
-        socket.send(writeAwarenessMessage(awareness, [doc.clientID]));
+        socket.send(
+          writeAwarenessMessage(documentName, awareness, [doc.clientID])
+        );
       }
       socket.send(
-        writeSyncMessage(doc, (encoder) => {
+        writeSyncMessage(documentName, doc, (encoder) => {
           syncProtocol.writeSyncStep1(encoder, doc);
         })
       );
     });
 
     socket.addEventListener("message", (event) => {
-      void readBinaryMessage(
-        event.data as Blob | ArrayBuffer | Uint8Array
-      ).then((message) => {
-        const decoder = decoding.createDecoder(message);
-        const messageType = decoding.readVarUint(decoder);
+      void readBinaryMessage(event.data as Blob | ArrayBuffer | Uint8Array)
+        .then((message) => {
+          try {
+            const decoder = decoding.createDecoder(message);
+            const incomingDocumentName = decoding.readVarString(decoder);
 
-        if (messageType === MESSAGE_SYNC && socket) {
-          const encoder = encoding.createEncoder();
-          encoding.writeVarUint(encoder, MESSAGE_SYNC);
-          syncProtocol.readSyncMessage(decoder, encoder, doc, null);
+            if (incomingDocumentName !== documentName) {
+              return;
+            }
 
-          if (encoding.length(encoder) > 1) {
-            socket.send(encoding.toUint8Array(encoder));
+            const messageType = decoding.readVarUint(decoder);
+
+            if ((messageType === MESSAGE_SYNC || messageType === 4) && socket) {
+              const encoder = encoding.createEncoder();
+              encoding.writeVarString(encoder, documentName);
+              encoding.writeVarUint(encoder, MESSAGE_SYNC);
+              syncProtocol.readSyncMessage(decoder, encoder, doc, "remote");
+
+              if (encoding.length(encoder) > minSyncMessageLength) {
+                socket.send(encoding.toUint8Array(encoder));
+              }
+              return;
+            }
+
+            if (messageType === MESSAGE_AWARENESS) {
+              awarenessProtocol.applyAwarenessUpdate(
+                awareness,
+                decoding.readVarUint8Array(decoder),
+                "remote"
+              );
+            }
+          } catch {
+            // Ignore malformed websocket frames instead of breaking the session loop.
           }
-          return;
-        }
-
-        if (messageType === MESSAGE_AWARENESS) {
-          awarenessProtocol.applyAwarenessUpdate(
-            awareness,
-            decoding.readVarUint8Array(decoder),
-            "remote"
-          );
-        }
-      });
+        })
+        .catch(() => undefined);
     });
 
     socket.addEventListener("close", () => {
