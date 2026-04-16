@@ -1,7 +1,7 @@
 (openmirage_routes) {
   encode gzip zstd
 
-  @api path /auth* /healthz /readyz /metrics /internal* /__diagnostics*
+  @api path /auth* /v1* /healthz /readyz /metrics /internal* /__diagnostics*
   @collab_http path /collab/*
   @worker_http path /worker/*
 

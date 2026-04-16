@@ -172,11 +172,13 @@ export function PageEditorScreen(props: {
       return;
     }
 
-    if (isPanning && panStartRef.current) {
+    const panStart = panStartRef.current;
+
+    if (isPanning && panStart) {
       setViewport((current) => ({
         ...current,
-        panX: panStartRef.current!.panX + screenPoint.x - panStartRef.current!.x,
-        panY: panStartRef.current!.panY + screenPoint.y - panStartRef.current!.y
+        panX: panStart.panX + screenPoint.x - panStart.x,
+        panY: panStart.panY + screenPoint.y - panStart.y
       }));
       return;
     }
