@@ -230,6 +230,9 @@ export function PageEditorScreen(props: {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasShellRef = useRef<HTMLDivElement | null>(null);
   const sessionRef = useRef<EditorSession | null>(null);
+  const activeInteractionRef = useRef<ActiveInteraction | null>(null);
+  const selectedIdsRef = useRef<string[]>([]);
+  const primarySelectionIdRef = useRef<string | null>(null);
   const [sessionSnapshot, setSessionSnapshot] = useState<EditorSessionSnapshot>({
     canRedo: false,
     canUndo: false,
@@ -259,6 +262,9 @@ export function PageEditorScreen(props: {
     setViewport(createInitialViewport());
     setActiveScopeId(null);
     setActiveTextEdit(null);
+    activeInteractionRef.current = null;
+    selectedIdsRef.current = [];
+    primarySelectionIdRef.current = null;
     setActiveInteraction(null);
 
     const session = createEditorSession(
@@ -369,8 +375,7 @@ export function PageEditorScreen(props: {
       return;
     }
 
-    setPrimarySelectionId(null);
-    setSelectedIds([]);
+    updateSelection([], null);
   }, [previewDocument.nodes, primarySelectionId]);
 
   useEffect(() => {
@@ -467,15 +472,14 @@ export function PageEditorScreen(props: {
           pageId: props.page.id,
           type: "delete-node"
         });
-        setSelectedIds([]);
-        setPrimarySelectionId(null);
+        updateSelection([], null);
         return;
       }
 
       if (event.key === "Escape") {
         if (activeInteraction) {
           event.preventDefault();
-          setActiveInteraction(null);
+          updateActiveInteraction(null);
           return;
         }
 
@@ -483,8 +487,7 @@ export function PageEditorScreen(props: {
           event.preventDefault();
           const nextScopeId = sessionSnapshot.document.nodes[activeScopeId]?.parentId ?? null;
           setActiveScopeId(nextScopeId);
-          setSelectedIds(nextScopeId ? [nextScopeId] : []);
-          setPrimarySelectionId(nextScopeId);
+          updateSelection(nextScopeId ? [nextScopeId] : [], nextScopeId);
         }
 
         return;
@@ -516,8 +519,15 @@ export function PageEditorScreen(props: {
   ]);
 
   function updateSelection(nextSelectedIds: string[], nextPrimaryId: string | null) {
+    selectedIdsRef.current = nextSelectedIds;
+    primarySelectionIdRef.current = resolvePrimarySelectionId(nextSelectedIds, nextPrimaryId);
     setSelectedIds(nextSelectedIds);
     setPrimarySelectionId(resolvePrimarySelectionId(nextSelectedIds, nextPrimaryId));
+  }
+
+  function updateActiveInteraction(nextInteraction: ActiveInteraction | null) {
+    activeInteractionRef.current = nextInteraction;
+    setActiveInteraction(nextInteraction);
   }
 
   function readCanvasPoint(event: { clientX: number; clientY: number }) {
@@ -552,55 +562,20 @@ export function PageEditorScreen(props: {
       return;
     }
 
-    session.commit({
-      nodeId: activeTextNode.id,
-      pageId: props.page.id,
-      patch: {
-        content: activeTextEdit.draft,
-        height: activeTextNode.height,
-        width: activeTextNode.width
-      } as Partial<SceneGraphNode>,
-      type: "update-node"
-    });
-    setActiveTextEdit(null);
-  }
-
-  function handlePointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
-    const screenPoint = readCanvasPoint(event);
-    const pagePoint = readPagePoint(event);
-
-    if (activeInteraction?.type === "pan") {
-      if (!screenPoint) {
-        return;
-      }
-
-      setViewport({
-        ...activeInteraction.startViewport,
-        panX:
-          activeInteraction.startViewport.panX +
-          screenPoint.x -
-          activeInteraction.startScreenPoint.x,
-        panY:
-          activeInteraction.startViewport.panY +
-          screenPoint.y -
-          activeInteraction.startScreenPoint.y
-      });
-      return;
-    }
-
     if (!pagePoint) {
       return;
     }
 
     if (activeInteraction) {
-      setActiveInteraction((current) =>
-        current
-          ? {
-              ...current,
-              currentPagePoint: pagePoint
-            }
-          : current
-      );
+      const current = activeInteractionRef.current;
+
+      if (current) {
+        updateActiveInteraction({
+          ...current,
+          currentPagePoint: pagePoint
+        });
+      }
+
       return;
     }
 
@@ -647,6 +622,36 @@ export function PageEditorScreen(props: {
       return;
     }
 
+    event.currentTarget.setPointerCapture(event.pointerId);
+
+    if (event.button === 1 || event.button === 2 || event.altKey || event.metaKey || event.ctrlKey) {
+      updateActiveInteraction({
+        startScreenPoint: screenPoint,
+        startViewport: viewport,
+        type: "pan"
+      });
+      return;
+    }
+
+    const primaryScopedRecord = primaryRecord && scopedRecords.some((record) => record.node.id === primaryRecord.node.id)
+      ? primaryRecord
+      : null;
+    const handleHit = pagePoint
+      ? hitTestResizeHandle(primaryScopedRecord, pagePoint, viewport.zoom)
+      : null;
+
+    if (handleHit && primaryScopedRecord && pagePoint) {
+      updateActiveInteraction({
+        currentPagePoint: pagePoint,
+        handle: handleHit.handle,
+        originalDocument: sessionSnapshot.document,
+        record: primaryScopedRecord,
+        startPagePoint: pagePoint,
+        type: "resize"
+      });
+      return;
+    }
+
     if (!pagePoint) {
       return;
     }
@@ -655,7 +660,7 @@ export function PageEditorScreen(props: {
 
     if (!hit) {
       setHoveredId(null);
-      setActiveInteraction({
+      updateActiveInteraction({
         currentPagePoint: pagePoint,
         startPagePoint: pagePoint,
         startSelectedIds: event.shiftKey ? selectedIds : [],
@@ -675,7 +680,7 @@ export function PageEditorScreen(props: {
 
     const nextSelectedIds = selectedIds.includes(hit.node.id) ? selectedIds : [hit.node.id];
     updateSelection(nextSelectedIds, hit.node.id);
-    setActiveInteraction({
+    updateActiveInteraction({
       currentPagePoint: pagePoint,
       originalDocument: sessionSnapshot.document,
       startPagePoint: pagePoint,
@@ -685,59 +690,64 @@ export function PageEditorScreen(props: {
 
   function stopInteraction(event?: ReactPointerEvent<HTMLCanvasElement>) {
     const session = sessionRef.current;
+    const currentInteraction = activeInteractionRef.current;
 
-    if (!session || !activeInteraction) {
-      setActiveInteraction(null);
+    if (!session || !currentInteraction) {
+      updateActiveInteraction(null);
       return;
     }
 
     const pagePoint =
-      activeInteraction.currentPagePoint ??
+      currentInteraction.currentPagePoint ??
       (event ? readPagePoint(event) : null);
 
-    if (activeInteraction.type === "move" && pagePoint) {
+    if (currentInteraction.type === "move" && pagePoint) {
       const delta = {
-        x: pagePoint.x - activeInteraction.startPagePoint.x,
-        y: pagePoint.y - activeInteraction.startPagePoint.y
+        x: pagePoint.x - currentInteraction.startPagePoint.x,
+        y: pagePoint.y - currentInteraction.startPagePoint.y
       };
 
       if (delta.x || delta.y) {
         session.commit({
           pageId: props.page.id,
           type: "move-node",
-          updates: deriveMoveUpdates(activeInteraction.originalDocument, selectedIds, delta)
+          updates: deriveMoveUpdates(
+            currentInteraction.originalDocument,
+            selectedIdsRef.current,
+            delta
+          )
         });
       }
     }
 
-    if (activeInteraction.type === "resize" && pagePoint) {
+    if (currentInteraction.type === "resize" && pagePoint) {
       session.commit({
-        nodeId: activeInteraction.record.node.id,
+        nodeId: currentInteraction.record.node.id,
         pageId: props.page.id,
         type: "resize-node",
         updates: deriveResizeUpdates(
-          activeInteraction.originalDocument,
-          activeInteraction.record,
-          activeInteraction.handle,
+          currentInteraction.originalDocument,
+          currentInteraction.record,
+          currentInteraction.handle,
           pagePoint
         )
       });
     }
 
-    if (activeInteraction.type === "marquee" && pagePoint) {
+    if (currentInteraction.type === "marquee" && pagePoint) {
       const nextSelectedIds = selectPaintRecordsInMarquee(
         scopedRecords,
-        activeInteraction.startPagePoint,
+        currentInteraction.startPagePoint,
         pagePoint
       );
 
       updateSelection(
-        Array.from(new Set([...activeInteraction.startSelectedIds, ...nextSelectedIds])),
-        nextSelectedIds.at(-1) ?? activeInteraction.startSelectedIds.at(-1) ?? null
+        Array.from(new Set([...currentInteraction.startSelectedIds, ...nextSelectedIds])),
+        nextSelectedIds.at(-1) ?? currentInteraction.startSelectedIds.at(-1) ?? null
       );
     }
 
-    setActiveInteraction(null);
+    updateActiveInteraction(null);
   }
 
   function handleWheel(event: React.WheelEvent<HTMLCanvasElement>) {
@@ -869,8 +879,12 @@ export function PageEditorScreen(props: {
       pageId: props.page.id,
       type: "delete-node"
     });
-    setSelectedIds((current) => current.filter((nodeId) => !nodeIds.includes(nodeId)));
-    setPrimarySelectionId((current) => (current && nodeIds.includes(current) ? null : current));
+    const nextSelectedIds = selectedIdsRef.current.filter((nodeId) => !nodeIds.includes(nodeId));
+    const nextPrimaryId =
+      primarySelectionIdRef.current && nodeIds.includes(primarySelectionIdRef.current)
+        ? null
+        : primarySelectionIdRef.current;
+    updateSelection(nextSelectedIds, nextPrimaryId);
   }
 
   function groupSelection() {
@@ -1083,6 +1097,22 @@ export function PageEditorScreen(props: {
             </button>
             <button
               className="button button-secondary"
+              disabled={sessionSnapshot.document.nodes[primarySelectionId ?? ""]?.type !== "group"}
+              onClick={ungroupSelection}
+              type="button"
+            >
+              Ungroup
+            </button>
+            <button
+              className="button button-secondary"
+              disabled={!sessionSnapshot.canUndo}
+              onClick={() => sessionRef.current?.undo()}
+              type="button"
+            >
+              Undo
+            </button>
+            <button
+              className="button button-secondary"
               disabled={!sessionSnapshot.canRedo}
               onClick={() => sessionRef.current?.redo()}
               type="button"
@@ -1124,7 +1154,7 @@ export function PageEditorScreen(props: {
           <canvas
             className="editor-canvas"
             onDoubleClick={handleCanvasDoubleClick}
-            onPointerCancel={() => setActiveInteraction(null)}
+            onPointerCancel={() => updateActiveInteraction(null)}
             onPointerDown={handlePointerDown}
             onPointerLeave={() => {
               setHoveredId(null);
