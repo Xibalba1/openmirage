@@ -5,6 +5,7 @@ import { renderSceneToCanvas } from "./render";
 import { createPaintRecords, hydratePageDocument } from "./scene";
 
 class FakeCanvasContext {
+  drawImageCalls = 0;
   fillStyle: string | CanvasGradient | CanvasPattern = "#000000";
   globalAlpha = 1;
   lineWidth = 1;
@@ -12,8 +13,12 @@ class FakeCanvasContext {
   quadraticCurveCalls = 0;
 
   beginPath(): void {}
+  clip(): void {}
   clearRect(): void {}
   closePath(): void {}
+  drawImage(): void {
+    this.drawImageCalls += 1;
+  }
   ellipse(): void {}
   fill(): void {}
   fillRect(): void {}
@@ -120,6 +125,7 @@ test("renderSceneToCanvas falls back when roundRect is unavailable", () => {
           width: scene.width
         },
         records,
+        {},
         {
           hoveredId: null,
           marquee: null,
@@ -129,6 +135,76 @@ test("renderSceneToCanvas falls back when roundRect is unavailable", () => {
       );
     });
     assert.ok(context.quadraticCurveCalls > 0);
+  } finally {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: originalWindow
+    });
+  }
+});
+
+test("renderSceneToCanvas draws resolved images when available", () => {
+  const context = new FakeCanvasContext();
+  const canvas = new FakeCanvas(context);
+  const scene = hydratePageDocument(page, {
+    nodes: {
+      image: {
+        assetId: "asset-1",
+        createdAt: "2026-04-15T00:00:00.000Z",
+        fitMode: "cover",
+        height: 180,
+        id: "image",
+        locked: false,
+        name: "Image",
+        opacity: 1,
+        pageId: "page-1",
+        parentId: null,
+        rotation: 0,
+        type: "image",
+        updatedAt: "2026-04-15T00:00:00.000Z",
+        visible: true,
+        width: 240,
+        x: 80,
+        y: 100,
+        zIndex: 0
+      }
+    },
+    pageId: "page-1",
+    rootNodeIds: ["image"]
+  });
+  const records = createPaintRecords(scene);
+  const originalWindow = globalThis.window;
+
+  try {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        devicePixelRatio: 1
+      }
+    });
+    renderSceneToCanvas(
+      canvas as unknown as HTMLCanvasElement,
+      { panX: 0, panY: 0, zoom: 1 },
+      {
+        background: scene.background,
+        height: scene.height,
+        width: scene.width
+      },
+      records,
+      {
+        "asset-1": {
+          height: 20,
+          width: 20
+        } as unknown as CanvasImageSource
+      },
+      {
+        hoveredId: null,
+        marquee: null,
+        primarySelectionId: null,
+        selectedIds: []
+      }
+    );
+    assert.equal(context.drawImageCalls, 1);
   } finally {
     Object.defineProperty(globalThis, "window", {
       configurable: true,

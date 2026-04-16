@@ -2,13 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { type PoolClient } from "pg";
 import {
+  createAsset,
   createComment,
   createDatabasePool,
   createFileWithPages,
   createPage,
   getAuthorizedCollabPageSession,
-  listComments,
+  getAuthorizedAsset,
   listAuthorizedWorkspaces,
+  listAssets,
+  listComments,
   listWorkspaceProjects,
   resolveComment,
   renameProject
@@ -514,6 +517,318 @@ test("createComment, listComments, and resolveComment stay file/page scoped", as
       client
     );
     assert.equal(wrongPage, null);
+  });
+
+  if (!ran) {
+    t.skip("database unavailable");
+  }
+});
+
+test("createAsset and listAssets stay workspace/file scoped", async (t) => {
+  const ran = await withDatabaseTransaction(async (client) => {
+    const userId = await insertUser(
+      client,
+      `asset-user-${Date.now()}@example.com`,
+      "Asset User"
+    );
+    const otherUserId = await insertUser(
+      client,
+      `asset-other-${Date.now()}@example.com`,
+      "Other Asset User"
+    );
+    const workspaceId = await insertWorkspace(
+      client,
+      "Asset Workspace",
+      `asset-${Date.now()}`
+    );
+    const otherWorkspaceId = await insertWorkspace(
+      client,
+      "Other Asset Workspace",
+      `asset-other-${Date.now()}`
+    );
+
+    await insertMembership(client, workspaceId, userId, "owner");
+    await insertMembership(client, otherWorkspaceId, otherUserId, "owner");
+
+    const projectId = await insertProject(client, workspaceId, "Asset Project");
+    const otherProjectId = await insertProject(
+      client,
+      otherWorkspaceId,
+      "Other Asset Project"
+    );
+    const file = await createFileWithPages(
+      userId,
+      workspaceId,
+      projectId,
+      "Asset File",
+      [{ name: "Page One" }],
+      client
+    );
+    const otherFile = await createFileWithPages(
+      otherUserId,
+      otherWorkspaceId,
+      otherProjectId,
+      "Other Asset File",
+      [{ name: "Hidden Page" }],
+      client
+    );
+
+    const fileId = file?.file.id as string;
+
+    const fileAsset = await createAsset(
+      userId,
+      workspaceId,
+      projectId,
+      fileId,
+      {
+        byteSize: 1024,
+        filename: "hero.png",
+        height: 600,
+        kind: "image",
+        mimeType: "image/png",
+        scope: "file",
+        storageKey: `workspaces/${workspaceId}/files/${fileId}/assets/hero.png`,
+        width: 800
+      },
+      client
+    );
+    const workspaceAsset = await createAsset(
+      userId,
+      workspaceId,
+      projectId,
+      fileId,
+      {
+        byteSize: 2048,
+        filename: "shared.webp",
+        height: 400,
+        kind: "image",
+        mimeType: "image/webp",
+        scope: "workspace",
+        storageKey: `workspaces/${workspaceId}/assets/shared.webp`,
+        width: 640
+      },
+      client
+    );
+
+    assert.equal(fileAsset?.fileId, fileId);
+    assert.equal(fileAsset?.byteSize, 1024);
+    assert.equal(fileAsset?.mimeType, "image/png");
+    assert.equal(workspaceAsset?.fileId, null);
+    assert.equal(
+      workspaceAsset?.storageKey,
+      `workspaces/${workspaceId}/assets/shared.webp`
+    );
+
+    const visibleAssets = await listAssets(
+      userId,
+      workspaceId,
+      projectId,
+      {
+        fileId,
+        includeWorkspaceAssets: true
+      },
+      client
+    );
+    assert.deepEqual(
+      visibleAssets?.map((asset) => ({
+        fileId: asset.fileId,
+        filename: asset.filename
+      })),
+      [
+        { fileId: null, filename: "shared.webp" },
+        { fileId, filename: "hero.png" }
+      ]
+    );
+
+    const fileOnlyAssets = await listAssets(
+      userId,
+      workspaceId,
+      projectId,
+      {
+        fileId,
+        includeWorkspaceAssets: false
+      },
+      client
+    );
+    assert.deepEqual(
+      fileOnlyAssets?.map((asset) => asset.filename),
+      ["hero.png"]
+    );
+
+    const hiddenAssets = await listAssets(
+      otherUserId,
+      workspaceId,
+      projectId,
+      {
+        fileId,
+        includeWorkspaceAssets: true
+      },
+      client
+    );
+    assert.equal(hiddenAssets, null);
+
+    const blockedCreate = await createAsset(
+      otherUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      {
+        byteSize: 128,
+        filename: "blocked.gif",
+        height: 16,
+        kind: "image",
+        mimeType: "image/gif",
+        scope: "file",
+        storageKey: "blocked",
+        width: 16
+      },
+      client
+    );
+    assert.equal(blockedCreate, null);
+
+    const wrongFileCreate = await createAsset(
+      userId,
+      workspaceId,
+      projectId,
+      otherFile?.file.id as string,
+      {
+        byteSize: 256,
+        filename: "wrong.jpeg",
+        height: 32,
+        kind: "image",
+        mimeType: "image/jpeg",
+        scope: "file",
+        storageKey: "wrong",
+        width: 32
+      },
+      client
+    );
+    assert.equal(wrongFileCreate, null);
+  });
+
+  if (!ran) {
+    t.skip("database unavailable");
+  }
+});
+
+test("getAuthorizedAsset returns only visible file or workspace scoped assets", async (t) => {
+  const ran = await withDatabaseTransaction(async (client) => {
+    const userId = await insertUser(
+      client,
+      `asset-fetch-${Date.now()}@example.com`,
+      "Asset Fetch User"
+    );
+    const otherUserId = await insertUser(
+      client,
+      `asset-fetch-other-${Date.now()}@example.com`,
+      "Other Asset Fetch User"
+    );
+    const workspaceId = await insertWorkspace(
+      client,
+      "Asset Fetch Workspace",
+      `asset-fetch-${Date.now()}`
+    );
+    const otherWorkspaceId = await insertWorkspace(
+      client,
+      "Asset Fetch Other Workspace",
+      `asset-fetch-other-${Date.now()}`
+    );
+
+    await insertMembership(client, workspaceId, userId, "owner");
+    await insertMembership(client, otherWorkspaceId, otherUserId, "owner");
+
+    const projectId = await insertProject(client, workspaceId, "Asset Fetch Project");
+    const file = await createFileWithPages(
+      userId,
+      workspaceId,
+      projectId,
+      "Asset Source File",
+      [{ name: "Page One" }],
+      client
+    );
+    const siblingFile = await createFileWithPages(
+      userId,
+      workspaceId,
+      projectId,
+      "Asset Sibling File",
+      [{ name: "Page Two" }],
+      client
+    );
+
+    const fileId = file?.file.id as string;
+    const siblingFileId = siblingFile?.file.id as string;
+    const fileAsset = await createAsset(
+      userId,
+      workspaceId,
+      projectId,
+      fileId,
+      {
+        byteSize: 128,
+        filename: "file-only.png",
+        height: 32,
+        kind: "image",
+        mimeType: "image/png",
+        scope: "file",
+        storageKey: "file-only",
+        width: 32
+      },
+      client
+    );
+    const workspaceAsset = await createAsset(
+      userId,
+      workspaceId,
+      projectId,
+      fileId,
+      {
+        byteSize: 256,
+        filename: "shared.png",
+        height: 64,
+        kind: "image",
+        mimeType: "image/png",
+        scope: "workspace",
+        storageKey: "shared",
+        width: 64
+      },
+      client
+    );
+
+    const visibleFileAsset = await getAuthorizedAsset(
+      userId,
+      workspaceId,
+      projectId,
+      fileId,
+      fileAsset?.id as string,
+      client
+    );
+    const hiddenFileAsset = await getAuthorizedAsset(
+      userId,
+      workspaceId,
+      projectId,
+      siblingFileId,
+      fileAsset?.id as string,
+      client
+    );
+    const visibleWorkspaceAsset = await getAuthorizedAsset(
+      userId,
+      workspaceId,
+      projectId,
+      siblingFileId,
+      workspaceAsset?.id as string,
+      client
+    );
+    const blockedWorkspaceAsset = await getAuthorizedAsset(
+      otherUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      workspaceAsset?.id as string,
+      client
+    );
+
+    assert.equal(visibleFileAsset?.id, fileAsset?.id);
+    assert.equal(hiddenFileAsset, null);
+    assert.equal(visibleWorkspaceAsset?.id, workspaceAsset?.id);
+    assert.equal(blockedWorkspaceAsset, null);
   });
 
   if (!ran) {

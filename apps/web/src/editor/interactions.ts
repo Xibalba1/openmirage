@@ -216,6 +216,49 @@ export function createNodeCommandForInsert(input: {
   }
 }
 
+export function createImageNodeCommandForInsert(input: {
+  assetId: string;
+  fitMode?: "contain" | "cover" | "fill";
+  height: number;
+  pageId: string;
+  parentAbsolutePosition: Point;
+  parentId: string | null;
+  point: Point;
+  width: number;
+}): CreateNodeCommand {
+  const id = crypto.randomUUID();
+  const timestamp = createTimestamp();
+  const localX = input.point.x - input.parentAbsolutePosition.x;
+  const localY = input.point.y - input.parentAbsolutePosition.y;
+
+  return {
+    index: null,
+    node: {
+      assetId: input.assetId,
+      createdAt: timestamp,
+      fitMode: input.fitMode ?? "cover",
+      height: input.height,
+      id,
+      locked: false,
+      name: "Image",
+      opacity: 1,
+      pageId: input.pageId,
+      parentId: input.parentId,
+      rotation: 0,
+      type: "image",
+      updatedAt: timestamp,
+      visible: true,
+      width: input.width,
+      x: localX - input.width / 2,
+      y: localY - input.height / 2,
+      zIndex: 0
+    },
+    pageId: input.pageId,
+    parentId: input.parentId,
+    type: "create-node"
+  };
+}
+
 export function deriveMoveUpdates(
   document: PageDocumentDto,
   selectedIds: string[],

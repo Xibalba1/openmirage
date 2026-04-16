@@ -46,12 +46,14 @@ import {
 } from "@openmirage/observability";
 import { createStorage } from "@openmirage/storage";
 import {
+  type AssetRecordDto,
   type CreateFileInput,
   type CreatePageInput,
   type CreateCommentInput,
   type CreateProjectInput,
   type AuthContext,
   type CommentListResponse,
+  type ListAssetsResponse,
   type RenameFileInput,
   type RenamePageInput,
   type RenameProjectInput,
@@ -61,6 +63,12 @@ import {
   type StorageConfig
 } from "@openmirage/types";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import {
+  parseMultipartUpload,
+  resolveAssetContentRequest,
+  resolveCreateAssetRequest,
+  resolveListAssetsRequest
+} from "./assets.js";
 import {
   resolveCreateCommentRequest,
   resolveListCommentsRequest,
@@ -99,6 +107,10 @@ interface FileParams extends ProjectParams {
   fileId: string;
 }
 
+interface AssetParams extends FileParams {
+  assetId: string;
+}
+
 interface PageParams extends FileParams {
   pageId: string;
 }
@@ -111,6 +123,10 @@ interface CollabPageSessionQuerystring {
 interface CommentListQuerystring {
   includeResolved?: string;
   pageId?: string;
+}
+
+interface AssetListQuerystring {
+  includeWorkspaceAssets?: string;
 }
 
 interface SmokeSecretHeaders {
@@ -1264,6 +1280,151 @@ async function startApiServer(): Promise<void> {
       }
 
       return page;
+    }
+  );
+  app.get<{
+    Params: FileParams;
+    Querystring: AssetListQuerystring;
+  }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/assets",
+    async (request, reply) => {
+      const authContext = await readAuthContextFromRequest(
+        request,
+        databasePool,
+        sessionContract
+      );
+      let includeWorkspaceAssets: boolean | undefined = true;
+
+      if (typeof request.query.includeWorkspaceAssets === "string") {
+        if (request.query.includeWorkspaceAssets === "true") {
+          includeWorkspaceAssets = true;
+        } else if (request.query.includeWorkspaceAssets === "false") {
+          includeWorkspaceAssets = false;
+        } else {
+          reply.status(400);
+          return {
+            error: "includeWorkspaceAssets must be true or false"
+          };
+        }
+      }
+
+      const resolution = await resolveListAssetsRequest(
+        authContext,
+        {
+          fileId: request.params.fileId,
+          includeWorkspaceAssets,
+          projectId: request.params.projectId,
+          workspaceId: request.params.workspaceId
+        },
+        databasePool,
+        storage,
+        {
+          appBaseUrl: env.appBaseUrl,
+          storageProvider: env.storage.provider
+        }
+      );
+
+      reply.status(resolution.status);
+      return resolution.body satisfies ListAssetsResponse | { error: string };
+    }
+  );
+  app.get<{
+    Params: AssetParams;
+  }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/assets/:assetId/content",
+    async (request, reply) => {
+      const authContext = await readAuthContextFromRequest(
+        request,
+        databasePool,
+        sessionContract
+      );
+      const resolution = await resolveAssetContentRequest(
+        authContext,
+        {
+          assetId: request.params.assetId,
+          fileId: request.params.fileId,
+          projectId: request.params.projectId,
+          workspaceId: request.params.workspaceId
+        },
+        databasePool,
+        storage
+      );
+
+      if (resolution.status !== 200) {
+        reply.status(resolution.status);
+        return resolution.body;
+      }
+
+      reply.header("cache-control", resolution.body.cacheControl);
+      reply.header("content-type", resolution.body.contentType);
+      reply.status(200);
+      return reply.send(Buffer.from(resolution.body.body));
+    }
+  );
+  app.post<{
+    Params: FileParams;
+  }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/assets",
+    {
+      bodyLimit: 11 * 1024 * 1024
+    },
+    async (request, reply) => {
+      const authContext = await readAuthContextFromRequest(
+        request,
+        databasePool,
+        sessionContract
+      );
+
+      try {
+        const parsedUpload = await parseMultipartUpload({
+          contentTypeHeader:
+            typeof request.headers["content-type"] === "string"
+              ? request.headers["content-type"]
+              : undefined,
+          stream: request.raw
+        });
+        const resolution = await resolveCreateAssetRequest(
+          authContext,
+          {
+            file:
+              parsedUpload.files.length === 1
+                ? (parsedUpload.files[0] ?? null)
+                : null,
+            fileId: request.params.fileId,
+            projectId: request.params.projectId,
+            scope: parsedUpload.fields.scope,
+            workspaceId: request.params.workspaceId
+          },
+          databasePool,
+          storage,
+          {
+            appBaseUrl: env.appBaseUrl,
+            storageProvider: env.storage.provider
+          }
+        );
+
+        reply.status(resolution.status);
+        return resolution.body satisfies AssetRecordDto | { error: string };
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          (error as Error & { code?: string }).code === "invalid_content_type"
+        ) {
+          reply.status(400);
+          return {
+            error: "content-type must be multipart/form-data"
+          };
+        }
+
+        if (error instanceof Error && error.message === "payload_too_large") {
+          reply.status(400);
+          return {
+            error: "file must be 10 MB or smaller"
+          };
+        }
+
+        throw error;
+      }
     }
   );
   app.get<{

@@ -352,6 +352,56 @@ test("editor session commit, undo, and redo track one local command at a time", 
   }
 });
 
+test("image node commits persist asset references without embedded binary payloads", () => {
+  const doc = new Y.Doc();
+  writePageDocument(doc, createDocument());
+  const session = createEditorSession({ doc, pageId: "page-1" });
+
+  try {
+    const timestamp = "2026-04-16T00:00:00.000Z";
+    assert.equal(
+      session.commit({
+        index: null,
+        node: {
+          assetId: "asset-123",
+          createdAt: timestamp,
+          fitMode: "cover",
+          height: 180,
+          id: "image-1",
+          locked: false,
+          name: "Image",
+          opacity: 1,
+          pageId: "page-1",
+          parentId: null,
+          rotation: 0,
+          type: "image",
+          updatedAt: timestamp,
+          visible: true,
+          width: 240,
+          x: 40,
+          y: 50,
+          zIndex: 1
+        },
+        pageId: "page-1",
+        parentId: null,
+        type: "create-node"
+      }),
+      true
+    );
+
+    const imageNode = session.getSnapshot().document.nodes["image-1"];
+    assert.equal(imageNode?.type, "image");
+    if (imageNode?.type !== "image") {
+      throw new Error("expected image node");
+    }
+    assert.equal(imageNode.assetId, "asset-123");
+    assert.equal("contentUrl" in imageNode, false);
+    assert.equal("bodyBase64" in imageNode, false);
+  } finally {
+    session.destroy();
+  }
+});
+
 test("remote document updates refresh the snapshot without adding local history", () => {
   const doc = new Y.Doc();
   writePageDocument(doc, createDocument());

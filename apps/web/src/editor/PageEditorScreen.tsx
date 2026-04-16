@@ -1,4 +1,5 @@
 import {
+  type AssetRecordDto,
   type AuthenticatedUser,
   type CommentDto,
   type CommentListResponse,
@@ -6,6 +7,7 @@ import {
   type FileDto,
   type GroupNode,
   type GroupNodesCommand,
+  type ListAssetsResponse,
   type PageDocumentDto,
   type PageDto,
   type PresenceParticipant,
@@ -34,6 +36,7 @@ import {
 } from "./hit-test";
 import {
   createEmptyDocument,
+  createImageNodeCommandForInsert,
   createNodeCommandForInsert,
   deriveMoveUpdates,
   deriveResizeUpdates,
@@ -54,6 +57,7 @@ import {
   screenPointToPagePoint,
   zoomViewportAtPoint
 } from "./viewport";
+import { getMissingAssetRefreshKey } from "./asset-resolution";
 import {
   type ActiveInteraction,
   type ActiveTextEdit,
@@ -75,6 +79,20 @@ type CommentLoadState =
   | { comments: CommentDto[]; status: "loading" }
   | { comments: CommentDto[]; message: string; status: "error" };
 
+type AssetLoadState =
+  | { assets: AssetRecordDto[]; status: "loaded" }
+  | { assets: AssetRecordDto[]; status: "loading" }
+  | { assets: AssetRecordDto[]; message: string; status: "error" };
+
+type ImageResourceState = Record<
+  string,
+  {
+    image: HTMLImageElement | null;
+    status: "error" | "loaded" | "loading";
+    url: string;
+  }
+>;
+
 const PRESENCE_COLORS = [
   "#f97316",
   "#06b6d4",
@@ -88,6 +106,29 @@ const PRESENCE_COLORS = [
 
 function createApiUrl(baseUrl: string, path: string): string {
   return new URL(path, baseUrl).toString();
+}
+
+function resolveInsertedImageSize(asset: AssetRecordDto): {
+  height: number;
+  width: number;
+} {
+  const fallback = {
+    height: 240,
+    width: 320
+  };
+  const width = asset.width ?? fallback.width;
+  const height = asset.height ?? fallback.height;
+
+  if (width <= 0 || height <= 0) {
+    return fallback;
+  }
+
+  const scale = Math.min(1, 480 / Math.max(width, height));
+
+  return {
+    height: Math.max(1, Math.round(height * scale)),
+    width: Math.max(1, Math.round(width * scale))
+  };
 }
 
 async function fetchEditorJson<T>(
@@ -114,6 +155,46 @@ async function fetchEditorJson<T>(
   }
 
   return (await response.json()) as T;
+}
+
+async function uploadEditorAsset(
+  apiBaseUrl: string,
+  path: string,
+  file: File
+): Promise<AssetRecordDto> {
+  const formData = new FormData();
+  formData.set("file", file);
+  formData.set("scope", "file");
+
+  const response = await fetch(createApiUrl(apiBaseUrl, path), {
+    body: formData,
+    credentials: "include",
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    const failure = (await response.json().catch(() => ({}))) as {
+      error?: string;
+    };
+    throw new Error(
+      failure.error ?? `Request failed with HTTP ${response.status}`
+    );
+  }
+
+  return (await response.json()) as AssetRecordDto;
+}
+
+async function fetchEditorAssets(
+  apiBaseUrl: string,
+  route: Pick<AppPageRoute, "fileId" | "projectId" | "workspaceId">
+): Promise<ListAssetsResponse> {
+  return fetchEditorJson<ListAssetsResponse>(
+    apiBaseUrl,
+    `/v1/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}/assets?includeWorkspaceAssets=true`,
+    {
+      method: "GET"
+    }
+  );
 }
 
 function createPresenceParticipant(
@@ -326,6 +407,8 @@ export function PageEditorScreen(props: {
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasShellRef = useRef<HTMLDivElement | null>(null);
+  const imageUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const requestedMissingAssetKeyRef = useRef<string | null>(null);
   const sessionRef = useRef<EditorSession | null>(null);
   const [sessionSnapshot, setSessionSnapshot] = useState<EditorSessionSnapshot>(
     {
@@ -357,10 +440,16 @@ export function PageEditorScreen(props: {
     comments: [],
     status: "loading"
   });
+  const [assetLoadState, setAssetLoadState] = useState<AssetLoadState>({
+    assets: [],
+    status: "loading"
+  });
+  const [imageResources, setImageResources] = useState<ImageResourceState>({});
   const [commentDraft, setCommentDraft] = useState("");
   const [commentTargetType, setCommentTargetType] = useState<
     "file" | "node" | "page"
   >("page");
+  const [isUploadingAsset, setIsUploadingAsset] = useState(false);
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
   const [resolvingCommentId, setResolvingCommentId] = useState<string | null>(
     null
@@ -386,6 +475,11 @@ export function PageEditorScreen(props: {
     setActiveScopeId(null);
     setActiveTextEdit(null);
     setActiveInteraction(null);
+    setAssetLoadState({
+      assets: [],
+      status: "loading"
+    });
+    setImageResources({});
 
     const session = createEditorSession(
       {
@@ -478,6 +572,13 @@ export function PageEditorScreen(props: {
     () => flattenLayerTree(sessionSnapshot.document, null),
     [sessionSnapshot.document]
   );
+  const assetsById = useMemo(
+    () =>
+      Object.fromEntries(
+        assetLoadState.assets.map((asset) => [asset.id, asset] as const)
+      ),
+    [assetLoadState.assets]
+  );
   const textEditRecord = useMemo(
     () =>
       activeTextEdit
@@ -513,6 +614,25 @@ export function PageEditorScreen(props: {
       visiblePresenceEntries.filter((entry) => entry.payload.cursor !== null),
     [visiblePresenceEntries]
   );
+  const referencedAssetIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          Object.values(sessionSnapshot.document.nodes)
+            .filter(
+              (node): node is Extract<SceneGraphNode, { type: "image" }> =>
+                node.type === "image"
+            )
+            .map((node) => node.assetId)
+        )
+      ),
+    [sessionSnapshot.document.nodes]
+  );
+  const missingAssetRefreshKey = useMemo(
+    () =>
+      getMissingAssetRefreshKey(referencedAssetIds, Object.keys(assetsById)),
+    [assetsById, referencedAssetIds]
+  );
   const remoteSelectionEntries = useMemo(
     () =>
       visiblePresenceEntries
@@ -546,6 +666,16 @@ export function PageEditorScreen(props: {
       }),
     [commentLoadState.comments]
   );
+  const loadedImages = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(imageResources).map(([assetId, resource]) => [
+          assetId,
+          resource.status === "loaded" ? resource.image : null
+        ])
+      ),
+    [imageResources]
+  );
 
   useEffect(() => {
     if (!primarySelectionId || previewDocument.nodes[primarySelectionId]) {
@@ -575,6 +705,178 @@ export function PageEditorScreen(props: {
       setCommentTargetType(availableCommentTargetTypes[0]);
     }
   }, [availableCommentTargetTypes, commentTargetType]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAssets() {
+      setAssetLoadState((current) => ({
+        assets: current.assets,
+        status: "loading"
+      }));
+
+      try {
+        const payload = await fetchEditorAssets(
+          props.collab.apiBaseUrl,
+          props.route
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        setAssetLoadState({
+          assets: payload.assets,
+          status: "loaded"
+        });
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        setAssetLoadState((current) => ({
+          assets: current.assets,
+          message: error instanceof Error ? error.message : String(error),
+          status: "error"
+        }));
+      }
+    }
+
+    void loadAssets();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    props.collab.apiBaseUrl,
+    props.route.fileId,
+    props.route.projectId,
+    props.route.workspaceId
+  ]);
+
+  useEffect(() => {
+    requestedMissingAssetKeyRef.current = null;
+  }, [
+    props.page.id,
+    props.route.fileId,
+    props.route.projectId,
+    props.route.workspaceId
+  ]);
+
+  useEffect(() => {
+    if (!missingAssetRefreshKey) {
+      requestedMissingAssetKeyRef.current = null;
+      return;
+    }
+
+    if (requestedMissingAssetKeyRef.current === missingAssetRefreshKey) {
+      return;
+    }
+
+    requestedMissingAssetKeyRef.current = missingAssetRefreshKey;
+    let cancelled = false;
+
+    void fetchEditorAssets(props.collab.apiBaseUrl, props.route)
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+
+        setAssetLoadState({
+          assets: payload.assets,
+          status: "loaded"
+        });
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        setAssetLoadState((current) => ({
+          assets: current.assets,
+          message: error instanceof Error ? error.message : String(error),
+          status: "error"
+        }));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    missingAssetRefreshKey,
+    props.collab.apiBaseUrl,
+    props.route.fileId,
+    props.route.projectId,
+    props.route.workspaceId
+  ]);
+
+  useEffect(() => {
+    const activeLoads = referencedAssetIds
+      .map((assetId) => ({
+        asset: assetsById[assetId],
+        assetId
+      }))
+      .filter(
+        (entry): entry is { asset: AssetRecordDto; assetId: string } =>
+          entry.asset !== undefined
+      )
+      .filter((entry) => {
+        const existing = imageResources[entry.assetId];
+
+        return !existing || existing.url !== entry.asset.contentUrl;
+      });
+
+    if (activeLoads.length === 0) {
+      return;
+    }
+
+    const cleanups: Array<() => void> = [];
+
+    for (const entry of activeLoads) {
+      const image = new Image();
+
+      setImageResources((current) => ({
+        ...current,
+        [entry.assetId]: {
+          image: null,
+          status: "loading",
+          url: entry.asset.contentUrl
+        }
+      }));
+
+      image.onload = () => {
+        setImageResources((current) => ({
+          ...current,
+          [entry.assetId]: {
+            image,
+            status: "loaded",
+            url: entry.asset.contentUrl
+          }
+        }));
+      };
+      image.onerror = () => {
+        setImageResources((current) => ({
+          ...current,
+          [entry.assetId]: {
+            image: null,
+            status: "error",
+            url: entry.asset.contentUrl
+          }
+        }));
+      };
+      image.src = entry.asset.contentUrl;
+      cleanups.push(() => {
+        image.onload = null;
+        image.onerror = null;
+      });
+    }
+
+    return () => {
+      for (const cleanup of cleanups) {
+        cleanup();
+      }
+    };
+  }, [assetsById, imageResources, referencedAssetIds]);
 
   useEffect(() => {
     let cancelled = false;
@@ -644,6 +946,7 @@ export function PageEditorScreen(props: {
         width: scene.width
       },
       paintRecords,
+      loadedImages,
       {
         hoveredId,
         marquee:
@@ -663,6 +966,7 @@ export function PageEditorScreen(props: {
     effectivePrimarySelectionId,
     effectiveSelectedIds,
     hoveredId,
+    loadedImages,
     paintRecords,
     resizeVersion,
     scene.background,
@@ -838,6 +1142,89 @@ export function PageEditorScreen(props: {
       comments: payload.comments,
       status: "loaded"
     });
+  }
+
+  async function refreshAssets() {
+    const payload = await fetchEditorAssets(props.collab.apiBaseUrl, props.route);
+
+    setAssetLoadState({
+      assets: payload.assets,
+      status: "loaded"
+    });
+  }
+
+  function insertImageAsset(asset: AssetRecordDto) {
+    const session = sessionRef.current;
+    const canvas = canvasRef.current;
+
+    if (!session || !canvas) {
+      return;
+    }
+
+    const targetParentId = getContainerInsertionTarget({
+      activeScopeId,
+      document: sessionSnapshot.document,
+      primarySelectionId
+    });
+    const parentAbsolutePosition = targetParentId
+      ? (getNodeAbsolutePosition(sessionSnapshot.document, targetParentId) ?? {
+          x: 0,
+          y: 0
+        })
+      : { x: 0, y: 0 };
+    const centerPoint = screenPointToPagePoint(
+      {
+        x: canvas.clientWidth / 2,
+        y: canvas.clientHeight / 2
+      },
+      viewport
+    );
+    const size = resolveInsertedImageSize(asset);
+    const command = createImageNodeCommandForInsert({
+      assetId: asset.id,
+      fitMode: "cover",
+      height: size.height,
+      pageId: props.page.id,
+      parentAbsolutePosition,
+      parentId: targetParentId,
+      point: centerPoint,
+      width: size.width
+    });
+
+    session.commit(command);
+    updateSelection([command.node.id], command.node.id);
+  }
+
+  async function handleImageFile(file: File) {
+    setIsUploadingAsset(true);
+
+    try {
+      const asset = await uploadEditorAsset(
+        props.collab.apiBaseUrl,
+        `/v1/workspaces/${encodeURIComponent(props.route.workspaceId)}/projects/${encodeURIComponent(props.route.projectId)}/files/${encodeURIComponent(props.route.fileId)}/assets`,
+        file
+      );
+      setAssetLoadState((current) => ({
+        assets: [
+          asset,
+          ...current.assets.filter((existingAsset) => existingAsset.id !== asset.id)
+        ],
+        status: "loaded"
+      }));
+      insertImageAsset(asset);
+      await refreshAssets();
+    } catch (error) {
+      setAssetLoadState((current) => ({
+        assets: current.assets,
+        message: error instanceof Error ? error.message : String(error),
+        status: "error"
+      }));
+    } finally {
+      setIsUploadingAsset(false);
+      if (imageUploadInputRef.current) {
+        imageUploadInputRef.current.value = "";
+      }
+    }
   }
 
   async function handleSubmitComment(event: React.FormEvent<HTMLFormElement>) {
@@ -1561,6 +1948,19 @@ export function PageEditorScreen(props: {
             <p className="eyebrow">Page</p>
             <h2>{props.page.name}</h2>
           </div>
+          <input
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+
+              if (file) {
+                void handleImageFile(file);
+              }
+            }}
+            ref={imageUploadInputRef}
+            type="file"
+          />
           <div className="toolbar-strip">
             <button
               className="button button-secondary"
@@ -1596,6 +1996,14 @@ export function PageEditorScreen(props: {
               type="button"
             >
               Text
+            </button>
+            <button
+              className="button button-secondary"
+              disabled={isUploadingAsset}
+              onClick={() => imageUploadInputRef.current?.click()}
+              type="button"
+            >
+              {isUploadingAsset ? "Uploading..." : "Image"}
             </button>
             <button
               className="button button-secondary"
@@ -1669,6 +2077,14 @@ export function PageEditorScreen(props: {
         <div className="editor-meta">
           <span>Collab: {collabStatus}</span>
           <span>
+            Assets:{" "}
+            {assetLoadState.status === "error"
+              ? "error"
+              : assetLoadState.status === "loading"
+                ? "loading"
+                : assetLoadState.assets.length}
+          </span>
+          <span>
             Viewport: {viewport.zoom.toFixed(2)}x · pan{" "}
             {Math.round(viewport.panX)}/{Math.round(viewport.panY)}
           </span>
@@ -1694,6 +2110,9 @@ export function PageEditorScreen(props: {
             ))}
           </div>
         </div>
+        {assetLoadState.status === "error" ? (
+          <p className="muted">{assetLoadState.message}</p>
+        ) : null}
 
         <div className="editor-canvas-shell" ref={canvasShellRef}>
           <canvas

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type PageDocumentDto, type PageDto } from "@openmirage/types";
+import { getMissingAssetRefreshKey } from "./asset-resolution";
 import { hitTestPaintRecords, hitTestResizeHandle, selectPaintRecordsInMarquee } from "./hit-test";
 import { createPaintRecords, flattenSceneInPaintOrder, hydratePageDocument } from "./scene";
 import { pagePointToScreenPoint, screenPointToPagePoint, zoomViewportAtPoint } from "./viewport";
@@ -183,6 +184,18 @@ test("hitTestPaintRecords skips locked and hidden nodes and still works after zo
   const hit = hitTestPaintRecords(records, { x: 90, y: 100 }, 2);
 
   assert.equal(hit?.node.id, "rect-1");
+});
+
+test("getMissingAssetRefreshKey stays stable for the same unresolved asset set", () => {
+  assert.equal(
+    getMissingAssetRefreshKey(["asset-b", "asset-a", "asset-b"], ["asset-a"]),
+    "asset-b"
+  );
+  assert.equal(
+    getMissingAssetRefreshKey(["asset-b", "asset-a"], []),
+    getMissingAssetRefreshKey(["asset-a", "asset-b", "asset-b"], [])
+  );
+  assert.equal(getMissingAssetRefreshKey(["asset-a"], ["asset-a"]), null);
 });
 
 test("group paint records expose derived bounds from visible descendants", () => {
