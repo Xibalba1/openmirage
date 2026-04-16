@@ -23,6 +23,24 @@ function fail(message) {
   throw new Error(message);
 }
 
+function readSpawnOutput(result, fallback) {
+  const stderr =
+    typeof result.stderr === "string" ? result.stderr.trim() : "";
+  const stdout =
+    typeof result.stdout === "string" ? result.stdout.trim() : "";
+  const errorMessage =
+    result.error instanceof Error ? result.error.message : "";
+  const signal = typeof result.signal === "string" ? result.signal : "";
+
+  return (
+    stderr ||
+    stdout ||
+    errorMessage ||
+    signal ||
+    fallback
+  );
+}
+
 async function request(url, init) {
   const response = await fetch(url, init);
   const text = await response.text();
@@ -279,11 +297,7 @@ function verifyWebsocketUpgrade() {
     );
 
     if (result.status !== 0 && result.status !== 52) {
-      fail(
-        result.stderr.trim() ||
-          result.stdout.trim() ||
-          "curl websocket probe failed"
-      );
+      fail(readSpawnOutput(result, "curl websocket probe failed"));
     }
 
     const output = readFileSync(headersFile, "utf8");
@@ -391,11 +405,7 @@ ws.on("close", () => process.exit(authenticated ? 0 : 1));`
   );
 
   if (result.status !== 0) {
-    fail(
-      result.stderr.trim() ||
-        result.stdout.trim() ||
-        "authenticated collab websocket verification failed"
-    );
+    fail(readSpawnOutput(result, "authenticated collab websocket verification failed"));
   }
 }
 
