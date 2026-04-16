@@ -200,6 +200,7 @@ Auth/session envs in `apps/api/.env.example`:
 - `AUTH_MAGIC_LINK_TTL_MINUTES=15`
 - `AUTH_SESSION_TTL_DAYS=30`
 - `DEV_AUTH_EXPOSE_MAGIC_LINK=true` to include the dev magic link in the request response
+- `SMOKE_TEST_SHARED_SECRET=openmirage-smoke-secret` for the secret-gated collab smoke bootstrap/cleanup routes used by local and staging verification
 
 The storage-bearing services share the same storage env contract:
 

@@ -7,6 +7,8 @@ const expectedCookiePath = process.env.SESSION_COOKIE_PATH ?? "/";
 const expectedCookieSameSite = process.env.SESSION_COOKIE_SAME_SITE ?? "lax";
 const expectedSecureCookie =
   (process.env.SESSION_COOKIE_SECURE ?? "false") === "true";
+const smokeTestSharedSecret =
+  process.env.SMOKE_TEST_SHARED_SECRET ?? "openmirage-smoke-secret";
 const verifyDiagnosticsErrorRoute =
   (process.env.OPENMIRAGE_VERIFY_ERROR_ROUTE ?? "false") === "true";
 
@@ -86,70 +88,49 @@ async function requestJson(url, init) {
   };
 }
 
-async function createAuthenticatedCollabFixture(baseUrl, sessionCookie) {
-  const sessionResponse = await requestJson(`${baseUrl}/auth/session`, {
+async function createAuthenticatedCollabFixture(baseUrl) {
+  const fixtureResponse = await requestJson(
+    `${baseUrl}/internal/smoke/collab/bootstrap`,
+    {
+      method: "POST",
+      headers: {
+        "x-openmirage-smoke-secret": smokeTestSharedSecret
+      }
+    }
+  );
+
+  const fixture = fixtureResponse.body;
+
+  if (
+    typeof fixture?.documentName !== "string" ||
+    typeof fixture?.fileId !== "string" ||
+    typeof fixture?.pageId !== "string" ||
+    typeof fixture?.sessionCookie !== "string" ||
+    typeof fixture?.userId !== "string" ||
+    typeof fixture?.workspaceId !== "string"
+  ) {
+    fail("collab verification bootstrap did not return a complete fixture");
+  }
+
+  return fixture;
+}
+
+async function cleanupAuthenticatedCollabFixture(baseUrl, fixture) {
+  if (!fixture) {
+    return;
+  }
+
+  await requestJson(`${baseUrl}/internal/smoke/collab/cleanup`, {
+    method: "POST",
     headers: {
-      cookie: sessionCookie
-    }
+      "content-type": "application/json",
+      "x-openmirage-smoke-secret": smokeTestSharedSecret
+    },
+    body: JSON.stringify({
+      userId: fixture.userId,
+      workspaceId: fixture.workspaceId
+    })
   });
-  const workspaceId = sessionResponse.body.memberships?.[0]?.workspaceId;
-
-  if (typeof workspaceId !== "string" || workspaceId.length === 0) {
-    fail(
-      "seed bootstrap did not provide a workspace membership for collab verification"
-    );
-  }
-
-  const projectResponse = await requestJson(
-    `${baseUrl}/v1/workspaces/${encodeURIComponent(workspaceId)}/projects`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        cookie: sessionCookie
-      },
-      body: JSON.stringify({
-        name: `Collab Verify ${Date.now()}`
-      })
-    }
-  );
-  const projectId = projectResponse.body.id;
-
-  if (typeof projectId !== "string" || projectId.length === 0) {
-    fail("collab verification project creation did not return an id");
-  }
-
-  const fileResponse = await requestJson(
-    `${baseUrl}/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/files`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        cookie: sessionCookie
-      },
-      body: JSON.stringify({
-        initialPages: [{ name: "Verification Page" }],
-        name: `Collab Verify File ${Date.now()}`
-      })
-    }
-  );
-  const fileId = fileResponse.body.file?.id;
-  const pageId =
-    fileResponse.body.defaultPageId ?? fileResponse.body.pages?.[0]?.id;
-
-  if (typeof fileId !== "string" || fileId.length === 0) {
-    fail("collab verification file creation did not return a file id");
-  }
-
-  if (typeof pageId !== "string" || pageId.length === 0) {
-    fail("collab verification file creation did not return a page id");
-  }
-
-  return {
-    fileId,
-    pageId,
-    workspaceId
-  };
 }
 
 function cleanup() {
@@ -379,141 +360,105 @@ async function verifyAuthAndWebsocket() {
   }
 
   const sessionCookie = setCookieHeader.split(";")[0];
-  const collabFixture = await createAuthenticatedCollabFixture(
-    caddyBaseUrl,
-    sessionCookie
-  );
+  const sessionResponse = await requestJson(`${caddyBaseUrl}/auth/session`, {
+    headers: {
+      cookie: sessionCookie
+    }
+  });
 
-  const websocketProbe = spawnSync(
-    "pnpm",
-    [
-      "--filter",
-      "@openmirage/collab",
-      "exec",
+  if (!Array.isArray(sessionResponse.body.memberships)) {
+    fail("auth/session did not return a valid authenticated session payload");
+  }
+
+  let collabFixture = null;
+  let verificationError = null;
+
+  try {
+    collabFixture = await createAuthenticatedCollabFixture(caddyBaseUrl);
+
+    const websocketProbe = spawnSync(
       "node",
-      "--input-type=module",
-      "-e",
-      `import WebSocket from "ws";
-import * as decoding from "lib0/decoding";
-import * as encoding from "lib0/encoding";
-import * as syncProtocol from "y-protocols/sync";
-import * as Y from "yjs";
-const documentName = ${JSON.stringify(`page:${collabFixture.pageId}`)};
-const ws = new WebSocket(${JSON.stringify(`ws://127.0.0.1/collab?documentName=${encodeURIComponent(`page:${collabFixture.pageId}`)}&fileId=${encodeURIComponent(collabFixture.fileId)}&pageId=${encodeURIComponent(collabFixture.pageId)}&workspaceId=${encodeURIComponent(collabFixture.workspaceId)}`)}, {
-  headers: { Cookie: ${JSON.stringify(sessionCookie)} }
-});
-const doc = new Y.Doc();
-let authenticated = false;
-function writeAuth() {
-  const encoder = encoding.createEncoder();
-  encoding.writeVarString(encoder, documentName);
-  encoding.writeVarUint(encoder, 2);
-  encoding.writeVarUint(encoder, 0);
-  encoding.writeVarString(encoder, "");
-  return encoding.toUint8Array(encoder);
-}
-function writeSyncStep1() {
-  const encoder = encoding.createEncoder();
-  encoding.writeVarString(encoder, documentName);
-  encoding.writeVarUint(encoder, 0);
-  syncProtocol.writeSyncStep1(encoder, doc);
-  return encoding.toUint8Array(encoder);
-}
-const timer = setTimeout(() => {
-  console.error("timeout");
-  process.exit(1);
-}, 5000);
-ws.on("open", () => {
-  ws.send(writeAuth());
-});
-ws.on("message", (raw) => {
-  const message = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
-  const decoder = decoding.createDecoder(message);
-  const incomingDocumentName = decoding.readVarString(decoder);
-  if (incomingDocumentName !== documentName) {
-    return;
-  }
-  const messageType = decoding.readVarUint(decoder);
-  if (messageType === 2) {
-    const authType = decoding.readVarUint(decoder);
-    if (authType === 2) {
-      authenticated = true;
-      ws.send(writeSyncStep1());
-      return;
-    }
-    console.error("unexpected-auth");
-    process.exit(1);
-  }
-  if ((messageType === 0 || messageType === 4) && authenticated) {
-    const encoder = encoding.createEncoder();
-    encoding.writeVarString(encoder, documentName);
-    encoding.writeVarUint(encoder, 0);
-    syncProtocol.readSyncMessage(decoder, encoder, doc, "remote");
-    clearTimeout(timer);
-    console.log("open+sync");
-    ws.close();
-  }
-});
-ws.on("error", (error) => {
-  clearTimeout(timer);
-  console.error(error.message);
-  process.exit(1);
-});
-ws.on("close", () => process.exit(0));`
-    ],
-    {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      stdio: "pipe"
-    }
-  );
-
-  if (websocketProbe.status !== 0) {
-    fail(readSpawnOutput(websocketProbe, "websocket verification through Caddy failed"));
-  }
-
-  const unauthenticatedProbe = spawnSync(
-    "pnpm",
-    [
-      "--filter",
-      "@openmirage/collab",
-      "exec",
-      "node",
-      "--input-type=module",
-      "-e",
-      `import WebSocket from "ws";
-const ws = new WebSocket(${JSON.stringify(`ws://127.0.0.1/collab?documentName=${encodeURIComponent(`page:${collabFixture.pageId}`)}&fileId=${encodeURIComponent(collabFixture.fileId)}&pageId=${encodeURIComponent(collabFixture.pageId)}&workspaceId=${encodeURIComponent(collabFixture.workspaceId)}`)});
-const timer = setTimeout(() => {
-  console.error("timeout");
-  process.exit(1);
-}, 5000);
-ws.on("unexpected-response", (_request, response) => {
-  clearTimeout(timer);
-  console.log(String(response.statusCode));
-  process.exit(response.statusCode === 401 ? 0 : 1);
-});
-ws.on("open", () => {
-  clearTimeout(timer);
-  console.error("unexpected-open");
-  process.exit(1);
-});
-ws.on("error", () => {});
-ws.on("close", () => process.exit(0));`
-    ],
-    {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      stdio: "pipe"
-    }
-  );
-
-  if (unauthenticatedProbe.status !== 0) {
-    fail(
-      readSpawnOutput(
-        unauthenticatedProbe,
-        "unauthenticated websocket verification through Caddy failed"
-      )
+      [
+        "./apps/collab/scripts/verify-page-collab.mjs",
+        "--mode",
+        "authenticated",
+        "--base-url",
+        caddyBaseUrl,
+        "--document-name",
+        collabFixture.documentName,
+        "--file-id",
+        collabFixture.fileId,
+        "--page-id",
+        collabFixture.pageId,
+        "--workspace-id",
+        collabFixture.workspaceId,
+        "--session-cookie",
+        collabFixture.sessionCookie
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        stdio: "pipe"
+      }
     );
+
+    if (websocketProbe.status !== 0) {
+      fail(
+        readSpawnOutput(websocketProbe, "websocket verification through Caddy failed")
+      );
+    }
+
+    const unauthenticatedProbe = spawnSync(
+      "node",
+      [
+        "./apps/collab/scripts/verify-page-collab.mjs",
+        "--mode",
+        "unauthorized",
+        "--base-url",
+        caddyBaseUrl,
+        "--document-name",
+        collabFixture.documentName,
+        "--file-id",
+        collabFixture.fileId,
+        "--page-id",
+        collabFixture.pageId,
+        "--workspace-id",
+        collabFixture.workspaceId
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        stdio: "pipe"
+      }
+    );
+
+    if (unauthenticatedProbe.status !== 0) {
+      fail(
+        readSpawnOutput(
+          unauthenticatedProbe,
+          "unauthenticated websocket verification through Caddy failed"
+        )
+      );
+    }
+  } catch (error) {
+    verificationError = error;
+    throw error;
+  } finally {
+    try {
+      await cleanupAuthenticatedCollabFixture(caddyBaseUrl, collabFixture);
+    } catch (cleanupError) {
+      if (!verificationError) {
+        throw cleanupError;
+      }
+
+      console.error(
+        `[openmirage] smoke collab cleanup failed after verification error: ${
+          cleanupError instanceof Error
+            ? cleanupError.message
+            : String(cleanupError)
+        }`
+      );
+    }
   }
 }
 

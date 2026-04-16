@@ -31,6 +31,7 @@ export interface ApiEnv extends BaseServiceEnv {
   authMagicLinkTtlMinutes: number;
   authSessionTtlDays: number;
   devAuthExposeMagicLink: boolean;
+  smokeTestSharedSecret: string | undefined;
   port: number;
   authPath: string;
   databaseUrl: string;
@@ -328,6 +329,7 @@ export function readApiEnv(source: EnvSource = process.env): ApiEnv {
       "DEV_AUTH_EXPOSE_MAGIC_LINK",
       environment !== "production"
     ),
+    smokeTestSharedSecret: source.SMOKE_TEST_SHARED_SECRET,
     port: readNumber(source, "API_PORT", 4000),
     authPath: readUrlPath(source, "AUTH_PATH", "/auth"),
     databaseUrl: readRequiredString(

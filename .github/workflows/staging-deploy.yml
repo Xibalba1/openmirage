@@ -32,6 +32,7 @@ jobs:
       VPS_DEPLOY_DIR: ${{ secrets.VPS_DEPLOY_DIR }}
       GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
       GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+      STAGING_SMOKE_TEST_SECRET: ${{ secrets.STAGING_SMOKE_TEST_SECRET }}
       STAGING_PUBLIC_BASE_URL: ${{ vars.STAGING_PUBLIC_BASE_URL }}
 
     steps:

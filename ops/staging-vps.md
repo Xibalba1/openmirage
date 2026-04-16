@@ -82,6 +82,7 @@ GitHub `staging` Environment secrets:
 - `VPS_DEPLOY_DIR`
 - `GHCR_USERNAME`
 - `GHCR_TOKEN`
+- `STAGING_SMOKE_TEST_SECRET`
 
 GitHub `staging` Environment variables:
 
@@ -105,6 +106,7 @@ Minimum staging env expectations:
 - `SESSION_COOKIE_SECURE=true`
 - storage configuration pointed at the chosen provider
 - app/session/auth secrets required by the services
+- `SMOKE_TEST_SHARED_SECRET` set to the same value as the GitHub `STAGING_SMOKE_TEST_SECRET`
 
 Preferred storage default:
 
@@ -181,10 +183,11 @@ Each deploy is only successful if all of these checks pass through the public Ca
 4. `GET /collab/healthz`
 5. `GET /worker/readyz`
 6. authenticated page-scoped collab bootstrap at `/collab`:
-   - request a dev magic link and consume a session cookie
-   - create a verification project/file/page through the API
-   - open `/collab` with `documentName`, `workspaceId`, `fileId`, and `pageId`
+   - call the secret-gated `/internal/smoke/collab/bootstrap` route
+   - receive a disposable verification workspace/user/session plus `documentName`, `workspaceId`, `fileId`, and `pageId`
+   - open `/collab` with those identifiers
    - complete the Hocuspocus auth handshake and receive a sync reply
+   - call `/internal/smoke/collab/cleanup` so the verification data does not remain in staging
 7. storage smoke path:
    - `GET /internal/storage/smoke`
    - `POST /internal/storage/smoke`
@@ -245,7 +248,7 @@ docker compose --env-file .env.staging -f docker-compose.yml -f docker-compose.s
 
 Also inspect:
 
-- generated magic-link origin and cookie flags
+- `STAGING_SMOKE_TEST_SECRET` in GitHub Actions and `SMOKE_TEST_SHARED_SECRET` on the VPS
 - storage credentials, bucket, and provider-specific connectivity
 - authenticated page-scoped collab handshake and sync at `/collab`
 - whether `.env.staging` still matches the public staging origin
