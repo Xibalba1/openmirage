@@ -1,4 +1,5 @@
 import {
+  type EditorCommand,
   type PageDocumentDto,
   type PageDto,
   type SceneGraphNode
@@ -23,10 +24,13 @@ export interface FlattenedSceneNode {
   absoluteX2: number | null;
   absoluteY: number;
   absoluteY2: number | null;
+  bounds: NodeBounds;
   node: SceneGraphNode;
 }
 
 export interface PaintRecord extends FlattenedSceneNode {
+  isContainer: boolean;
+  painted: boolean;
   selectable: boolean;
 }
 
@@ -41,3 +45,91 @@ export interface Point {
   y: number;
 }
 
+export interface NodeBounds {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+}
+
+export type ResizeHandle =
+  | "n"
+  | "ne"
+  | "e"
+  | "se"
+  | "s"
+  | "sw"
+  | "w"
+  | "nw"
+  | "line-start"
+  | "line-end";
+
+export interface ResizeHandleHit {
+  handle: ResizeHandle;
+  nodeId: string;
+}
+
+export interface HistoryEntry {
+  after: PageDocumentDto;
+  before: PageDocumentDto;
+  command: EditorCommand;
+}
+
+export interface EditorSessionSnapshot {
+  canRedo: boolean;
+  canUndo: boolean;
+  document: PageDocumentDto;
+}
+
+export interface EditorSession {
+  commit(command: EditorCommand): boolean;
+  connect(): void;
+  destroy(): void;
+  getSnapshot(): EditorSessionSnapshot;
+  redo(): boolean;
+  subscribe(listener: (snapshot: EditorSessionSnapshot) => void): () => void;
+  undo(): boolean;
+}
+
+export interface ActiveTextEdit {
+  draft: string;
+  nodeId: string;
+}
+
+export type ActiveInteraction =
+  | {
+      currentPagePoint?: Point;
+      startPagePoint: Point;
+      startSelectedIds: string[];
+      type: "marquee";
+    }
+  | {
+      currentPagePoint?: Point;
+      originalDocument: PageDocumentDto;
+      startPagePoint: Point;
+      type: "move";
+    }
+  | {
+      handle: ResizeHandle;
+      currentPagePoint?: Point;
+      originalDocument: PageDocumentDto;
+      record: PaintRecord;
+      startPagePoint: Point;
+      type: "resize";
+    }
+  | {
+      currentPagePoint?: Point;
+      startScreenPoint: Point;
+      startViewport: ViewportState;
+      type: "pan";
+    };
+
+export interface EditorState {
+  activeInteraction: ActiveInteraction | null;
+  activeScopeId: string | null;
+  activeTextEdit: ActiveTextEdit | null;
+  hoveredId: string | null;
+  primarySelectionId: string | null;
+  selectedIds: string[];
+  viewport: ViewportState;
+}

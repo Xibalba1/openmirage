@@ -454,6 +454,56 @@ h3 {
   gap: 12px;
 }
 
+.layer-list {
+  display: grid;
+  gap: 8px;
+}
+
+.layer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.layer-row-active {
+  background: rgba(240, 178, 106, 0.14);
+  border: 1px solid rgba(240, 178, 106, 0.26);
+}
+
+.layer-label {
+  display: grid;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.layer-label span,
+.layer-order {
+  color: rgba(247, 241, 231, 0.65);
+  font-size: 0.82rem;
+}
+
+.layer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.button-icon {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 0.8rem;
+}
+
 .compact-resource-list {
   gap: 10px;
 }
@@ -501,6 +551,7 @@ h3 {
 }
 
 .editor-canvas-shell {
+  position: relative;
   min-height: 72vh;
   border-radius: 24px;
   overflow: hidden;
@@ -518,6 +569,18 @@ h3 {
   height: 72vh;
   cursor: default;
   touch-action: none;
+}
+
+.editor-text-overlay {
+  position: absolute;
+  resize: none;
+  padding: 8px 10px;
+  border: 1px solid rgba(240, 178, 106, 0.8);
+  border-radius: 8px;
+  background: rgba(251, 248, 242, 0.96);
+  color: #132c35;
+  outline: none;
+  box-shadow: 0 16px 32px rgba(3, 8, 10, 0.22);
 }
 
 @media (max-width: 960px) {

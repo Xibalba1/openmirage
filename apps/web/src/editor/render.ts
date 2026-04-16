@@ -1,5 +1,6 @@
 import { type SceneGraphNode } from "@openmirage/types";
-import { type PaintRecord, type ViewportState } from "./types";
+import { getResizeHandlePoints } from "./hit-test";
+import { type PaintRecord, type Point, type ViewportState } from "./types";
 
 function applyOpacity(ctx: CanvasRenderingContext2D, opacity: number): void {
   ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
@@ -163,6 +164,8 @@ export function renderSceneToCanvas(
   records: PaintRecord[],
   overlay: {
     hoveredId: string | null;
+    marquee: { end: Point; start: Point } | null;
+    primarySelectionId: string | null;
     selectedIds: string[];
   }
 ): void {
@@ -233,25 +236,61 @@ export function renderSceneToCanvas(
       continue;
     }
 
-    if (record.node.type === "line") {
-      continue;
-    }
-
     ctx.save();
     ctx.strokeStyle = overlay.selectedIds.includes(record.node.id)
       ? "#f5a24a"
       : "#5fabc0";
     ctx.lineWidth = 2 / viewport.zoom;
     ctx.setLineDash(overlay.selectedIds.includes(record.node.id) ? [] : [6 / viewport.zoom, 4 / viewport.zoom]);
-    ctx.strokeRect(
-      record.absoluteX,
-      record.absoluteY,
-      record.node.width,
-      record.node.height
-    );
+
+    if (record.node.type === "line") {
+      ctx.beginPath();
+      ctx.moveTo(record.absoluteX, record.absoluteY);
+      ctx.lineTo(record.absoluteX2 ?? record.absoluteX, record.absoluteY2 ?? record.absoluteY);
+      ctx.stroke();
+    } else {
+      ctx.strokeRect(
+        record.bounds.x,
+        record.bounds.y,
+        record.bounds.width,
+        record.bounds.height
+      );
+    }
+
+    if (overlay.primarySelectionId === record.node.id) {
+      ctx.fillStyle = "#f5a24a";
+
+      for (const handle of getResizeHandlePoints(record)) {
+        const size = 10 / viewport.zoom;
+        ctx.beginPath();
+        ctx.rect(
+          handle.point.x - size / 2,
+          handle.point.y - size / 2,
+          size,
+          size
+        );
+        ctx.fill();
+      }
+    }
+
+    ctx.restore();
+  }
+
+  if (overlay.marquee) {
+    const minX = Math.min(overlay.marquee.start.x, overlay.marquee.end.x);
+    const minY = Math.min(overlay.marquee.start.y, overlay.marquee.end.y);
+    const width = Math.abs(overlay.marquee.end.x - overlay.marquee.start.x);
+    const height = Math.abs(overlay.marquee.end.y - overlay.marquee.start.y);
+
+    ctx.save();
+    ctx.fillStyle = "rgba(95, 171, 192, 0.16)";
+    ctx.strokeStyle = "rgba(95, 171, 192, 0.9)";
+    ctx.lineWidth = 1 / viewport.zoom;
+    ctx.setLineDash([8 / viewport.zoom, 6 / viewport.zoom]);
+    ctx.fillRect(minX, minY, width, height);
+    ctx.strokeRect(minX, minY, width, height);
     ctx.restore();
   }
 
   ctx.restore();
 }
-
