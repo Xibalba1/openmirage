@@ -5,6 +5,9 @@ const baseUrlInput =
   process.env.STAGING_PUBLIC_BASE_URL ??
   process.env.OPENMIRAGE_PUBLIC_BASE_URL ??
   process.argv[2];
+const smokeTestSharedSecret =
+  process.env.STAGING_SMOKE_TEST_SECRET ??
+  process.env.SMOKE_TEST_SHARED_SECRET;
 
 if (!baseUrlInput) {
   console.error(
@@ -75,107 +78,61 @@ async function expectOk(path) {
 
 async function createAuthenticatedCollabFixture() {
   log("verifying authenticated page-scoped collaboration bootstrap");
+  if (!smokeTestSharedSecret) {
+    fail(
+      "STAGING_SMOKE_TEST_SECRET or SMOKE_TEST_SHARED_SECRET is required for authenticated collab verification"
+    );
+  }
 
-  const magicLinkRequest = await request(`${baseUrl}/auth/magic-link/request`, {
+  const bootstrap = await request(`${baseUrl}/internal/smoke/collab/bootstrap`, {
     method: "POST",
     headers: {
-      "content-type": "application/json"
+      "x-openmirage-smoke-secret": smokeTestSharedSecret
+    }
+  });
+
+  if (!bootstrap.ok) {
+    fail(
+      `smoke collab bootstrap failed: ${bootstrap.status} ${bootstrap.text}`
+    );
+  }
+
+  const fixture = bootstrap.body;
+
+  if (
+    typeof fixture?.documentName !== "string" ||
+    typeof fixture?.fileId !== "string" ||
+    typeof fixture?.pageId !== "string" ||
+    typeof fixture?.sessionCookie !== "string" ||
+    typeof fixture?.userId !== "string" ||
+    typeof fixture?.workspaceId !== "string"
+  ) {
+    fail("smoke collab bootstrap did not return a complete fixture");
+  }
+
+  return fixture;
+}
+
+async function cleanupAuthenticatedCollabFixture(fixture) {
+  if (!fixture || !smokeTestSharedSecret) {
+    return;
+  }
+
+  const cleanup = await request(`${baseUrl}/internal/smoke/collab/cleanup`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-openmirage-smoke-secret": smokeTestSharedSecret
     },
     body: JSON.stringify({
-      email: "dev@openmirage.local"
+      userId: fixture.userId,
+      workspaceId: fixture.workspaceId
     })
   });
 
-  if (!magicLinkRequest.ok) {
-    fail(
-      `magic link request failed: ${magicLinkRequest.status} ${magicLinkRequest.text}`
-    );
+  if (!cleanup.ok) {
+    fail(`smoke collab cleanup failed: ${cleanup.status} ${cleanup.text}`);
   }
-
-  const magicLinkUrl = magicLinkRequest.body?.magicLinkUrl;
-
-  if (typeof magicLinkUrl !== "string" || magicLinkUrl.length === 0) {
-    fail(
-      "authenticated collab verification requires DEV_AUTH_EXPOSE_MAGIC_LINK=true so the verifier can consume a session"
-    );
-  }
-
-  const consumeResponse = await fetch(magicLinkUrl, {
-    redirect: "manual"
-  });
-  const setCookieHeader = consumeResponse.headers.get("set-cookie");
-
-  if (consumeResponse.status !== 302 || !setCookieHeader) {
-    fail("magic link consume did not issue a session cookie");
-  }
-
-  const sessionCookie = setCookieHeader.split(";")[0];
-  const session = await request(`${baseUrl}/auth/session`, {
-    headers: {
-      cookie: sessionCookie
-    }
-  });
-
-  if (!session.ok) {
-    fail(`auth/session failed: ${session.status} ${session.text}`);
-  }
-
-  const workspaceId = session.body?.memberships?.[0]?.workspaceId;
-
-  if (typeof workspaceId !== "string" || workspaceId.length === 0) {
-    fail("authenticated collab verification did not find a workspace");
-  }
-
-  const project = await request(
-    `${baseUrl}/v1/workspaces/${encodeURIComponent(workspaceId)}/projects`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        cookie: sessionCookie
-      },
-      body: JSON.stringify({
-        name: `Staging Collab Verify ${Date.now()}`
-      })
-    }
-  );
-
-  if (!project.ok || typeof project.body?.id !== "string") {
-    fail(
-      `project creation failed: ${project.status} ${typeof project.body === "string" ? project.body : JSON.stringify(project.body)}`
-    );
-  }
-
-  const file = await request(
-    `${baseUrl}/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(project.body.id)}/files`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        cookie: sessionCookie
-      },
-      body: JSON.stringify({
-        initialPages: [{ name: "Verification Page" }],
-        name: `Staging Collab Verify File ${Date.now()}`
-      })
-    }
-  );
-
-  const fileId = file.body?.file?.id;
-  const pageId = file.body?.defaultPageId ?? file.body?.pages?.[0]?.id;
-
-  if (!file.ok || typeof fileId !== "string" || typeof pageId !== "string") {
-    fail(
-      `file creation failed: ${file.status} ${typeof file.body === "string" ? file.body : JSON.stringify(file.body)}`
-    );
-  }
-
-  return {
-    fileId,
-    pageId,
-    sessionCookie,
-    workspaceId
-  };
 }
 
 async function verifyHttpSurface() {
@@ -314,88 +271,23 @@ function verifyAuthenticatedCollabWebsocket(fixture) {
   log("verifying authenticated page-scoped collab sync at /collab");
 
   const result = spawnSync(
-    "pnpm",
+    "node",
     [
-      "--filter",
-      "@openmirage/collab",
-      "exec",
-      "node",
-      "--input-type=module",
-      "-e",
-      `import WebSocket from "ws";
-import * as decoding from "lib0/decoding";
-import * as encoding from "lib0/encoding";
-import * as syncProtocol from "y-protocols/sync";
-import * as Y from "yjs";
-const baseUrl = ${JSON.stringify(baseUrl)};
-const collabUrl = new URL("/collab", baseUrl);
-collabUrl.protocol = collabUrl.protocol === "https:" ? "wss:" : "ws:";
-collabUrl.searchParams.set("documentName", ${JSON.stringify(`page:${fixture.pageId}`)});
-collabUrl.searchParams.set("fileId", ${JSON.stringify(fixture.fileId)});
-collabUrl.searchParams.set("pageId", ${JSON.stringify(fixture.pageId)});
-collabUrl.searchParams.set("workspaceId", ${JSON.stringify(fixture.workspaceId)});
-const documentName = ${JSON.stringify(`page:${fixture.pageId}`)};
-const doc = new Y.Doc();
-let authenticated = false;
-function writeAuth() {
-  const encoder = encoding.createEncoder();
-  encoding.writeVarString(encoder, documentName);
-  encoding.writeVarUint(encoder, 2);
-  encoding.writeVarUint(encoder, 0);
-  encoding.writeVarString(encoder, "");
-  return encoding.toUint8Array(encoder);
-}
-function writeSyncStep1() {
-  const encoder = encoding.createEncoder();
-  encoding.writeVarString(encoder, documentName);
-  encoding.writeVarUint(encoder, 0);
-  syncProtocol.writeSyncStep1(encoder, doc);
-  return encoding.toUint8Array(encoder);
-}
-const ws = new WebSocket(collabUrl, {
-  headers: { Cookie: ${JSON.stringify(fixture.sessionCookie)} }
-});
-const timer = setTimeout(() => {
-  console.error("timeout");
-  process.exit(1);
-}, 5000);
-ws.on("open", () => {
-  ws.send(writeAuth());
-});
-ws.on("message", (raw) => {
-  const message = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
-  const decoder = decoding.createDecoder(message);
-  const incomingDocumentName = decoding.readVarString(decoder);
-  if (incomingDocumentName !== documentName) {
-    return;
-  }
-  const messageType = decoding.readVarUint(decoder);
-  if (messageType === 2) {
-    const authType = decoding.readVarUint(decoder);
-    if (authType === 2) {
-      authenticated = true;
-      ws.send(writeSyncStep1());
-      return;
-    }
-    console.error("unexpected-auth");
-    process.exit(1);
-  }
-  if ((messageType === 0 || messageType === 4) && authenticated) {
-    const encoder = encoding.createEncoder();
-    encoding.writeVarString(encoder, documentName);
-    encoding.writeVarUint(encoder, 0);
-    syncProtocol.readSyncMessage(decoder, encoder, doc, "remote");
-    clearTimeout(timer);
-    console.log("open+sync");
-    ws.close();
-  }
-});
-ws.on("error", (error) => {
-  clearTimeout(timer);
-  console.error(error.message);
-  process.exit(1);
-});
-ws.on("close", () => process.exit(authenticated ? 0 : 1));`
+      "./apps/collab/scripts/verify-page-collab.mjs",
+      "--mode",
+      "authenticated",
+      "--base-url",
+      baseUrl,
+      "--document-name",
+      fixture.documentName,
+      "--file-id",
+      fixture.fileId,
+      "--page-id",
+      fixture.pageId,
+      "--workspace-id",
+      fixture.workspaceId,
+      "--session-cookie",
+      fixture.sessionCookie
     ],
     {
       cwd: process.cwd(),
@@ -414,9 +306,33 @@ async function main() {
   await verifyHttpSurface();
   await verifyStorageSmoke();
   verifyWebsocketUpgrade();
-  const collabFixture = await createAuthenticatedCollabFixture();
-  verifyAuthenticatedCollabWebsocket(collabFixture);
-  log("staging deploy verification passed");
+  let collabFixture = null;
+  let verificationError = null;
+
+  try {
+    collabFixture = await createAuthenticatedCollabFixture();
+    verifyAuthenticatedCollabWebsocket(collabFixture);
+    log("staging deploy verification passed");
+  } catch (error) {
+    verificationError = error;
+    throw error;
+  } finally {
+    try {
+      await cleanupAuthenticatedCollabFixture(collabFixture);
+    } catch (cleanupError) {
+      if (!verificationError) {
+        throw cleanupError;
+      }
+
+      console.error(
+        `[openmirage] smoke collab cleanup failed after verification error: ${
+          cleanupError instanceof Error
+            ? cleanupError.message
+            : String(cleanupError)
+        }`
+      );
+    }
+  }
 }
 
 main().catch((error) => {

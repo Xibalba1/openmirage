@@ -19,6 +19,7 @@
     "@openmirage/observability": "workspace:*",
     "@openmirage/types": "workspace:*",
     "fastify": "^5.3.2",
+    "lib0": "^0.2.114",
     "ws": "^8.18.3",
     "y-protocols": "^1.0.6",
     "yjs": "^13.6.27"

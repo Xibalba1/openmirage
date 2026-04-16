@@ -88,6 +88,7 @@ Use the existing GitHub Actions deployment path. Do not create a second deploy p
    - `/collab/healthz`
    - `/worker/readyz`
    - authenticated page-scoped collab handshake and sync at `/collab`
+   - disposable smoke workspace bootstrap and cleanup through the secret-gated `/internal/smoke/collab/bootstrap` and `/internal/smoke/collab/cleanup` routes
 5. Verify auth/session behavior on the public HTTPS origin:
    - magic-link origin uses the public host
    - session cookies are `Secure`

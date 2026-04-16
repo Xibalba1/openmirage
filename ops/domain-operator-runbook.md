@@ -179,6 +179,7 @@ At minimum, verify the environment you deploy with includes:
 - storage bucket
 - storage credentials
 - auth secrets if required by the API service
+- `SMOKE_TEST_SHARED_SECRET` for the secret-gated collab smoke bootstrap/cleanup routes
 - optional Sentry DSN
 
 If staging and production use different infrastructure, keep those values isolated per environment.
@@ -201,6 +202,8 @@ In the GitHub repository:
    - `GHCR_TOKEN`
 3. Add this environment variable:
    - `STAGING_PUBLIC_BASE_URL=https://staging.openmirage.iankinskey.com`
+4. Add this environment secret:
+   - `STAGING_SMOKE_TEST_SECRET`
 
 To capture `VPS_KNOWN_HOSTS` from your machine:
 

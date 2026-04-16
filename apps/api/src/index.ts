@@ -67,6 +67,10 @@ import {
   resolveResolveCommentRequest
 } from "./comments.js";
 import { resolveCollabPageSession } from "./collab-session.js";
+import {
+  cleanupSmokeCollabFixture,
+  createSmokeCollabFixture
+} from "./smoke.js";
 
 interface StorageSmokeBody {
   bodyBase64: string;
@@ -107,6 +111,15 @@ interface CollabPageSessionQuerystring {
 interface CommentListQuerystring {
   includeResolved?: string;
   pageId?: string;
+}
+
+interface SmokeSecretHeaders {
+  "x-openmirage-smoke-secret"?: string;
+}
+
+interface SmokeCleanupBody {
+  userId?: string;
+  workspaceId?: string;
 }
 
 function createAuthUnauthorizedReply(reply: FastifyReply) {
@@ -241,6 +254,17 @@ function describeConfiguredStorage(storageConfig: StorageConfig): ServiceCheck {
     ok: true,
     summary: `configured for ${storageConfig.provider} storage bucket ${storageConfig.bucket}`
   };
+}
+
+function readThrownStatusCode(error: unknown): number {
+  if (
+    error instanceof Error &&
+    typeof (error as Error & { statusCode?: number }).statusCode === "number"
+  ) {
+    return (error as Error & { statusCode?: number }).statusCode as number;
+  }
+
+  return 500;
 }
 
 async function buildHealthStatus(): Promise<HealthStatus> {
@@ -693,6 +717,56 @@ async function startApiServer(): Promise<void> {
 
     reply.status(resolution.status);
     return resolution.body;
+  });
+  app.post<{ Headers: SmokeSecretHeaders }>(
+    "/internal/smoke/collab/bootstrap",
+    async (request, reply) => {
+      try {
+        return await createSmokeCollabFixture(
+          process.env.SMOKE_TEST_SHARED_SECRET,
+          request.headers["x-openmirage-smoke-secret"],
+          sessionContract,
+          databasePool
+        );
+      } catch (error) {
+        reply.status(readThrownStatusCode(error));
+        return {
+          error:
+            error instanceof Error ? error.message : "smoke_bootstrap_failed"
+        };
+      }
+    }
+  );
+  app.post<{
+    Body: SmokeCleanupBody;
+    Headers: SmokeSecretHeaders;
+  }>("/internal/smoke/collab/cleanup", async (request, reply) => {
+    const workspaceId = readNonEmptyName(request.body?.workspaceId);
+    const userId = readNonEmptyName(request.body?.userId);
+
+    if (!workspaceId || !userId) {
+      reply.status(400);
+      return {
+        error: "workspaceId and userId are required"
+      };
+    }
+
+    try {
+      return await cleanupSmokeCollabFixture(
+        process.env.SMOKE_TEST_SHARED_SECRET,
+        request.headers["x-openmirage-smoke-secret"],
+        {
+          userId,
+          workspaceId
+        },
+        databasePool
+      );
+    } catch (error) {
+      reply.status(readThrownStatusCode(error));
+      return {
+        error: error instanceof Error ? error.message : "smoke_cleanup_failed"
+      };
+    }
   });
   app.post(`${env.authPath}/logout`, async (request, reply) => {
     const token = readSessionTokenFromCookie(
