@@ -36,6 +36,79 @@ function createDocument() {
   };
 }
 
+class FakeWebSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  static rooms = new Map<string, Set<FakeWebSocket>>();
+
+  readonly CLOSED = FakeWebSocket.CLOSED;
+  readonly CLOSING = FakeWebSocket.CLOSING;
+  readonly CONNECTING = FakeWebSocket.CONNECTING;
+  readonly OPEN = FakeWebSocket.OPEN;
+  binaryType = "blob";
+  readyState = FakeWebSocket.CONNECTING;
+  private listeners = new Map<
+    string,
+    Array<(event?: { data?: Uint8Array }) => void>
+  >();
+
+  constructor(private readonly url: string) {
+    const room = FakeWebSocket.rooms.get(url) ?? new Set<FakeWebSocket>();
+    room.add(this);
+    FakeWebSocket.rooms.set(url, room);
+
+    queueMicrotask(() => {
+      this.readyState = FakeWebSocket.OPEN;
+      this.dispatch("open");
+    });
+  }
+
+  addEventListener(
+    event: string,
+    listener: (event?: { data?: Uint8Array }) => void
+  ) {
+    const listeners = this.listeners.get(event) ?? [];
+    listeners.push(listener);
+    this.listeners.set(event, listeners);
+  }
+
+  close() {
+    if (this.readyState === FakeWebSocket.CLOSED) {
+      return;
+    }
+
+    this.readyState = FakeWebSocket.CLOSED;
+    FakeWebSocket.rooms.get(this.url)?.delete(this);
+    this.dispatch("close");
+  }
+
+  dispatch(event: string, payload?: { data?: Uint8Array }) {
+    for (const listener of this.listeners.get(event) ?? []) {
+      listener(payload);
+    }
+  }
+
+  send(data: Uint8Array) {
+    if (this.readyState !== FakeWebSocket.OPEN) {
+      return;
+    }
+
+    for (const socket of FakeWebSocket.rooms.get(this.url) ?? []) {
+      if (socket === this || socket.readyState !== FakeWebSocket.OPEN) {
+        continue;
+      }
+
+      socket.dispatch("message", { data });
+    }
+  }
+}
+
+async function flushMicrotasks() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 test("editor session commit, undo, and redo track one local command at a time", () => {
   const doc = new Y.Doc();
   writePageDocument(doc, createDocument());
@@ -106,5 +179,87 @@ test("remote document updates refresh the snapshot without adding local history"
     assert.equal(session.getSnapshot().canRedo, false);
   } finally {
     session.destroy();
+  }
+});
+
+test("awareness publishes remote presence without affecting undo history", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+  const first = createEditorSession({
+    pageId: "page-1",
+    presence: {
+      participant: {
+        avatarUrl: null,
+        color: "#f97316",
+        displayName: "First User",
+        userId: "user-1"
+      }
+    },
+    transport: {
+      collabWsPath: "/collab",
+      collabWsUrl: "ws://example.test",
+      location: {
+        fileId: "file-1",
+        pageId: "page-1",
+        workspaceId: "workspace-1"
+      }
+    }
+  });
+  const second = createEditorSession({
+    pageId: "page-1",
+    presence: {
+      participant: {
+        avatarUrl: null,
+        color: "#06b6d4",
+        displayName: "Second User",
+        userId: "user-2"
+      }
+    },
+    transport: {
+      collabWsPath: "/collab",
+      collabWsUrl: "ws://example.test",
+      location: {
+        fileId: "file-1",
+        pageId: "page-1",
+        workspaceId: "workspace-1"
+      }
+    }
+  });
+
+  try {
+    first.connect();
+    second.connect();
+    await flushMicrotasks();
+
+    first.setPresenceSelection(["rect"]);
+    first.setPresenceCursor({ x: 120, y: 140 });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    const secondSnapshot = second.getSnapshot();
+    const remoteEntry = secondSnapshot.presenceEntries.find(
+      (entry) => entry.payload.participant.userId === "user-1"
+    );
+
+    assert.ok(remoteEntry);
+    assert.deepEqual(remoteEntry?.payload.selection?.nodeIds, ["rect"]);
+    assert.deepEqual(remoteEntry?.payload.cursor, { x: 120, y: 140 });
+    assert.equal(secondSnapshot.canUndo, false);
+    assert.equal(secondSnapshot.canRedo, false);
+
+    first.clearPresence();
+    await flushMicrotasks();
+    const firstLocalEntry = first
+      .getSnapshot()
+      .presenceEntries.find(
+        (entry) => entry.clientId === first.getSnapshot().localClientId
+      );
+    assert.equal(firstLocalEntry?.payload.cursor, null);
+    assert.equal(firstLocalEntry?.payload.selection, null);
+  } finally {
+    first.destroy();
+    second.destroy();
+    FakeWebSocket.rooms.clear();
+    globalThis.WebSocket = originalWebSocket;
   }
 });

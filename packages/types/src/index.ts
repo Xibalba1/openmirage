@@ -194,11 +194,55 @@ export interface CommentDto {
   pageId: string | null;
   nodeId: string | null;
   authorUserId: string;
+  author: CommentAuthorSummary;
   body: string;
   createdAt: string;
   updatedAt: string;
   resolvedAt: string | null;
   deletedAt: string | null;
+}
+
+export interface CommentAuthorSummary {
+  avatarUrl: string | null;
+  displayName: string;
+  id: string;
+}
+
+export type CommentTarget =
+  | {
+      fileId: string;
+      type: "file";
+    }
+  | {
+      fileId: string;
+      pageId: string;
+      type: "page";
+    }
+  | {
+      fileId: string;
+      nodeId: string;
+      pageId: string;
+      type: "node";
+    };
+
+export interface CreateCommentInput {
+  body: string;
+  target: CommentTarget;
+}
+
+export interface ListCommentsInput {
+  fileId: string;
+  includeResolved?: boolean;
+  pageId?: string;
+}
+
+export interface ResolveCommentInput {
+  commentId: string;
+  fileId: string;
+}
+
+export interface CommentListResponse {
+  comments: CommentDto[];
 }
 
 export interface ShareLinkDto {
@@ -446,11 +490,7 @@ export interface PresenceCursor {
   y: number;
 }
 
-export const presenceStatuses = [
-  "active",
-  "idle",
-  "offline"
-] as const;
+export const presenceStatuses = ["active", "idle", "offline"] as const;
 
 export type PresenceStatus = (typeof presenceStatuses)[number];
 

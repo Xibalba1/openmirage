@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { type PoolClient } from "pg";
 import {
+  createComment,
   createDatabasePool,
   createFileWithPages,
   createPage,
   getAuthorizedCollabPageSession,
+  listComments,
   listAuthorizedWorkspaces,
   listWorkspaceProjects,
+  resolveComment,
   renameProject
 } from "./index.js";
 
@@ -37,7 +40,11 @@ async function withDatabaseTransaction(
   return true;
 }
 
-async function insertUser(client: PoolClient, email: string, displayName: string) {
+async function insertUser(
+  client: PoolClient,
+  email: string,
+  displayName: string
+) {
   const result = await client.query<{ id: string }>(
     `
       insert into users (email, display_name)
@@ -123,7 +130,11 @@ test("listAuthorizedWorkspaces and listWorkspaceProjects stay membership-scoped"
 
     await insertMembership(client, visibleWorkspaceId, visibleUserId, "owner");
     await insertMembership(client, hiddenWorkspaceId, hiddenUserId, "owner");
-    const projectId = await insertProject(client, visibleWorkspaceId, "Visible Project");
+    const projectId = await insertProject(
+      client,
+      visibleWorkspaceId,
+      "Visible Project"
+    );
 
     const workspaces = await listAuthorizedWorkspaces(visibleUserId, client);
     assert.equal(workspaces.length, 1);
@@ -152,7 +163,11 @@ test("listAuthorizedWorkspaces and listWorkspaceProjects stay membership-scoped"
 
 test("createFileWithPages preserves initial page order and createPage appends", async (t) => {
   const ran = await withDatabaseTransaction(async (client) => {
-    const userId = await insertUser(client, `pages-${Date.now()}@example.com`, "Page User");
+    const userId = await insertUser(
+      client,
+      `pages-${Date.now()}@example.com`,
+      "Page User"
+    );
     const workspaceId = await insertWorkspace(
       client,
       "Pages Workspace",
@@ -173,7 +188,10 @@ test("createFileWithPages preserves initial page order and createPage appends", 
 
     assert.ok(file);
     assert.deepEqual(
-      file?.pages.map((page) => ({ name: page.name, orderIndex: page.orderIndex })),
+      file?.pages.map((page) => ({
+        name: page.name,
+        orderIndex: page.orderIndex
+      })),
       [
         { name: "Cover", orderIndex: 0 },
         { name: "Specs", orderIndex: 1 },
@@ -201,7 +219,11 @@ test("createFileWithPages preserves initial page order and createPage appends", 
 
 test("renameProject does not rename projects outside the authorized workspace", async (t) => {
   const ran = await withDatabaseTransaction(async (client) => {
-    const userId = await insertUser(client, `rename-${Date.now()}@example.com`, "Rename User");
+    const userId = await insertUser(
+      client,
+      `rename-${Date.now()}@example.com`,
+      "Rename User"
+    );
     const workspaceId = await insertWorkspace(
       client,
       "Rename Workspace",
@@ -214,8 +236,16 @@ test("renameProject does not rename projects outside the authorized workspace", 
     );
 
     await insertMembership(client, workspaceId, userId, "owner");
-    const visibleProjectId = await insertProject(client, workspaceId, "Visible");
-    const hiddenProjectId = await insertProject(client, otherWorkspaceId, "Hidden");
+    const visibleProjectId = await insertProject(
+      client,
+      workspaceId,
+      "Visible"
+    );
+    const hiddenProjectId = await insertProject(
+      client,
+      otherWorkspaceId,
+      "Hidden"
+    );
 
     const visibleRename = await renameProject(
       userId,
@@ -267,7 +297,11 @@ test("getAuthorizedCollabPageSession stays page/file/workspace scoped", async (t
     await insertMembership(client, workspaceId, visibleUserId, "owner");
     await insertMembership(client, otherWorkspaceId, hiddenUserId, "owner");
 
-    const projectId = await insertProject(client, workspaceId, "Collab Project");
+    const projectId = await insertProject(
+      client,
+      workspaceId,
+      "Collab Project"
+    );
     const otherProjectId = await insertProject(
       client,
       otherWorkspaceId,
@@ -333,6 +367,153 @@ test("getAuthorizedCollabPageSession stays page/file/workspace scoped", async (t
       client
     );
     assert.equal(nonMember, null);
+  });
+
+  if (!ran) {
+    t.skip("database unavailable");
+  }
+});
+
+test("createComment, listComments, and resolveComment stay file/page scoped", async (t) => {
+  const ran = await withDatabaseTransaction(async (client) => {
+    const userId = await insertUser(
+      client,
+      `comment-user-${Date.now()}@example.com`,
+      "Comment User"
+    );
+    const workspaceId = await insertWorkspace(
+      client,
+      "Comment Workspace",
+      `comment-${Date.now()}`
+    );
+
+    await insertMembership(client, workspaceId, userId, "owner");
+    const projectId = await insertProject(
+      client,
+      workspaceId,
+      "Comment Project"
+    );
+    const file = await createFileWithPages(
+      userId,
+      workspaceId,
+      projectId,
+      "Comment File",
+      [{ name: "Page One" }, { name: "Page Two" }],
+      client
+    );
+
+    const fileId = file?.file.id as string;
+    const pageOneId = file?.pages[0]?.id as string;
+    const pageTwoId = file?.pages[1]?.id as string;
+
+    const fileComment = await createComment(
+      userId,
+      workspaceId,
+      projectId,
+      {
+        body: "File-wide note",
+        target: {
+          fileId,
+          type: "file"
+        }
+      },
+      client
+    );
+    const nodeComment = await createComment(
+      userId,
+      workspaceId,
+      projectId,
+      {
+        body: "Node note",
+        target: {
+          fileId,
+          nodeId: "rect-1",
+          pageId: pageOneId,
+          type: "node"
+        }
+      },
+      client
+    );
+    const pageTwoComment = await createComment(
+      userId,
+      workspaceId,
+      projectId,
+      {
+        body: "Page two note",
+        target: {
+          fileId,
+          pageId: pageTwoId,
+          type: "page"
+        }
+      },
+      client
+    );
+
+    assert.ok(fileComment);
+    assert.ok(nodeComment);
+    assert.ok(pageTwoComment);
+    assert.equal(nodeComment?.author.displayName, "Comment User");
+
+    const pageOneComments = await listComments(
+      userId,
+      workspaceId,
+      projectId,
+      {
+        fileId,
+        includeResolved: true,
+        pageId: pageOneId
+      },
+      client
+    );
+    assert.equal(pageOneComments?.length, 2);
+    assert.deepEqual(
+      pageOneComments?.map((comment) => comment.body),
+      ["File-wide note", "Node note"]
+    );
+
+    const resolved = await resolveComment(
+      userId,
+      workspaceId,
+      projectId,
+      {
+        commentId: nodeComment?.id as string,
+        fileId
+      },
+      client
+    );
+    assert.ok(resolved?.resolvedAt);
+
+    const unresolvedPageOneComments = await listComments(
+      userId,
+      workspaceId,
+      projectId,
+      {
+        fileId,
+        includeResolved: false,
+        pageId: pageOneId
+      },
+      client
+    );
+    assert.deepEqual(
+      unresolvedPageOneComments?.map((comment) => comment.body),
+      ["File-wide note"]
+    );
+
+    const wrongPage = await createComment(
+      userId,
+      workspaceId,
+      projectId,
+      {
+        body: "Missing page",
+        target: {
+          fileId,
+          pageId: "00000000-0000-0000-0000-000000000000",
+          type: "page"
+        }
+      },
+      client
+    );
+    assert.equal(wrongPage, null);
   });
 
   if (!ran) {

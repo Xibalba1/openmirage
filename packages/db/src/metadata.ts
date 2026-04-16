@@ -1,10 +1,14 @@
 import {
   type CollabPageSessionDto,
+  type CommentDto,
   type CreateFilePageInput,
   type FileDto,
   type FileOpenResponse,
+  type ListCommentsInput,
   type PageDto,
   type ProjectDto,
+  type CreateCommentInput,
+  type ResolveCommentInput,
   type WorkspaceDetailDto,
   createCollabDocumentName
 } from "@openmirage/types";
@@ -66,6 +70,21 @@ interface AuthorizedCollabPageRow {
   workspace_id: string;
 }
 
+interface CommentRow {
+  author_avatar_url: string | null;
+  author_display_name: string;
+  author_user_id: string;
+  body: string;
+  created_at: Date;
+  deleted_at: Date | null;
+  file_id: string;
+  id: string;
+  node_id: string | null;
+  page_id: string | null;
+  resolved_at: Date | null;
+  updated_at: Date;
+}
+
 function mapWorkspace(row: WorkspaceRow): WorkspaceDetailDto {
   return {
     createdAt: row.created_at.toISOString(),
@@ -116,6 +135,26 @@ function mapPage(row: PageRow): PageDto {
     orderIndex: row.order_index,
     updatedAt: row.updated_at.toISOString(),
     width: row.width
+  };
+}
+
+function mapComment(row: CommentRow): CommentDto {
+  return {
+    author: {
+      avatarUrl: row.author_avatar_url,
+      displayName: row.author_display_name,
+      id: row.author_user_id
+    },
+    authorUserId: row.author_user_id,
+    body: row.body,
+    createdAt: row.created_at.toISOString(),
+    deletedAt: row.deleted_at?.toISOString() ?? null,
+    fileId: row.file_id,
+    id: row.id,
+    nodeId: row.node_id,
+    pageId: row.page_id,
+    resolvedAt: row.resolved_at?.toISOString() ?? null,
+    updatedAt: row.updated_at.toISOString()
   };
 }
 
@@ -247,6 +286,46 @@ async function getFileRow(
   return result.rows[0] ?? null;
 }
 
+async function getPageRow(
+  userId: string,
+  workspaceId: string,
+  projectId: string,
+  fileId: string,
+  pageId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<PageRow | null> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<PageRow>(
+    `
+      select
+        pages.background,
+        pages.created_at,
+        pages.file_id,
+        pages.height,
+        pages.id,
+        pages.name,
+        pages.order_index,
+        pages.updated_at,
+        pages.width
+      from pages
+      inner join files
+        on files.id = pages.file_id
+      inner join memberships
+        on memberships.workspace_id = files.workspace_id
+      where memberships.user_id = $1
+        and files.workspace_id = $2
+        and files.project_id = $3
+        and files.id = $4
+        and pages.id = $5
+        and files.deleted_at is null
+      limit 1
+    `,
+    [userId, workspaceId, projectId, fileId, pageId]
+  );
+
+  return result.rows[0] ?? null;
+}
+
 export async function listAuthorizedWorkspaces(
   userId: string,
   poolOrClient?: Pool | PoolClient
@@ -281,7 +360,11 @@ export async function listWorkspaceProjects(
   workspaceId: string,
   poolOrClient?: Pool | PoolClient
 ): Promise<{ projects: ProjectDto[]; workspace: WorkspaceDetailDto } | null> {
-  const workspace = await getAuthorizedWorkspaceRow(userId, workspaceId, poolOrClient);
+  const workspace = await getAuthorizedWorkspaceRow(
+    userId,
+    workspaceId,
+    poolOrClient
+  );
 
   if (!workspace) {
     return null;
@@ -322,7 +405,11 @@ export async function createProject(
   poolOrClient?: Pool | PoolClient
 ): Promise<ProjectDto | null> {
   return withTransaction(poolOrClient, async (client) => {
-    const workspace = await getAuthorizedWorkspaceRow(userId, workspaceId, client);
+    const workspace = await getAuthorizedWorkspaceRow(
+      userId,
+      workspaceId,
+      client
+    );
 
     if (!workspace) {
       return null;
@@ -395,13 +482,22 @@ export async function listProjectFiles(
   project: ProjectDto;
   workspace: WorkspaceDetailDto;
 } | null> {
-  const workspace = await getAuthorizedWorkspaceRow(userId, workspaceId, poolOrClient);
+  const workspace = await getAuthorizedWorkspaceRow(
+    userId,
+    workspaceId,
+    poolOrClient
+  );
 
   if (!workspace) {
     return null;
   }
 
-  const project = await getProjectRow(userId, workspaceId, projectId, poolOrClient);
+  const project = await getProjectRow(
+    userId,
+    workspaceId,
+    projectId,
+    poolOrClient
+  );
 
   if (!project) {
     return null;
@@ -448,7 +544,11 @@ export async function createFileWithPages(
   poolOrClient?: Pool | PoolClient
 ): Promise<FileOpenResponse | null> {
   return withTransaction(poolOrClient, async (client) => {
-    const workspace = await getAuthorizedWorkspaceRow(userId, workspaceId, client);
+    const workspace = await getAuthorizedWorkspaceRow(
+      userId,
+      workspaceId,
+      client
+    );
 
     if (!workspace) {
       return null;
@@ -559,19 +659,34 @@ export async function getFileOpenDetails(
   fileId: string,
   poolOrClient?: Pool | PoolClient
 ): Promise<FileOpenResponse | null> {
-  const workspace = await getAuthorizedWorkspaceRow(userId, workspaceId, poolOrClient);
+  const workspace = await getAuthorizedWorkspaceRow(
+    userId,
+    workspaceId,
+    poolOrClient
+  );
 
   if (!workspace) {
     return null;
   }
 
-  const project = await getProjectRow(userId, workspaceId, projectId, poolOrClient);
+  const project = await getProjectRow(
+    userId,
+    workspaceId,
+    projectId,
+    poolOrClient
+  );
 
   if (!project) {
     return null;
   }
 
-  const file = await getFileRow(userId, workspaceId, projectId, fileId, poolOrClient);
+  const file = await getFileRow(
+    userId,
+    workspaceId,
+    projectId,
+    fileId,
+    poolOrClient
+  );
 
   if (!file) {
     return null;
@@ -643,7 +758,13 @@ export async function createPage(
   poolOrClient?: Pool | PoolClient
 ): Promise<PageDto | null> {
   return withTransaction(poolOrClient, async (client) => {
-    const file = await getFileRow(userId, workspaceId, projectId, fileId, client);
+    const file = await getFileRow(
+      userId,
+      workspaceId,
+      projectId,
+      fileId,
+      client
+    );
 
     if (!file) {
       return null;
@@ -723,6 +844,215 @@ export async function renamePage(
   );
 
   return result.rows[0] ? mapPage(result.rows[0]) : null;
+}
+
+export async function listComments(
+  userId: string,
+  workspaceId: string,
+  projectId: string,
+  input: ListCommentsInput,
+  poolOrClient?: Pool | PoolClient
+): Promise<CommentDto[] | null> {
+  const db = requireClient(poolOrClient);
+  const file = await getFileRow(
+    userId,
+    workspaceId,
+    projectId,
+    input.fileId,
+    db
+  );
+
+  if (!file) {
+    return null;
+  }
+
+  if (input.pageId) {
+    const page = await getPageRow(
+      userId,
+      workspaceId,
+      projectId,
+      input.fileId,
+      input.pageId,
+      db
+    );
+
+    if (!page) {
+      return null;
+    }
+  }
+
+  const includeResolved = input.includeResolved ?? false;
+  const result = await db.query<CommentRow>(
+    `
+      select
+        comments.author_user_id,
+        users.avatar_url as author_avatar_url,
+        users.display_name as author_display_name,
+        comments.body,
+        comments.created_at,
+        comments.deleted_at,
+        comments.file_id,
+        comments.id,
+        comments.node_id,
+        comments.page_id,
+        comments.resolved_at,
+        comments.updated_at
+      from comments
+      inner join users
+        on users.id = comments.author_user_id
+      where comments.file_id = $1
+        and comments.deleted_at is null
+        and ($2::boolean or comments.resolved_at is null)
+        and (
+          $3::uuid is null
+          or comments.page_id is null
+          or comments.page_id = $3
+        )
+      order by
+        comments.resolved_at is null desc,
+        comments.created_at asc
+    `,
+    [input.fileId, includeResolved, input.pageId ?? null]
+  );
+
+  return result.rows.map(mapComment);
+}
+
+export async function createComment(
+  userId: string,
+  workspaceId: string,
+  projectId: string,
+  input: CreateCommentInput,
+  poolOrClient?: Pool | PoolClient
+): Promise<CommentDto | null> {
+  const db = requireClient(poolOrClient);
+  const file = await getFileRow(
+    userId,
+    workspaceId,
+    projectId,
+    input.target.fileId,
+    db
+  );
+
+  if (!file) {
+    return null;
+  }
+
+  if (input.target.type !== "file") {
+    const page = await getPageRow(
+      userId,
+      workspaceId,
+      projectId,
+      input.target.fileId,
+      input.target.pageId,
+      db
+    );
+
+    if (!page) {
+      return null;
+    }
+  }
+
+  const result = await db.query<CommentRow>(
+    `
+      with inserted_comment as (
+        insert into comments (
+          file_id,
+          page_id,
+          node_id,
+          author_user_id,
+          body
+        )
+        values ($1, $2, $3, $4, $5)
+        returning
+          author_user_id,
+          body,
+          created_at,
+          deleted_at,
+          file_id,
+          id,
+          node_id,
+          page_id,
+          resolved_at,
+          updated_at
+      )
+      select
+        inserted_comment.author_user_id,
+        users.avatar_url as author_avatar_url,
+        users.display_name as author_display_name,
+        inserted_comment.body,
+        inserted_comment.created_at,
+        inserted_comment.deleted_at,
+        inserted_comment.file_id,
+        inserted_comment.id,
+        inserted_comment.node_id,
+        inserted_comment.page_id,
+        inserted_comment.resolved_at,
+        inserted_comment.updated_at
+      from inserted_comment
+      inner join users
+        on users.id = inserted_comment.author_user_id
+    `,
+    [
+      input.target.fileId,
+      input.target.type === "file" ? null : input.target.pageId,
+      input.target.type === "node" ? input.target.nodeId : null,
+      userId,
+      input.body
+    ]
+  );
+
+  return result.rows[0] ? mapComment(result.rows[0]) : null;
+}
+
+export async function resolveComment(
+  userId: string,
+  workspaceId: string,
+  projectId: string,
+  input: ResolveCommentInput,
+  poolOrClient?: Pool | PoolClient
+): Promise<CommentDto | null> {
+  const db = requireClient(poolOrClient);
+  const file = await getFileRow(
+    userId,
+    workspaceId,
+    projectId,
+    input.fileId,
+    db
+  );
+
+  if (!file) {
+    return null;
+  }
+
+  const result = await db.query<CommentRow>(
+    `
+      update comments
+      set resolved_at = coalesce(resolved_at, now()),
+          updated_at = now()
+      from users
+      where comments.id = $1
+        and comments.file_id = $2
+        and comments.deleted_at is null
+        and users.id = comments.author_user_id
+      returning
+        comments.author_user_id,
+        users.avatar_url as author_avatar_url,
+        users.display_name as author_display_name,
+        comments.body,
+        comments.created_at,
+        comments.deleted_at,
+        comments.file_id,
+        comments.id,
+        comments.node_id,
+        comments.page_id,
+        comments.resolved_at,
+        comments.updated_at
+    `,
+    [input.commentId, input.fileId]
+  );
+
+  return result.rows[0] ? mapComment(result.rows[0]) : null;
 }
 
 export async function getAuthorizedCollabPageSession(
