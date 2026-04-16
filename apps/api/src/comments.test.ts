@@ -228,6 +228,44 @@ test("comment request helpers enforce auth, target validation, and resolve flow"
     }
     const createdComment = created.body as CommentDto;
 
+    const fileScoped = await resolveCreateCommentRequest(
+      createAuthContext(userId, workspaceId),
+      {
+        body: {
+          body: "Whole file note",
+          target: {
+            fileId,
+            type: "file"
+          }
+        },
+        fileId,
+        projectId: project?.id as string,
+        workspaceId
+      },
+      client
+    );
+    assert.equal(fileScoped.status, 201);
+
+    const nodeScoped = await resolveCreateCommentRequest(
+      createAuthContext(userId, workspaceId),
+      {
+        body: {
+          body: "Node note",
+          target: {
+            fileId,
+            nodeId: "rect-1",
+            pageId,
+            type: "node"
+          }
+        },
+        fileId,
+        projectId: project?.id as string,
+        workspaceId
+      },
+      client
+    );
+    assert.equal(nodeScoped.status, 201);
+
     const listed = await resolveListCommentsRequest(
       createAuthContext(userId, workspaceId),
       {
@@ -243,9 +281,11 @@ test("comment request helpers enforce auth, target validation, and resolve flow"
     if (listed.status !== 200) {
       throw new Error("expected list success");
     }
-    assert.equal(
-      (listed.body as { comments: CommentDto[] }).comments.length,
-      1
+    assert.deepEqual(
+      (listed.body as { comments: CommentDto[] }).comments.map(
+        (comment) => comment.body
+      ),
+      ["Whole file note", "Looks good", "Node note"]
     );
 
     const resolved = await resolveResolveCommentRequest(

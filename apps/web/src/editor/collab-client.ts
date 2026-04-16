@@ -12,6 +12,12 @@ import {
 } from "../collab";
 
 const MESSAGE_SYNC = 0;
+const MESSAGE_AUTH = 2;
+const MESSAGE_SYNC_REPLY = 4;
+const AUTH_TOKEN = 0;
+const AUTH_PERMISSION_DENIED = 1;
+const AUTHENTICATED = 2;
+const RECONNECT_DELAY_MS = 1_000;
 
 function readBinaryMessage(
   data: Blob | ArrayBuffer | Uint8Array
@@ -36,6 +42,15 @@ function writeSyncMessage(
   encoding.writeVarString(encoder, documentName);
   encoding.writeVarUint(encoder, MESSAGE_SYNC);
   write(encoder);
+  return encoding.toUint8Array(encoder);
+}
+
+function writeAuthMessage(documentName: string, token = ""): Uint8Array {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarString(encoder, documentName);
+  encoding.writeVarUint(encoder, MESSAGE_AUTH);
+  encoding.writeVarUint(encoder, AUTH_TOKEN);
+  encoding.writeVarString(encoder, token);
   return encoding.toUint8Array(encoder);
 }
 
@@ -85,6 +100,9 @@ export function subscribeToPageDocument(
   const minSyncMessageLength = getFramedSyncMessageLength(documentName);
   let socket: WebSocket | null = null;
   let destroyed = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let isSocketAuthenticated = false;
+  let authDenied = false;
 
   const emitDocument = () => {
     onDocument(readPageDocument(doc, input.location.pageId));
@@ -97,76 +115,140 @@ export function subscribeToPageDocument(
   doc.on("update", handleUpdate);
   emitDocument();
 
-  return {
-    connect() {
-      if (destroyed) {
+  function clearReconnectTimer(): void {
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  }
+
+  function scheduleReconnect(): void {
+    if (destroyed || reconnectTimer !== null || authDenied) {
+      return;
+    }
+
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, RECONNECT_DELAY_MS);
+  }
+
+  function connect(): void {
+    if (destroyed || socket) {
+      return;
+    }
+
+    clearReconnectTimer();
+    authDenied = false;
+    isSocketAuthenticated = false;
+    onStatus?.("connecting");
+    const activeSocket = new WebSocket(
+      buildPageCollabWebSocketUrl(
+        input.collabWsUrl,
+        input.collabWsPath,
+        input.location
+      )
+    );
+    socket = activeSocket;
+    activeSocket.binaryType = "arraybuffer";
+
+    activeSocket.addEventListener("open", () => {
+      if (socket !== activeSocket) {
         return;
       }
 
-      onStatus?.("connecting");
-      socket = new WebSocket(
-        buildPageCollabWebSocketUrl(
-          input.collabWsUrl,
-          input.collabWsPath,
-          input.location
-        )
-      );
-      socket.binaryType = "arraybuffer";
+      activeSocket.send(writeAuthMessage(documentName));
+    });
 
-      socket.addEventListener("open", () => {
-        if (!socket) {
+    activeSocket.addEventListener("message", (event) => {
+      void readBinaryMessage(
+        event.data as Blob | ArrayBuffer | Uint8Array
+      ).then((message) => {
+        const decoder = decoding.createDecoder(message);
+        const incomingDocumentName = decoding.readVarString(decoder);
+
+        if (incomingDocumentName !== documentName) {
           return;
         }
 
-        onStatus?.("connected");
-        socket.send(
-          writeSyncMessage(documentName, doc, (encoder) => {
-            syncProtocol.writeSyncStep1(encoder, doc);
-          })
-        );
-      });
+        const messageType = decoding.readVarUint(decoder);
 
-      socket.addEventListener("message", (event) => {
-        void readBinaryMessage(
-          event.data as Blob | ArrayBuffer | Uint8Array
-        ).then((message) => {
-          const decoder = decoding.createDecoder(message);
-          const incomingDocumentName = decoding.readVarString(decoder);
+        if (messageType === MESSAGE_AUTH && socket === activeSocket) {
+          const authType = decoding.readVarUint(decoder);
 
-          if (incomingDocumentName !== documentName) {
+          if (authType === AUTH_TOKEN) {
+            activeSocket.send(writeAuthMessage(documentName));
             return;
           }
 
-          const messageType = decoding.readVarUint(decoder);
-
-          if ((messageType !== MESSAGE_SYNC && messageType !== 4) || !socket) {
+          if (authType === AUTH_PERMISSION_DENIED) {
+            authDenied = true;
+            onStatus?.("error");
+            activeSocket.close();
             return;
           }
 
-          const encoder = encoding.createEncoder();
-          encoding.writeVarString(encoder, documentName);
-          encoding.writeVarUint(encoder, MESSAGE_SYNC);
-          syncProtocol.readSyncMessage(decoder, encoder, doc, null);
-
-          if (encoding.length(encoder) > minSyncMessageLength) {
-            socket.send(encoding.toUint8Array(encoder));
+          if (authType === AUTHENTICATED) {
+            isSocketAuthenticated = true;
+            onStatus?.("connected");
+            activeSocket.send(
+              writeSyncMessage(documentName, doc, (encoder) => {
+                syncProtocol.writeSyncStep1(encoder, doc);
+              })
+            );
           }
-        });
-      });
+          return;
+        }
 
-      socket.addEventListener("close", () => {
-        onStatus?.(destroyed ? "disconnected" : "error");
+        if (
+          (messageType !== MESSAGE_SYNC && messageType !== MESSAGE_SYNC_REPLY) ||
+          socket !== activeSocket
+        ) {
+          return;
+        }
+
+        const encoder = encoding.createEncoder();
+        encoding.writeVarString(encoder, documentName);
+        encoding.writeVarUint(encoder, MESSAGE_SYNC);
+        syncProtocol.readSyncMessage(decoder, encoder, doc, null);
+
+        if (
+          isSocketAuthenticated &&
+          encoding.length(encoder) > minSyncMessageLength
+        ) {
+          activeSocket.send(encoding.toUint8Array(encoder));
+        }
       });
-      socket.addEventListener("error", () => {
-        onStatus?.("error");
-      });
-    },
+    });
+
+    activeSocket.addEventListener("close", () => {
+      if (socket === activeSocket) {
+        socket = null;
+      }
+      isSocketAuthenticated = false;
+      if (destroyed) {
+        onStatus?.("disconnected");
+        return;
+      }
+
+      onStatus?.("error");
+      scheduleReconnect();
+    });
+    activeSocket.addEventListener("error", () => {
+      onStatus?.("error");
+    });
+  }
+
+  return {
+    connect,
     destroy() {
       destroyed = true;
       onStatus?.("disconnected");
+      clearReconnectTimer();
       doc.off("update", handleUpdate);
       socket?.close();
       socket = null;
+      isSocketAuthenticated = false;
       doc.destroy();
     }
   };

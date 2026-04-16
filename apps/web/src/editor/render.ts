@@ -6,6 +6,50 @@ function applyOpacity(ctx: CanvasRenderingContext2D, opacity: number): void {
   ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
 }
 
+function traceRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number
+): void {
+  const safeRadius = Math.max(
+    0,
+    Math.min(radius, Math.min(width, height) / 2)
+  );
+  const roundedContext = ctx as CanvasRenderingContext2D & {
+    roundRect?: (
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+      radii?: number | number[]
+    ) => void;
+  };
+
+  if (typeof roundedContext.roundRect === "function") {
+    roundedContext.roundRect(x, y, width, height, safeRadius);
+    return;
+  }
+
+  ctx.moveTo(x + safeRadius, y);
+  ctx.lineTo(x + width - safeRadius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  ctx.lineTo(x + width, y + height - safeRadius);
+  ctx.quadraticCurveTo(
+    x + width,
+    y + height,
+    x + width - safeRadius,
+    y + height
+  );
+  ctx.lineTo(x + safeRadius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  ctx.lineTo(x, y + safeRadius);
+  ctx.quadraticCurveTo(x, y, x + safeRadius, y);
+  ctx.closePath();
+}
+
 function applyRotation(
   ctx: CanvasRenderingContext2D,
   node: SceneGraphNode,
@@ -45,7 +89,7 @@ function strokeAndFillRect(
 
   applyRotation(ctx, node, x, y, () => {
     ctx.beginPath();
-    ctx.roundRect(x, y, node.width, node.height, radius);
+    traceRoundedRect(ctx, x, y, node.width, node.height, radius);
 
     if (node.type === "frame" && node.background) {
       ctx.fillStyle = node.background.color.hex;

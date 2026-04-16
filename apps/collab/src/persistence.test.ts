@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createDatabasePool, createFileWithPages, createProject } from "@openmirage/db";
+import {
+  createComment,
+  createDatabasePool,
+  createFileWithPages,
+  createProject,
+  listComments,
+  resolveComment
+} from "@openmirage/db";
 import * as Y from "yjs";
 import { PgCollabPersistence } from "./persistence.js";
 
@@ -160,6 +167,131 @@ test("PgCollabPersistence reloads stored updates, compacts snapshots, and isolat
 
     const original = await persistence.loadPageDocument(pageAId);
     assert.equal(readDocText(original.document), "hello world");
+  });
+
+  if (!ran) {
+    t.skip("database unavailable or collab migrations not applied");
+  }
+});
+
+test("comments stay relational and do not mutate persisted collab page state", async (t) => {
+  const ran = await withDatabaseTransaction(async (client) => {
+    const userId = await insertUser(
+      client,
+      `collab-comments-${Date.now()}@example.com`,
+      "Comment Persist User"
+    );
+    const workspaceId = await insertWorkspace(
+      client,
+      "Comment Persist Workspace",
+      `collab-comments-${Date.now()}`
+    );
+    await insertMembership(client, workspaceId, userId);
+
+    const project = await createProject(
+      userId,
+      workspaceId,
+      "Comment Persist Project",
+      client as Parameters<typeof createProject>[3]
+    );
+    const file = await createFileWithPages(
+      userId,
+      workspaceId,
+      project?.id as string,
+      "Comment Persist File",
+      [{ name: "Page A" }, { name: "Page B" }],
+      client as Parameters<typeof createFileWithPages>[5]
+    );
+
+    const fileId = file?.file.id as string;
+    const pageAId = file?.pages[0]?.id as string;
+    const persistence = new PgCollabPersistence(client);
+    const pageDoc = new Y.Doc();
+    const update = setDocText(pageDoc, "page-state-before-comments");
+    await persistence.appendUpdate(pageAId, update);
+    const initialUpdateCount = await persistence.getPageUpdateCount(pageAId);
+
+    const fileComment = await createComment(
+      userId,
+      workspaceId,
+      project?.id as string,
+      {
+        body: "File comment",
+        target: {
+          fileId,
+          type: "file"
+        }
+      },
+      client as Parameters<typeof createComment>[4]
+    );
+    const pageComment = await createComment(
+      userId,
+      workspaceId,
+      project?.id as string,
+      {
+        body: "Page comment",
+        target: {
+          fileId,
+          pageId: pageAId,
+          type: "page"
+        }
+      },
+      client as Parameters<typeof createComment>[4]
+    );
+    const nodeComment = await createComment(
+      userId,
+      workspaceId,
+      project?.id as string,
+      {
+        body: "Node comment",
+        target: {
+          fileId,
+          nodeId: "rect-1",
+          pageId: pageAId,
+          type: "node"
+        }
+      },
+      client as Parameters<typeof createComment>[4]
+    );
+
+    assert.ok(fileComment);
+    assert.ok(pageComment);
+    assert.ok(nodeComment);
+
+    const listed = await listComments(
+      userId,
+      workspaceId,
+      project?.id as string,
+      {
+        fileId,
+        includeResolved: true,
+        pageId: pageAId
+      },
+      client as Parameters<typeof listComments>[4]
+    );
+    assert.deepEqual(
+      listed?.map((comment) => comment.body),
+      ["File comment", "Page comment", "Node comment"]
+    );
+
+    const resolved = await resolveComment(
+      userId,
+      workspaceId,
+      project?.id as string,
+      {
+        commentId: nodeComment?.id as string,
+        fileId
+      },
+      client as Parameters<typeof resolveComment>[4]
+    );
+    assert.ok(resolved?.resolvedAt);
+
+    const reloaded = await persistence.loadPageDocument(pageAId);
+    assert.equal(readDocText(reloaded.document), "page-state-before-comments");
+    assert.equal(
+      await persistence.getPageUpdateCount(pageAId),
+      initialUpdateCount
+    );
   });
 
   if (!ran) {

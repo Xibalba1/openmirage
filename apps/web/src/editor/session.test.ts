@@ -7,6 +7,13 @@ import * as syncProtocol from "y-protocols/sync";
 import * as Y from "yjs";
 import { createEditorSession, writePageDocument } from "./session";
 
+const MESSAGE_SYNC = 0;
+const MESSAGE_AWARENESS = 1;
+const MESSAGE_AUTH = 2;
+const MESSAGE_SYNC_REPLY = 4;
+const AUTH_TOKEN = 0;
+const AUTHENTICATED = 2;
+
 function createDocument() {
   return {
     nodes: {
@@ -53,6 +60,12 @@ class FakeWebSocket {
     }
 
     FakeWebSocket.rooms.clear();
+  }
+
+  static disconnectAll() {
+    for (const room of FakeWebSocket.rooms.values()) {
+      room.disconnectAll();
+    }
   }
 
   readonly CLOSED = FakeWebSocket.CLOSED;
@@ -116,6 +129,7 @@ class FakeRoom {
   private readonly doc = new Y.Doc();
   private readonly awareness = new awarenessProtocol.Awareness(this.doc);
   private readonly socketClientIds = new Map<FakeWebSocket, Set<number>>();
+  private readonly authenticatedSockets = new Set<FakeWebSocket>();
 
   constructor(private readonly url: string) {
     writePageDocument(this.doc, createDocument());
@@ -172,8 +186,15 @@ class FakeRoom {
     this.socketClientIds.set(socket, new Set<number>());
   }
 
+  disconnectAll() {
+    for (const socket of Array.from(this.sockets)) {
+      socket.close();
+    }
+  }
+
   remove(socket: FakeWebSocket) {
     this.sockets.delete(socket);
+    this.authenticatedSockets.delete(socket);
     const clientIds = Array.from(this.socketClientIds.get(socket) ?? []);
 
     this.socketClientIds.delete(socket);
@@ -202,10 +223,27 @@ class FakeRoom {
     const documentName = decoding.readVarString(decoder);
     const messageType = decoding.readVarUint(decoder);
 
-    if (messageType === 0 || messageType === 4) {
+    if (messageType === MESSAGE_AUTH) {
+      const authType = decoding.readVarUint(decoder);
+
+      if (authType === AUTH_TOKEN) {
+        decoding.readVarString(decoder);
+        this.authenticatedSockets.add(sender);
+        sender.dispatch("message", {
+          data: this.createAuthenticatedMessage(documentName)
+        });
+      }
+      return;
+    }
+
+    if (!this.authenticatedSockets.has(sender)) {
+      return;
+    }
+
+    if (messageType === MESSAGE_SYNC || messageType === MESSAGE_SYNC_REPLY) {
       const encoder = encoding.createEncoder();
       encoding.writeVarString(encoder, documentName);
-      encoding.writeVarUint(encoder, 0);
+      encoding.writeVarUint(encoder, MESSAGE_SYNC);
       syncProtocol.readSyncMessage(decoder, encoder, this.doc, sender);
 
       if (encoding.length(encoder) > this.minSyncMessageLength(documentName)) {
@@ -215,7 +253,7 @@ class FakeRoom {
       return;
     }
 
-    if (messageType === 1) {
+    if (messageType === MESSAGE_AWARENESS) {
       awarenessProtocol.applyAwarenessUpdate(
         this.awareness,
         decoding.readVarUint8Array(decoder),
@@ -227,7 +265,7 @@ class FakeRoom {
   private createSyncUpdateMessage(update: Uint8Array): Uint8Array {
     const encoder = encoding.createEncoder();
     encoding.writeVarString(encoder, "page:page-1");
-    encoding.writeVarUint(encoder, 0);
+    encoding.writeVarUint(encoder, MESSAGE_SYNC);
     syncProtocol.writeUpdate(encoder, update);
     return encoding.toUint8Array(encoder);
   }
@@ -235,11 +273,20 @@ class FakeRoom {
   private createAwarenessMessage(changedClients: number[]): Uint8Array {
     const encoder = encoding.createEncoder();
     encoding.writeVarString(encoder, "page:page-1");
-    encoding.writeVarUint(encoder, 1);
+    encoding.writeVarUint(encoder, MESSAGE_AWARENESS);
     encoding.writeVarUint8Array(
       encoder,
       awarenessProtocol.encodeAwarenessUpdate(this.awareness, changedClients)
     );
+    return encoding.toUint8Array(encoder);
+  }
+
+  private createAuthenticatedMessage(documentName: string): Uint8Array {
+    const encoder = encoding.createEncoder();
+    encoding.writeVarString(encoder, documentName);
+    encoding.writeVarUint(encoder, MESSAGE_AUTH);
+    encoding.writeVarUint(encoder, AUTHENTICATED);
+    encoding.writeVarString(encoder, "read-write");
     return encoding.toUint8Array(encoder);
   }
 
@@ -490,6 +537,51 @@ test("awareness publishes remote presence without affecting undo history", async
   } finally {
     first.destroy();
     second.destroy();
+    FakeWebSocket.resetRooms();
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
+
+test("session reconnects after an unexpected websocket close", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+  const statuses: Array<"connecting" | "connected" | "disconnected" | "error"> =
+    [];
+  const session = createEditorSession(
+    {
+      pageId: "page-1",
+      transport: {
+        collabWsPath: "/collab",
+        collabWsUrl: "ws://example.test",
+        location: {
+          fileId: "file-1",
+          pageId: "page-1",
+          workspaceId: "workspace-1"
+        }
+      }
+    },
+    (status) => {
+      statuses.push(status);
+    }
+  );
+
+  try {
+    session.connect();
+    await waitFor(() => statuses.includes("connected"));
+
+    FakeWebSocket.disconnectAll();
+    await waitFor(
+      () =>
+        statuses.some((status, index) => {
+          return (
+            status === "connected" &&
+            statuses.slice(0, index).includes("error")
+          );
+        }),
+      1_500
+    );
+  } finally {
+    session.destroy();
     FakeWebSocket.resetRooms();
     globalThis.WebSocket = originalWebSocket;
   }

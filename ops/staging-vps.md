@@ -180,7 +180,11 @@ Each deploy is only successful if all of these checks pass through the public Ca
 3. `GET /readyz`
 4. `GET /collab/healthz`
 5. `GET /worker/readyz`
-6. websocket upgrade behavior at `/collab`
+6. authenticated page-scoped collab bootstrap at `/collab`:
+   - request a dev magic link and consume a session cookie
+   - create a verification project/file/page through the API
+   - open `/collab` with `documentName`, `workspaceId`, `fileId`, and `pageId`
+   - complete the Hocuspocus auth handshake and receive a sync reply
 7. storage smoke path:
    - `GET /internal/storage/smoke`
    - `POST /internal/storage/smoke`
@@ -243,7 +247,7 @@ Also inspect:
 
 - generated magic-link origin and cookie flags
 - storage credentials, bucket, and provider-specific connectivity
-- websocket upgrade behavior at `/collab`
+- authenticated page-scoped collab handshake and sync at `/collab`
 - whether `.env.staging` still matches the public staging origin
 
 ## Relationship To Later Steps
