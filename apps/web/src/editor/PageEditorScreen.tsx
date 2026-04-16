@@ -30,8 +30,15 @@ import {
   getContainerInsertionTarget
 } from "./interactions";
 import { renderSceneToCanvas } from "./render";
-import { createPaintRecords, hydratePageDocument } from "./scene";
 import {
+  createPaintRecords,
+  getNodePaintRecord,
+  getScopedPaintRecords,
+  hydratePageDocument
+} from "./scene";
+import { createEditorSession } from "./session";
+import {
+  clampZoom,
   createInitialViewport,
   pagePointToScreenPoint,
   screenPointToPagePoint,
@@ -221,9 +228,13 @@ export function PageEditorScreen(props: {
   workspace: WorkspaceDetailDto;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [documentState, setDocumentState] = useState<PageDocumentDto>(() =>
-    createEmptyDocument(props.page.id)
-  );
+  const canvasShellRef = useRef<HTMLDivElement | null>(null);
+  const sessionRef = useRef<EditorSession | null>(null);
+  const [sessionSnapshot, setSessionSnapshot] = useState<EditorSessionSnapshot>({
+    canRedo: false,
+    canUndo: false,
+    document: createEmptyDocument(props.page.id)
+  });
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [primarySelectionId, setPrimarySelectionId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -246,15 +257,21 @@ export function PageEditorScreen(props: {
     setPrimarySelectionId(null);
     setHoveredId(null);
     setViewport(createInitialViewport());
+    setActiveScopeId(null);
+    setActiveTextEdit(null);
+    setActiveInteraction(null);
 
     const session = createEditorSession(
       {
-        collabWsPath: props.collab.collabWsPath,
-        collabWsUrl: props.collab.collabWsUrl,
-        location: {
-          fileId: props.route.fileId,
-          pageId: props.route.pageId,
-          workspaceId: props.route.workspaceId
+        pageId: props.page.id,
+        transport: {
+          collabWsPath: props.collab.collabWsPath,
+          collabWsUrl: props.collab.collabWsUrl,
+          location: {
+            fileId: props.route.fileId,
+            pageId: props.route.pageId,
+            workspaceId: props.route.workspaceId
+          }
         }
       },
       setCollabStatus
@@ -295,6 +312,72 @@ export function PageEditorScreen(props: {
     [previewDocument, props.page]
   );
   const paintRecords = useMemo(() => createPaintRecords(scene), [scene]);
+  const scopedRecords = useMemo(
+    () => getScopedPaintRecords(paintRecords, scene, activeScopeId),
+    [activeScopeId, paintRecords, scene]
+  );
+  const marqueeSelection = useMemo(() => {
+    if (activeInteraction?.type !== "marquee" || !activeInteraction.currentPagePoint) {
+      return null;
+    }
+
+    return selectPaintRecordsInMarquee(
+      scopedRecords,
+      activeInteraction.startPagePoint,
+      activeInteraction.currentPagePoint
+    );
+  }, [activeInteraction, scopedRecords]);
+  const effectiveSelectedIds =
+    activeInteraction?.type === "marquee" && marqueeSelection
+    ? Array.from(
+        new Set([
+          ...activeInteraction.startSelectedIds,
+          ...marqueeSelection
+        ])
+      )
+    : selectedIds;
+  const effectivePrimarySelectionId = resolvePrimarySelectionId(
+    effectiveSelectedIds,
+    primarySelectionId
+  );
+  const primaryRecord = useMemo(
+    () => getNodePaintRecord(scopedRecords, effectivePrimarySelectionId ?? ""),
+    [effectivePrimarySelectionId, scopedRecords]
+  );
+  const layerItems = useMemo(
+    () => flattenLayerTree(sessionSnapshot.document, null),
+    [sessionSnapshot.document]
+  );
+  const textEditRecord = useMemo(
+    () =>
+      activeTextEdit
+        ? getNodePaintRecord(paintRecords, activeTextEdit.nodeId)
+        : null,
+    [activeTextEdit, paintRecords]
+  );
+  const activeTextNode = useMemo(() => {
+    if (!activeTextEdit) {
+      return null;
+    }
+
+    const node = sessionSnapshot.document.nodes[activeTextEdit.nodeId];
+    return node?.type === "text" ? node : null;
+  }, [activeTextEdit, sessionSnapshot.document.nodes]);
+
+  useEffect(() => {
+    if (!primarySelectionId || previewDocument.nodes[primarySelectionId]) {
+      return;
+    }
+
+    setPrimarySelectionId(null);
+    setSelectedIds([]);
+  }, [previewDocument.nodes, primarySelectionId]);
+
+  useEffect(() => {
+    if (activeScopeId && !previewDocument.nodes[activeScopeId]) {
+      setActiveScopeId(null);
+    }
+  }, [activeScopeId, previewDocument.nodes]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -325,17 +408,119 @@ export function PageEditorScreen(props: {
         selectedIds: effectiveSelectedIds
       }
     );
-  }, [hoveredId, paintRecords, resizeVersion, scene.background, scene.height, scene.width, selectedIds, viewport]);
+  }, [
+    activeInteraction,
+    effectivePrimarySelectionId,
+    effectiveSelectedIds,
+    hoveredId,
+    paintRecords,
+    resizeVersion,
+    scene.background,
+    scene.height,
+    scene.width,
+    viewport
+  ]);
 
-  function updateSelection(nodeId: string | null) {
-    setPrimarySelectionId(nodeId);
-    setSelectedIds(nodeId ? [nodeId] : []);
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const session = sessionRef.current;
+
+      if (!session) {
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+
+        if (event.shiftKey) {
+          session.redo();
+          return;
+        }
+
+        session.undo();
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        session.redo();
+        return;
+      }
+
+      if (activeTextEdit) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          setActiveTextEdit(null);
+        }
+
+        return;
+      }
+
+      if (event.key === "Delete" || event.key === "Backspace") {
+        if (effectiveSelectedIds.length === 0) {
+          return;
+        }
+
+        event.preventDefault();
+        session.commit({
+          nodeIds: effectiveSelectedIds,
+          pageId: props.page.id,
+          type: "delete-node"
+        });
+        setSelectedIds([]);
+        setPrimarySelectionId(null);
+        return;
+      }
+
+      if (event.key === "Escape") {
+        if (activeInteraction) {
+          event.preventDefault();
+          setActiveInteraction(null);
+          return;
+        }
+
+        if (activeScopeId) {
+          event.preventDefault();
+          const nextScopeId = sessionSnapshot.document.nodes[activeScopeId]?.parentId ?? null;
+          setActiveScopeId(nextScopeId);
+          setSelectedIds(nextScopeId ? [nextScopeId] : []);
+          setPrimarySelectionId(nextScopeId);
+        }
+
+        return;
+      }
+
+      if (event.key === "Enter" && effectivePrimarySelectionId) {
+        const node = sessionSnapshot.document.nodes[effectivePrimarySelectionId];
+
+        if (node?.type === "text") {
+          event.preventDefault();
+          setActiveTextEdit({
+            draft: node.content,
+            nodeId: node.id
+          });
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    activeInteraction,
+    activeScopeId,
+    activeTextEdit,
+    effectivePrimarySelectionId,
+    effectiveSelectedIds,
+    props.page.id,
+    sessionSnapshot.document
+  ]);
+
+  function updateSelection(nextSelectedIds: string[], nextPrimaryId: string | null) {
+    setSelectedIds(nextSelectedIds);
+    setPrimarySelectionId(resolvePrimarySelectionId(nextSelectedIds, nextPrimaryId));
   }
 
-  function readCanvasPoint(event: {
-    clientX: number;
-    clientY: number;
-  }) {
+  function readCanvasPoint(event: { clientX: number; clientY: number }) {
     const canvas = canvasRef.current;
     const bounds = canvas?.getBoundingClientRect();
 
@@ -367,14 +552,55 @@ export function PageEditorScreen(props: {
       return;
     }
 
-    const panStart = panStartRef.current;
+    session.commit({
+      nodeId: activeTextNode.id,
+      pageId: props.page.id,
+      patch: {
+        content: activeTextEdit.draft,
+        height: activeTextNode.height,
+        width: activeTextNode.width
+      } as Partial<SceneGraphNode>,
+      type: "update-node"
+    });
+    setActiveTextEdit(null);
+  }
 
-    if (isPanning && panStart) {
-      setViewport((current) => ({
-        ...current,
-        panX: panStart.panX + screenPoint.x - panStart.x,
-        panY: panStart.panY + screenPoint.y - panStart.y
-      }));
+  function handlePointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const screenPoint = readCanvasPoint(event);
+    const pagePoint = readPagePoint(event);
+
+    if (activeInteraction?.type === "pan") {
+      if (!screenPoint) {
+        return;
+      }
+
+      setViewport({
+        ...activeInteraction.startViewport,
+        panX:
+          activeInteraction.startViewport.panX +
+          screenPoint.x -
+          activeInteraction.startScreenPoint.x,
+        panY:
+          activeInteraction.startViewport.panY +
+          screenPoint.y -
+          activeInteraction.startScreenPoint.y
+      });
+      return;
+    }
+
+    if (!pagePoint) {
+      return;
+    }
+
+    if (activeInteraction) {
+      setActiveInteraction((current) =>
+        current
+          ? {
+              ...current,
+              currentPagePoint: pagePoint
+            }
+          : current
+      );
       return;
     }
 
@@ -421,27 +647,97 @@ export function PageEditorScreen(props: {
       return;
     }
 
-    const pagePoint = screenPointToPagePoint(screenPoint, viewport);
-    const hit = hitTestPaintRecords(paintRecords, pagePoint, viewport.zoom);
-
-    if (!hit) {
-      setIsPanning(true);
-      panStartRef.current = {
-        panX: viewport.panX,
-        panY: viewport.panY,
-        x: screenPoint.x,
-        y: screenPoint.y
-      };
-      updateSelection(null);
+    if (!pagePoint) {
       return;
     }
 
-    updateSelection(hit.node.id);
+    const hit = hitTestPaintRecords(scopedRecords, pagePoint, viewport.zoom);
+
+    if (!hit) {
+      setHoveredId(null);
+      setActiveInteraction({
+        currentPagePoint: pagePoint,
+        startPagePoint: pagePoint,
+        startSelectedIds: event.shiftKey ? selectedIds : [],
+        type: "marquee"
+      });
+      if (!event.shiftKey) {
+        updateSelection([], null);
+      }
+      return;
+    }
+
+    if (event.shiftKey) {
+      const nextSelectedIds = toggleSelectedIds(selectedIds, hit.node.id);
+      updateSelection(nextSelectedIds, hit.node.id);
+      return;
+    }
+
+    const nextSelectedIds = selectedIds.includes(hit.node.id) ? selectedIds : [hit.node.id];
+    updateSelection(nextSelectedIds, hit.node.id);
+    setActiveInteraction({
+      currentPagePoint: pagePoint,
+      originalDocument: sessionSnapshot.document,
+      startPagePoint: pagePoint,
+      type: "move"
+    });
   }
 
-  function stopPanning() {
-    setIsPanning(false);
-    panStartRef.current = null;
+  function stopInteraction(event?: ReactPointerEvent<HTMLCanvasElement>) {
+    const session = sessionRef.current;
+
+    if (!session || !activeInteraction) {
+      setActiveInteraction(null);
+      return;
+    }
+
+    const pagePoint =
+      activeInteraction.currentPagePoint ??
+      (event ? readPagePoint(event) : null);
+
+    if (activeInteraction.type === "move" && pagePoint) {
+      const delta = {
+        x: pagePoint.x - activeInteraction.startPagePoint.x,
+        y: pagePoint.y - activeInteraction.startPagePoint.y
+      };
+
+      if (delta.x || delta.y) {
+        session.commit({
+          pageId: props.page.id,
+          type: "move-node",
+          updates: deriveMoveUpdates(activeInteraction.originalDocument, selectedIds, delta)
+        });
+      }
+    }
+
+    if (activeInteraction.type === "resize" && pagePoint) {
+      session.commit({
+        nodeId: activeInteraction.record.node.id,
+        pageId: props.page.id,
+        type: "resize-node",
+        updates: deriveResizeUpdates(
+          activeInteraction.originalDocument,
+          activeInteraction.record,
+          activeInteraction.handle,
+          pagePoint
+        )
+      });
+    }
+
+    if (activeInteraction.type === "marquee" && pagePoint) {
+      const nextSelectedIds = selectPaintRecordsInMarquee(
+        scopedRecords,
+        activeInteraction.startPagePoint,
+        pagePoint
+      );
+
+      updateSelection(
+        Array.from(new Set([...activeInteraction.startSelectedIds, ...nextSelectedIds])),
+        nextSelectedIds.at(-1) ?? activeInteraction.startSelectedIds.at(-1) ?? null
+      );
+    }
+
+    setActiveInteraction(null);
   }
 
   function handleWheel(event: React.WheelEvent<HTMLCanvasElement>) {
@@ -464,6 +760,173 @@ export function PageEditorScreen(props: {
       panY: current.panY - event.deltaY
     }));
   }
+
+  function handleCanvasDoubleClick(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const hit = hitTestPaintRecords(scopedRecords, readPagePoint(event) ?? { x: 0, y: 0 }, viewport.zoom);
+
+    if (!hit) {
+      return;
+    }
+
+    if (hit.node.type === "text") {
+      setActiveTextEdit({
+        draft: hit.node.content,
+        nodeId: hit.node.id
+      });
+      updateSelection([hit.node.id], hit.node.id);
+      return;
+    }
+
+    if (hit.node.type === "frame" || hit.node.type === "group") {
+      setActiveScopeId(hit.node.id);
+      updateSelection([hit.node.id], hit.node.id);
+    }
+  }
+
+  function createNode(type: "frame" | "rectangle" | "ellipse" | "line" | "text") {
+    const session = sessionRef.current;
+    const canvas = canvasRef.current;
+
+    if (!session || !canvas) {
+      return;
+    }
+
+    const targetParentId = getContainerInsertionTarget({
+      activeScopeId,
+      document: sessionSnapshot.document,
+      primarySelectionId
+    });
+    const parentAbsolutePosition = targetParentId
+      ? getNodeAbsolutePosition(sessionSnapshot.document, targetParentId) ?? { x: 0, y: 0 }
+      : { x: 0, y: 0 };
+    const centerPoint = screenPointToPagePoint(
+      {
+        x: canvas.clientWidth / 2,
+        y: canvas.clientHeight / 2
+      },
+      viewport
+    );
+    const command = createNodeCommandForInsert({
+      pageId: props.page.id,
+      parentAbsolutePosition,
+      parentId: targetParentId,
+      point: centerPoint,
+      type
+    });
+
+    session.commit(command);
+    updateSelection([command.node.id], command.node.id);
+  }
+
+  function reorderNode(nodeId: string, delta: number) {
+    const session = sessionRef.current;
+    const node = sessionSnapshot.document.nodes[nodeId];
+
+    if (!session || !node) {
+      return;
+    }
+
+    const order = getLayerOrder(sessionSnapshot.document, node.parentId);
+    const currentIndex = order.indexOf(nodeId);
+
+    if (currentIndex === -1) {
+      return;
+    }
+
+    session.commit({
+      index: Math.max(0, Math.min(order.length - 1, currentIndex + delta)),
+      nodeId,
+      pageId: props.page.id,
+      parentId: node.parentId,
+      type: "reorder-node"
+    });
+  }
+
+  function toggleNodeFlag(nodeId: string, patch: Partial<SceneGraphNode>) {
+    const session = sessionRef.current;
+
+    if (!session) {
+      return;
+    }
+
+    session.commit({
+      nodeId,
+      pageId: props.page.id,
+      patch,
+      type: "update-node"
+    });
+  }
+
+  function deleteNodes(nodeIds: string[]) {
+    const session = sessionRef.current;
+
+    if (!session || nodeIds.length === 0) {
+      return;
+    }
+
+    session.commit({
+      nodeIds,
+      pageId: props.page.id,
+      type: "delete-node"
+    });
+    setSelectedIds((current) => current.filter((nodeId) => !nodeIds.includes(nodeId)));
+    setPrimarySelectionId((current) => (current && nodeIds.includes(current) ? null : current));
+  }
+
+  function groupSelection() {
+    const session = sessionRef.current;
+
+    if (!session) {
+      return;
+    }
+
+    const command = buildGroupCommand(sessionSnapshot.document, props.page.id, selectedIds);
+
+    if (!command) {
+      return;
+    }
+
+    session.commit(command);
+    updateSelection([command.group.id], command.group.id);
+  }
+
+  function ungroupSelection() {
+    const session = sessionRef.current;
+    const nodeId = primarySelectionId;
+
+    if (!session || !nodeId) {
+      return;
+    }
+
+    session.commit({
+      nodeId,
+      pageId: props.page.id,
+      type: "ungroup-node"
+    });
+    updateSelection([], null);
+  }
+
+  const textEditStyle = useMemo(() => {
+    if (!textEditRecord || !activeTextNode || !canvasShellRef.current) {
+      return null;
+    }
+
+    const topLeft = pagePointToScreenPoint(
+      { x: textEditRecord.bounds.x, y: textEditRecord.bounds.y },
+      viewport
+    );
+
+    return {
+      fontFamily: activeTextNode.typography.fontFamily,
+      fontSize: `${activeTextNode.typography.fontSize * viewport.zoom}px`,
+      fontWeight: activeTextNode.typography.fontWeight,
+      height: `${Math.max(36, textEditRecord.bounds.height * viewport.zoom)}px`,
+      left: `${topLeft.x}px`,
+      lineHeight: `${activeTextNode.typography.lineHeight * viewport.zoom}px`,
+      top: `${topLeft.y}px`,
+      width: `${Math.max(120, textEditRecord.bounds.width * viewport.zoom)}px`
+    } as const;
+  }, [activeTextNode, textEditRecord, viewport]);
 
   return (
     <section className="editor-layout">
@@ -620,9 +1083,20 @@ export function PageEditorScreen(props: {
             </button>
             <button
               className="button button-secondary"
-              onClick={() => setViewport(createInitialViewport())}
+              disabled={!sessionSnapshot.canRedo}
+              onClick={() => sessionRef.current?.redo()}
               type="button"
             >
+              Redo
+            </button>
+            <button
+              className="button button-secondary"
+              onClick={() => setViewport((current) => ({ ...current, zoom: clampZoom(current.zoom * 0.9) }))}
+              type="button"
+            >
+              Zoom out
+            </button>
+            <button className="button button-secondary" onClick={() => setViewport(createInitialViewport())} type="button">
               Reset view
             </button>
             <button
@@ -649,7 +1123,8 @@ export function PageEditorScreen(props: {
         <div className="editor-canvas-shell" ref={canvasShellRef}>
           <canvas
             className="editor-canvas"
-            onPointerCancel={stopPanning}
+            onDoubleClick={handleCanvasDoubleClick}
+            onPointerCancel={() => setActiveInteraction(null)}
             onPointerDown={handlePointerDown}
             onPointerLeave={() => {
               setHoveredId(null);
