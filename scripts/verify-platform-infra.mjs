@@ -18,6 +18,24 @@ function fail(message) {
   throw new Error(message);
 }
 
+function readSpawnOutput(result, fallback) {
+  const stderr =
+    typeof result.stderr === "string" ? result.stderr.trim() : "";
+  const stdout =
+    typeof result.stdout === "string" ? result.stdout.trim() : "";
+  const errorMessage =
+    result.error instanceof Error ? result.error.message : "";
+  const signal = typeof result.signal === "string" ? result.signal : "";
+
+  return (
+    stderr ||
+    stdout ||
+    errorMessage ||
+    signal ||
+    fallback
+  );
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: process.cwd(),
@@ -27,9 +45,7 @@ function run(command, args, options = {}) {
   });
 
   if (result.status !== 0) {
-    const stderr = result.stderr.trim();
-    const stdout = result.stdout.trim();
-    fail(stderr || stdout || `${command} ${args.join(" ")} failed`);
+    fail(readSpawnOutput(result, `${command} ${args.join(" ")} failed`));
   }
 
   return result;
@@ -453,11 +469,7 @@ ws.on("close", () => process.exit(0));`
   );
 
   if (websocketProbe.status !== 0) {
-    fail(
-      websocketProbe.stderr.trim() ||
-        websocketProbe.stdout.trim() ||
-        "websocket verification through Caddy failed"
-    );
+    fail(readSpawnOutput(websocketProbe, "websocket verification through Caddy failed"));
   }
 
   const unauthenticatedProbe = spawnSync(
@@ -497,9 +509,10 @@ ws.on("close", () => process.exit(0));`
 
   if (unauthenticatedProbe.status !== 0) {
     fail(
-      unauthenticatedProbe.stderr.trim() ||
-        unauthenticatedProbe.stdout.trim() ||
+      readSpawnOutput(
+        unauthenticatedProbe,
         "unauthenticated websocket verification through Caddy failed"
+      )
     );
   }
 }
