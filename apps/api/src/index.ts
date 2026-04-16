@@ -13,8 +13,8 @@ import {
   checkDatabaseConnection,
   checkMetadataStore,
   consumeMagicLinkToken,
-  createFileWithPages,
   createPage,
+  createFileWithPages,
   createProject,
   createDatabasePool,
   createMetadataStoreContract,
@@ -48,8 +48,10 @@ import { createStorage } from "@openmirage/storage";
 import {
   type CreateFileInput,
   type CreatePageInput,
+  type CreateCommentInput,
   type CreateProjectInput,
   type AuthContext,
+  type CommentListResponse,
   type RenameFileInput,
   type RenamePageInput,
   type RenameProjectInput,
@@ -59,6 +61,11 @@ import {
   type StorageConfig
 } from "@openmirage/types";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import {
+  resolveCreateCommentRequest,
+  resolveListCommentsRequest,
+  resolveResolveCommentRequest
+} from "./comments.js";
 import { resolveCollabPageSession } from "./collab-session.js";
 
 interface StorageSmokeBody {
@@ -95,6 +102,11 @@ interface PageParams extends FileParams {
 interface CollabPageSessionQuerystring {
   fileId?: string;
   workspaceId?: string;
+}
+
+interface CommentListQuerystring {
+  includeResolved?: string;
+  pageId?: string;
 }
 
 function createAuthUnauthorizedReply(reply: FastifyReply) {
@@ -711,7 +723,10 @@ async function startApiServer(): Promise<void> {
     }
 
     return {
-      workspaces: await listAuthorizedWorkspaces(authContext.user.id, databasePool)
+      workspaces: await listAuthorizedWorkspaces(
+        authContext.user.id,
+        databasePool
+      )
     };
   });
   app.get<{ Params: WorkspaceParams }>(
@@ -729,7 +744,11 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+        !requireWorkspaceMembership(
+          authContext,
+          request.params.workspaceId,
+          reply
+        )
       ) {
         return reply;
       }
@@ -762,7 +781,11 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+        !requireWorkspaceMembership(
+          authContext,
+          request.params.workspaceId,
+          reply
+        )
       ) {
         return reply;
       }
@@ -806,7 +829,11 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+        !requireWorkspaceMembership(
+          authContext,
+          request.params.workspaceId,
+          reply
+        )
       ) {
         return reply;
       }
@@ -850,7 +877,11 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+        !requireWorkspaceMembership(
+          authContext,
+          request.params.workspaceId,
+          reply
+        )
       ) {
         return reply;
       }
@@ -884,7 +915,11 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+        !requireWorkspaceMembership(
+          authContext,
+          request.params.workspaceId,
+          reply
+        )
       ) {
         return reply;
       }
@@ -945,7 +980,11 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+        !requireWorkspaceMembership(
+          authContext,
+          request.params.workspaceId,
+          reply
+        )
       ) {
         return reply;
       }
@@ -990,7 +1029,11 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+        !requireWorkspaceMembership(
+          authContext,
+          request.params.workspaceId,
+          reply
+        )
       ) {
         return reply;
       }
@@ -1025,7 +1068,11 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+        !requireWorkspaceMembership(
+          authContext,
+          request.params.workspaceId,
+          reply
+        )
       ) {
         return reply;
       }
@@ -1060,7 +1107,11 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+        !requireWorkspaceMembership(
+          authContext,
+          request.params.workspaceId,
+          reply
+        )
       ) {
         return reply;
       }
@@ -1106,7 +1157,11 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(authContext, request.params.workspaceId, reply)
+        !requireWorkspaceMembership(
+          authContext,
+          request.params.workspaceId,
+          reply
+        )
       ) {
         return reply;
       }
@@ -1135,6 +1190,81 @@ async function startApiServer(): Promise<void> {
       }
 
       return page;
+    }
+  );
+  app.get<{
+    Params: FileParams;
+    Querystring: CommentListQuerystring;
+  }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/comments",
+    async (request, reply) => {
+      const authContext = await readAuthContextFromRequest(
+        request,
+        databasePool,
+        sessionContract
+      );
+      const resolution = await resolveListCommentsRequest(
+        authContext,
+        {
+          fileId: request.params.fileId,
+          includeResolved: request.query.includeResolved,
+          pageId: request.query.pageId,
+          projectId: request.params.projectId,
+          workspaceId: request.params.workspaceId
+        },
+        databasePool
+      );
+
+      reply.status(resolution.status);
+      return resolution.body satisfies CommentListResponse | { error: string };
+    }
+  );
+  app.post<{ Body: CreateCommentInput; Params: FileParams }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/comments",
+    async (request, reply) => {
+      const authContext = await readAuthContextFromRequest(
+        request,
+        databasePool,
+        sessionContract
+      );
+      const resolution = await resolveCreateCommentRequest(
+        authContext,
+        {
+          body: request.body,
+          fileId: request.params.fileId,
+          projectId: request.params.projectId,
+          workspaceId: request.params.workspaceId
+        },
+        databasePool
+      );
+
+      reply.status(resolution.status);
+      return resolution.body;
+    }
+  );
+  app.post<{
+    Params: FileParams & { commentId: string };
+  }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/comments/:commentId/resolve",
+    async (request, reply) => {
+      const authContext = await readAuthContextFromRequest(
+        request,
+        databasePool,
+        sessionContract
+      );
+      const resolution = await resolveResolveCommentRequest(
+        authContext,
+        {
+          commentId: request.params.commentId,
+          fileId: request.params.fileId,
+          projectId: request.params.projectId,
+          workspaceId: request.params.workspaceId
+        },
+        databasePool
+      );
+
+      reply.status(resolution.status);
+      return resolution.body;
     }
   );
   app.get("/internal/storage/smoke", async () => {

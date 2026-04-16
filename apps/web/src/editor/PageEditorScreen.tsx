@@ -1,9 +1,14 @@
 import {
+  type AuthenticatedUser,
+  type CommentDto,
+  type CommentListResponse,
+  type CreateCommentInput,
   type FileDto,
   type GroupNode,
   type GroupNodesCommand,
   type PageDocumentDto,
   type PageDto,
+  type PresenceParticipant,
   type ProjectDto,
   type RuntimeUrls,
   type SceneGraphNode,
@@ -16,7 +21,12 @@ import {
   useRef,
   useState
 } from "react";
-import { applyEditorCommand, getNodeAbsolutePosition, getTopLevelNodeIds, isContainerNode } from "./commands";
+import {
+  applyEditorCommand,
+  getNodeAbsolutePosition,
+  getTopLevelNodeIds,
+  isContainerNode
+} from "./commands";
 import {
   hitTestPaintRecords,
   hitTestResizeHandle,
@@ -44,7 +54,14 @@ import {
   screenPointToPagePoint,
   zoomViewportAtPoint
 } from "./viewport";
-import { type ActiveInteraction, type ActiveTextEdit, type EditorSession, type EditorSessionSnapshot, type Point, type ViewportState } from "./types";
+import {
+  type ActiveInteraction,
+  type ActiveTextEdit,
+  type EditorSession,
+  type EditorSessionSnapshot,
+  type Point,
+  type ViewportState
+} from "./types";
 
 interface AppPageRoute {
   fileId: string;
@@ -53,7 +70,72 @@ interface AppPageRoute {
   workspaceId: string;
 }
 
-function useCanvasResizeVersion(canvasRef: React.RefObject<HTMLCanvasElement | null>) {
+type CommentLoadState =
+  | { comments: CommentDto[]; status: "loaded" }
+  | { comments: CommentDto[]; status: "loading" }
+  | { comments: CommentDto[]; message: string; status: "error" };
+
+const PRESENCE_COLORS = [
+  "#f97316",
+  "#06b6d4",
+  "#84cc16",
+  "#f43f5e",
+  "#eab308",
+  "#8b5cf6",
+  "#14b8a6",
+  "#ef4444"
+] as const;
+
+function createApiUrl(baseUrl: string, path: string): string {
+  return new URL(path, baseUrl).toString();
+}
+
+async function fetchEditorJson<T>(
+  apiBaseUrl: string,
+  path: string,
+  init?: RequestInit
+): Promise<T> {
+  const response = await fetch(createApiUrl(apiBaseUrl, path), {
+    credentials: "include",
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...(init?.headers ?? {})
+    }
+  });
+
+  if (!response.ok) {
+    const failure = (await response.json().catch(() => ({}))) as {
+      error?: string;
+    };
+    throw new Error(
+      failure.error ?? `Request failed with HTTP ${response.status}`
+    );
+  }
+
+  return (await response.json()) as T;
+}
+
+function createPresenceParticipant(
+  user: AuthenticatedUser
+): PresenceParticipant {
+  let hash = 0;
+
+  for (const character of user.id) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+
+  return {
+    avatarUrl: user.avatarUrl,
+    color: PRESENCE_COLORS[hash % PRESENCE_COLORS.length] ?? PRESENCE_COLORS[0],
+    displayName: user.displayName,
+    userId: user.id
+  };
+}
+
+function useCanvasResizeVersion(
+  canvasRef: React.RefObject<HTMLCanvasElement | null>
+) {
   const [version, setVersion] = useState(0);
 
   useEffect(() => {
@@ -157,7 +239,11 @@ function getInteractionPreview(
       return applyEditorCommand(snapshot, {
         pageId: snapshot.pageId,
         type: "move-node",
-        updates: deriveMoveUpdates(interaction.originalDocument, selectedIds, delta)
+        updates: deriveMoveUpdates(
+          interaction.originalDocument,
+          selectedIds,
+          delta
+        )
       });
     }
     case "resize":
@@ -177,7 +263,10 @@ function getInteractionPreview(
   }
 }
 
-function resolvePrimarySelectionId(selectedIds: string[], preferredId: string | null): string | null {
+function resolvePrimarySelectionId(
+  selectedIds: string[],
+  preferredId: string | null
+): string | null {
   if (preferredId && selectedIds.includes(preferredId)) {
     return preferredId;
   }
@@ -185,7 +274,10 @@ function resolvePrimarySelectionId(selectedIds: string[], preferredId: string | 
   return selectedIds.at(-1) ?? null;
 }
 
-function getLayerOrder(document: PageDocumentDto, parentId: string | null): string[] {
+function getLayerOrder(
+  document: PageDocumentDto,
+  parentId: string | null
+): string[] {
   if (!parentId) {
     return document.rootNodeIds;
   }
@@ -194,7 +286,11 @@ function getLayerOrder(document: PageDocumentDto, parentId: string | null): stri
   return parent && isContainerNode(parent) ? parent.childIds : [];
 }
 
-function flattenLayerTree(document: PageDocumentDto, parentId: string | null, depth = 0): Array<{ depth: number; node: SceneGraphNode }> {
+function flattenLayerTree(
+  document: PageDocumentDto,
+  parentId: string | null,
+  depth = 0
+): Array<{ depth: number; node: SceneGraphNode }> {
   const items: Array<{ depth: number; node: SceneGraphNode }> = [];
 
   for (const nodeId of getLayerOrder(document, parentId)) {
@@ -216,6 +312,7 @@ function flattenLayerTree(document: PageDocumentDto, parentId: string | null, de
 
 export function PageEditorScreen(props: {
   collab: RuntimeUrls;
+  currentUser: AuthenticatedUser;
   file: FileDto;
   onCreatePage: (name: string) => Promise<void>;
   onNavigate: (route: AppPageRoute & { kind: "page" }) => void;
@@ -230,28 +327,57 @@ export function PageEditorScreen(props: {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasShellRef = useRef<HTMLDivElement | null>(null);
   const sessionRef = useRef<EditorSession | null>(null);
-  const [sessionSnapshot, setSessionSnapshot] = useState<EditorSessionSnapshot>({
-    canRedo: false,
-    canUndo: false,
-    document: createEmptyDocument(props.page.id)
-  });
+  const [sessionSnapshot, setSessionSnapshot] = useState<EditorSessionSnapshot>(
+    {
+      canRedo: false,
+      canUndo: false,
+      document: createEmptyDocument(props.page.id),
+      localClientId: 0,
+      presenceEntries: []
+    }
+  );
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [primarySelectionId, setPrimarySelectionId] = useState<string | null>(null);
+  const [primarySelectionId, setPrimarySelectionId] = useState<string | null>(
+    null
+  );
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const [viewport, setViewport] = useState<ViewportState>(createInitialViewport);
+  const [viewport, setViewport] = useState<ViewportState>(
+    createInitialViewport
+  );
   const [collabStatus, setCollabStatus] = useState<
     "connecting" | "connected" | "disconnected" | "error"
   >("connecting");
   const [activeScopeId, setActiveScopeId] = useState<string | null>(null);
-  const [activeTextEdit, setActiveTextEdit] = useState<ActiveTextEdit | null>(null);
-  const [activeInteraction, setActiveInteraction] = useState<ActiveInteraction | null>(null);
+  const [activeTextEdit, setActiveTextEdit] = useState<ActiveTextEdit | null>(
+    null
+  );
+  const [activeInteraction, setActiveInteraction] =
+    useState<ActiveInteraction | null>(null);
+  const [commentLoadState, setCommentLoadState] = useState<CommentLoadState>({
+    comments: [],
+    status: "loading"
+  });
+  const [commentDraft, setCommentDraft] = useState("");
+  const [commentTargetType, setCommentTargetType] = useState<
+    "file" | "node" | "page"
+  >("page");
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const [resolvingCommentId, setResolvingCommentId] = useState<string | null>(
+    null
+  );
   const resizeVersion = useCanvasResizeVersion(canvasRef);
+  const presenceParticipant = useMemo(
+    () => createPresenceParticipant(props.currentUser),
+    [props.currentUser]
+  );
 
   useEffect(() => {
     setSessionSnapshot({
       canRedo: false,
       canUndo: false,
-      document: createEmptyDocument(props.page.id)
+      document: createEmptyDocument(props.page.id),
+      localClientId: 0,
+      presenceEntries: []
     });
     setSelectedIds([]);
     setPrimarySelectionId(null);
@@ -264,6 +390,9 @@ export function PageEditorScreen(props: {
     const session = createEditorSession(
       {
         pageId: props.page.id,
+        presence: {
+          participant: presenceParticipant
+        },
         transport: {
           collabWsPath: props.collab.collabWsPath,
           collabWsUrl: props.collab.collabWsUrl,
@@ -292,6 +421,7 @@ export function PageEditorScreen(props: {
     props.collab.collabWsPath,
     props.collab.collabWsUrl,
     props.page.id,
+    presenceParticipant,
     props.route.fileId,
     props.route.pageId,
     props.route.workspaceId
@@ -317,7 +447,10 @@ export function PageEditorScreen(props: {
     [activeScopeId, paintRecords, scene]
   );
   const marqueeSelection = useMemo(() => {
-    if (activeInteraction?.type !== "marquee" || !activeInteraction.currentPagePoint) {
+    if (
+      activeInteraction?.type !== "marquee" ||
+      !activeInteraction.currentPagePoint
+    ) {
       return null;
     }
 
@@ -329,13 +462,10 @@ export function PageEditorScreen(props: {
   }, [activeInteraction, scopedRecords]);
   const effectiveSelectedIds =
     activeInteraction?.type === "marquee" && marqueeSelection
-    ? Array.from(
-        new Set([
-          ...activeInteraction.startSelectedIds,
-          ...marqueeSelection
-        ])
-      )
-    : selectedIds;
+      ? Array.from(
+          new Set([...activeInteraction.startSelectedIds, ...marqueeSelection])
+        )
+      : selectedIds;
   const effectivePrimarySelectionId = resolvePrimarySelectionId(
     effectiveSelectedIds,
     primarySelectionId
@@ -363,6 +493,59 @@ export function PageEditorScreen(props: {
     const node = sessionSnapshot.document.nodes[activeTextEdit.nodeId];
     return node?.type === "text" ? node : null;
   }, [activeTextEdit, sessionSnapshot.document.nodes]);
+  const availableCommentTargetTypes = useMemo(
+    () =>
+      effectivePrimarySelectionId &&
+      Boolean(sessionSnapshot.document.nodes[effectivePrimarySelectionId])
+        ? (["node", "page", "file"] as const)
+        : (["page", "file"] as const),
+    [effectivePrimarySelectionId, sessionSnapshot.document.nodes]
+  );
+  const visiblePresenceEntries = useMemo(
+    () =>
+      sessionSnapshot.presenceEntries.filter(
+        (entry) => entry.clientId !== sessionSnapshot.localClientId
+      ),
+    [sessionSnapshot.localClientId, sessionSnapshot.presenceEntries]
+  );
+  const remoteCursorEntries = useMemo(
+    () =>
+      visiblePresenceEntries.filter((entry) => entry.payload.cursor !== null),
+    [visiblePresenceEntries]
+  );
+  const remoteSelectionEntries = useMemo(
+    () =>
+      visiblePresenceEntries
+        .map((entry) => ({
+          color: entry.payload.participant.color,
+          displayName: entry.payload.participant.displayName,
+          nodeRecords: (entry.payload.selection?.nodeIds ?? [])
+            .map((nodeId) => getNodePaintRecord(scopedRecords, nodeId))
+            .filter(
+              (record): record is NonNullable<typeof record> => record !== null
+            )
+        }))
+        .filter((entry) => entry.nodeRecords.length > 0),
+    [scopedRecords, visiblePresenceEntries]
+  );
+  const sortedComments = useMemo(
+    () =>
+      [...commentLoadState.comments].sort((left, right) => {
+        if (left.resolvedAt && !right.resolvedAt) {
+          return 1;
+        }
+
+        if (!left.resolvedAt && right.resolvedAt) {
+          return -1;
+        }
+
+        return (
+          new Date(left.createdAt).getTime() -
+          new Date(right.createdAt).getTime()
+        );
+      }),
+    [commentLoadState.comments]
+  );
 
   useEffect(() => {
     if (!primarySelectionId || previewDocument.nodes[primarySelectionId]) {
@@ -378,6 +561,72 @@ export function PageEditorScreen(props: {
       setActiveScopeId(null);
     }
   }, [activeScopeId, previewDocument.nodes]);
+
+  useEffect(() => {
+    sessionRef.current?.setPresenceSelection(effectiveSelectedIds);
+  }, [effectiveSelectedIds]);
+
+  useEffect(() => {
+    if (
+      !availableCommentTargetTypes.some(
+        (targetType) => targetType === commentTargetType
+      )
+    ) {
+      setCommentTargetType(availableCommentTargetTypes[0]);
+    }
+  }, [availableCommentTargetTypes, commentTargetType]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadComments() {
+      setCommentLoadState((current) => ({
+        comments: current.comments,
+        status: "loading"
+      }));
+
+      try {
+        const payload = await fetchEditorJson<CommentListResponse>(
+          props.collab.apiBaseUrl,
+          `/v1/workspaces/${encodeURIComponent(props.route.workspaceId)}/projects/${encodeURIComponent(props.route.projectId)}/files/${encodeURIComponent(props.route.fileId)}/comments?pageId=${encodeURIComponent(props.page.id)}&includeResolved=true`,
+          {
+            method: "GET"
+          }
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        setCommentLoadState({
+          comments: payload.comments,
+          status: "loaded"
+        });
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        setCommentLoadState((current) => ({
+          comments: current.comments,
+          message: error instanceof Error ? error.message : String(error),
+          status: "error"
+        }));
+      }
+    }
+
+    void loadComments();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    props.collab.apiBaseUrl,
+    props.page.id,
+    props.route.fileId,
+    props.route.projectId,
+    props.route.workspaceId
+  ]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -398,7 +647,8 @@ export function PageEditorScreen(props: {
       {
         hoveredId,
         marquee:
-          activeInteraction?.type === "marquee" && activeInteraction.currentPagePoint
+          activeInteraction?.type === "marquee" &&
+          activeInteraction.currentPagePoint
             ? {
                 end: activeInteraction.currentPagePoint,
                 start: activeInteraction.startPagePoint
@@ -481,7 +731,8 @@ export function PageEditorScreen(props: {
 
         if (activeScopeId) {
           event.preventDefault();
-          const nextScopeId = sessionSnapshot.document.nodes[activeScopeId]?.parentId ?? null;
+          const nextScopeId =
+            sessionSnapshot.document.nodes[activeScopeId]?.parentId ?? null;
           setActiveScopeId(nextScopeId);
           setSelectedIds(nextScopeId ? [nextScopeId] : []);
           setPrimarySelectionId(nextScopeId);
@@ -491,7 +742,8 @@ export function PageEditorScreen(props: {
       }
 
       if (event.key === "Enter" && effectivePrimarySelectionId) {
-        const node = sessionSnapshot.document.nodes[effectivePrimarySelectionId];
+        const node =
+          sessionSnapshot.document.nodes[effectivePrimarySelectionId];
 
         if (node?.type === "text") {
           event.preventDefault();
@@ -515,9 +767,14 @@ export function PageEditorScreen(props: {
     sessionSnapshot.document
   ]);
 
-  function updateSelection(nextSelectedIds: string[], nextPrimaryId: string | null) {
+  function updateSelection(
+    nextSelectedIds: string[],
+    nextPrimaryId: string | null
+  ) {
     setSelectedIds(nextSelectedIds);
-    setPrimarySelectionId(resolvePrimarySelectionId(nextSelectedIds, nextPrimaryId));
+    setPrimarySelectionId(
+      resolvePrimarySelectionId(nextSelectedIds, nextPrimaryId)
+    );
   }
 
   function readCanvasPoint(event: { clientX: number; clientY: number }) {
@@ -534,7 +791,10 @@ export function PageEditorScreen(props: {
     };
   }
 
-  function readPagePoint(event: { clientX: number; clientY: number }): Point | null {
+  function readPagePoint(event: {
+    clientX: number;
+    clientY: number;
+  }): Point | null {
     const screenPoint = readCanvasPoint(event);
 
     if (!screenPoint) {
@@ -565,9 +825,108 @@ export function PageEditorScreen(props: {
     setActiveTextEdit(null);
   }
 
+  async function refreshComments() {
+    const payload = await fetchEditorJson<CommentListResponse>(
+      props.collab.apiBaseUrl,
+      `/v1/workspaces/${encodeURIComponent(props.route.workspaceId)}/projects/${encodeURIComponent(props.route.projectId)}/files/${encodeURIComponent(props.route.fileId)}/comments?pageId=${encodeURIComponent(props.page.id)}&includeResolved=true`,
+      {
+        method: "GET"
+      }
+    );
+
+    setCommentLoadState({
+      comments: payload.comments,
+      status: "loaded"
+    });
+  }
+
+  async function handleSubmitComment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const trimmedBody = commentDraft.trim();
+
+    if (!trimmedBody) {
+      return;
+    }
+
+    const target: CreateCommentInput["target"] =
+      commentTargetType === "file"
+        ? {
+            fileId: props.file.id,
+            type: "file"
+          }
+        : commentTargetType === "node" && effectivePrimarySelectionId
+          ? {
+              fileId: props.file.id,
+              nodeId: effectivePrimarySelectionId,
+              pageId: props.page.id,
+              type: "node"
+            }
+          : {
+              fileId: props.file.id,
+              pageId: props.page.id,
+              type: "page"
+            };
+
+    setIsSubmittingComment(true);
+
+    try {
+      await fetchEditorJson<CommentDto>(
+        props.collab.apiBaseUrl,
+        `/v1/workspaces/${encodeURIComponent(props.route.workspaceId)}/projects/${encodeURIComponent(props.route.projectId)}/files/${encodeURIComponent(props.route.fileId)}/comments`,
+        {
+          body: JSON.stringify({
+            body: trimmedBody,
+            target
+          } satisfies CreateCommentInput),
+          method: "POST"
+        }
+      );
+      setCommentDraft("");
+      await refreshComments();
+    } catch (error) {
+      setCommentLoadState((current) => ({
+        comments: current.comments,
+        message: error instanceof Error ? error.message : String(error),
+        status: "error"
+      }));
+    } finally {
+      setIsSubmittingComment(false);
+    }
+  }
+
+  async function handleResolveComment(commentId: string) {
+    setResolvingCommentId(commentId);
+
+    try {
+      await fetchEditorJson<CommentDto>(
+        props.collab.apiBaseUrl,
+        `/v1/workspaces/${encodeURIComponent(props.route.workspaceId)}/projects/${encodeURIComponent(props.route.projectId)}/files/${encodeURIComponent(props.route.fileId)}/comments/${encodeURIComponent(commentId)}/resolve`,
+        {
+          method: "POST"
+        }
+      );
+      await refreshComments();
+    } catch (error) {
+      setCommentLoadState((current) => ({
+        comments: current.comments,
+        message: error instanceof Error ? error.message : String(error),
+        status: "error"
+      }));
+    } finally {
+      setResolvingCommentId(null);
+    }
+  }
+
   function handlePointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const session = sessionRef.current;
     const screenPoint = readCanvasPoint(event);
     const pagePoint = readPagePoint(event);
+
+    if (pagePoint) {
+      session?.setPresenceCursor(pagePoint);
+      session?.setPresenceSelection(effectiveSelectedIds);
+    }
 
     if (activeInteraction?.type === "pan") {
       if (!screenPoint) {
@@ -619,7 +978,13 @@ export function PageEditorScreen(props: {
 
     event.currentTarget.setPointerCapture(event.pointerId);
 
-    if (event.button === 1 || event.button === 2 || event.altKey || event.metaKey || event.ctrlKey) {
+    if (
+      event.button === 1 ||
+      event.button === 2 ||
+      event.altKey ||
+      event.metaKey ||
+      event.ctrlKey
+    ) {
       setActiveInteraction({
         startScreenPoint: screenPoint,
         startViewport: viewport,
@@ -628,9 +993,11 @@ export function PageEditorScreen(props: {
       return;
     }
 
-    const primaryScopedRecord = primaryRecord && scopedRecords.some((record) => record.node.id === primaryRecord.node.id)
-      ? primaryRecord
-      : null;
+    const primaryScopedRecord =
+      primaryRecord &&
+      scopedRecords.some((record) => record.node.id === primaryRecord.node.id)
+        ? primaryRecord
+        : null;
     const handleHit = pagePoint
       ? hitTestResizeHandle(primaryScopedRecord, pagePoint, viewport.zoom)
       : null;
@@ -673,7 +1040,9 @@ export function PageEditorScreen(props: {
       return;
     }
 
-    const nextSelectedIds = selectedIds.includes(hit.node.id) ? selectedIds : [hit.node.id];
+    const nextSelectedIds = selectedIds.includes(hit.node.id)
+      ? selectedIds
+      : [hit.node.id];
     updateSelection(nextSelectedIds, hit.node.id);
     setActiveInteraction({
       currentPagePoint: pagePoint,
@@ -705,7 +1074,11 @@ export function PageEditorScreen(props: {
         session.commit({
           pageId: props.page.id,
           type: "move-node",
-          updates: deriveMoveUpdates(activeInteraction.originalDocument, selectedIds, delta)
+          updates: deriveMoveUpdates(
+            activeInteraction.originalDocument,
+            selectedIds,
+            delta
+          )
         });
       }
     }
@@ -732,8 +1105,12 @@ export function PageEditorScreen(props: {
       );
 
       updateSelection(
-        Array.from(new Set([...activeInteraction.startSelectedIds, ...nextSelectedIds])),
-        nextSelectedIds.at(-1) ?? activeInteraction.startSelectedIds.at(-1) ?? null
+        Array.from(
+          new Set([...activeInteraction.startSelectedIds, ...nextSelectedIds])
+        ),
+        nextSelectedIds.at(-1) ??
+          activeInteraction.startSelectedIds.at(-1) ??
+          null
       );
     }
 
@@ -750,7 +1127,9 @@ export function PageEditorScreen(props: {
 
     if (event.ctrlKey || event.metaKey) {
       const nextZoom = viewport.zoom * (event.deltaY < 0 ? 1.1 : 0.9);
-      setViewport((current) => zoomViewportAtPoint(current, nextZoom, screenPoint));
+      setViewport((current) =>
+        zoomViewportAtPoint(current, nextZoom, screenPoint)
+      );
       return;
     }
 
@@ -761,8 +1140,14 @@ export function PageEditorScreen(props: {
     }));
   }
 
-  function handleCanvasDoubleClick(event: ReactPointerEvent<HTMLCanvasElement>) {
-    const hit = hitTestPaintRecords(scopedRecords, readPagePoint(event) ?? { x: 0, y: 0 }, viewport.zoom);
+  function handleCanvasDoubleClick(
+    event: ReactPointerEvent<HTMLCanvasElement>
+  ) {
+    const hit = hitTestPaintRecords(
+      scopedRecords,
+      readPagePoint(event) ?? { x: 0, y: 0 },
+      viewport.zoom
+    );
 
     if (!hit) {
       return;
@@ -783,7 +1168,9 @@ export function PageEditorScreen(props: {
     }
   }
 
-  function createNode(type: "frame" | "rectangle" | "ellipse" | "line" | "text") {
+  function createNode(
+    type: "frame" | "rectangle" | "ellipse" | "line" | "text"
+  ) {
     const session = sessionRef.current;
     const canvas = canvasRef.current;
 
@@ -797,7 +1184,10 @@ export function PageEditorScreen(props: {
       primarySelectionId
     });
     const parentAbsolutePosition = targetParentId
-      ? getNodeAbsolutePosition(sessionSnapshot.document, targetParentId) ?? { x: 0, y: 0 }
+      ? (getNodeAbsolutePosition(sessionSnapshot.document, targetParentId) ?? {
+          x: 0,
+          y: 0
+        })
       : { x: 0, y: 0 };
     const centerPoint = screenPointToPagePoint(
       {
@@ -869,8 +1259,12 @@ export function PageEditorScreen(props: {
       pageId: props.page.id,
       type: "delete-node"
     });
-    setSelectedIds((current) => current.filter((nodeId) => !nodeIds.includes(nodeId)));
-    setPrimarySelectionId((current) => (current && nodeIds.includes(current) ? null : current));
+    setSelectedIds((current) =>
+      current.filter((nodeId) => !nodeIds.includes(nodeId))
+    );
+    setPrimarySelectionId((current) =>
+      current && nodeIds.includes(current) ? null : current
+    );
   }
 
   function groupSelection() {
@@ -880,7 +1274,11 @@ export function PageEditorScreen(props: {
       return;
     }
 
-    const command = buildGroupCommand(sessionSnapshot.document, props.page.id, selectedIds);
+    const command = buildGroupCommand(
+      sessionSnapshot.document,
+      props.page.id,
+      selectedIds
+    );
 
     if (!command) {
       return;
@@ -934,8 +1332,8 @@ export function PageEditorScreen(props: {
         <p className="eyebrow">Editor</p>
         <h2>{props.file.name}</h2>
         <p className="muted">
-          Command-backed local editing with collab persistence, local undo/redo, and
-          DOM-overlay text editing.
+          Command-backed local editing with collab persistence, local undo/redo,
+          and DOM-overlay text editing.
         </p>
         <div className="action-strip">
           <InlineRenameForm
@@ -981,7 +1379,10 @@ export function PageEditorScreen(props: {
           <p className="eyebrow">Layers</p>
           <div className="layer-list">
             {layerItems.map(({ depth, node }) => {
-              const order = getLayerOrder(sessionSnapshot.document, node.parentId);
+              const order = getLayerOrder(
+                sessionSnapshot.document,
+                node.parentId
+              );
               const index = order.indexOf(node.id);
 
               return (
@@ -999,22 +1400,38 @@ export function PageEditorScreen(props: {
                     <span>{node.type}</span>
                   </button>
                   <div className="layer-actions">
-                    <button className="button button-secondary button-icon" onClick={() => reorderNode(node.id, -1)} type="button">
+                    <button
+                      className="button button-secondary button-icon"
+                      onClick={() => reorderNode(node.id, -1)}
+                      type="button"
+                    >
                       ↑
                     </button>
-                    <button className="button button-secondary button-icon" onClick={() => reorderNode(node.id, 1)} type="button">
+                    <button
+                      className="button button-secondary button-icon"
+                      onClick={() => reorderNode(node.id, 1)}
+                      type="button"
+                    >
                       ↓
                     </button>
                     <button
                       className="button button-secondary button-icon"
-                      onClick={() => toggleNodeFlag(node.id, { locked: !node.locked } as Partial<SceneGraphNode>)}
+                      onClick={() =>
+                        toggleNodeFlag(node.id, {
+                          locked: !node.locked
+                        } as Partial<SceneGraphNode>)
+                      }
                       type="button"
                     >
                       {node.locked ? "Unlock" : "Lock"}
                     </button>
                     <button
                       className="button button-secondary button-icon"
-                      onClick={() => toggleNodeFlag(node.id, { visible: !node.visible } as Partial<SceneGraphNode>)}
+                      onClick={() =>
+                        toggleNodeFlag(node.id, {
+                          visible: !node.visible
+                        } as Partial<SceneGraphNode>)
+                      }
                       type="button"
                     >
                       {node.visible ? "Hide" : "Show"}
@@ -1033,6 +1450,109 @@ export function PageEditorScreen(props: {
             })}
           </div>
         </div>
+        <div className="editor-sidebar-section">
+          <p className="eyebrow">Comments</p>
+          <form className="comment-form" onSubmit={handleSubmitComment}>
+            <label className="comment-field">
+              <span>Anchor</span>
+              <select
+                className="input"
+                onChange={(event) =>
+                  setCommentTargetType(
+                    event.target.value as "file" | "node" | "page"
+                  )
+                }
+                value={commentTargetType}
+              >
+                {availableCommentTargetTypes.map((targetType) => (
+                  <option key={targetType} value={targetType}>
+                    {targetType === "node"
+                      ? "Selected node"
+                      : targetType === "page"
+                        ? "Current page"
+                        : "Whole file"}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="comment-field">
+              <span>Comment</span>
+              <textarea
+                className="input comment-textarea"
+                onChange={(event) => setCommentDraft(event.target.value)}
+                placeholder="Leave lightweight review context"
+                rows={4}
+                value={commentDraft}
+              />
+            </label>
+            <button
+              className="button button-secondary"
+              disabled={isSubmittingComment || commentDraft.trim().length === 0}
+              type="submit"
+            >
+              {isSubmittingComment ? "Saving..." : "Add comment"}
+            </button>
+          </form>
+          {commentLoadState.status === "error" ? (
+            <p className="muted">{commentLoadState.message}</p>
+          ) : null}
+          <div className="comment-list">
+            {sortedComments.map((comment) => {
+              const nodeMissing =
+                comment.nodeId !== null &&
+                !sessionSnapshot.document.nodes[comment.nodeId];
+              const targetLabel =
+                comment.nodeId !== null
+                  ? nodeMissing
+                    ? "Node (missing)"
+                    : "Node"
+                  : comment.pageId !== null
+                    ? "Page"
+                    : "File";
+
+              return (
+                <article
+                  className={`comment-card ${comment.resolvedAt ? "comment-card-resolved" : ""}`}
+                  key={comment.id}
+                >
+                  <div className="comment-card-header">
+                    <div>
+                      <strong>{comment.author.displayName}</strong>
+                      <p className="muted">
+                        {new Date(comment.createdAt).toLocaleString()}
+                      </p>
+                    </div>
+                    <span className="presence-chip comment-target-chip">
+                      {targetLabel}
+                    </span>
+                  </div>
+                  <p>{comment.body}</p>
+                  <div className="comment-card-footer">
+                    <span>
+                      {comment.resolvedAt
+                        ? `Resolved ${new Date(comment.resolvedAt).toLocaleString()}`
+                        : "Open"}
+                    </span>
+                    {!comment.resolvedAt ? (
+                      <button
+                        className="button button-secondary button-icon"
+                        disabled={resolvingCommentId === comment.id}
+                        onClick={() => void handleResolveComment(comment.id)}
+                        type="button"
+                      >
+                        {resolvingCommentId === comment.id ? "..." : "Resolve"}
+                      </button>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            })}
+            {sortedComments.length === 0 &&
+            commentLoadState.status !== "loading" ? (
+              <p className="muted">No comments on this file/page yet.</p>
+            ) : null}
+          </div>
+        </div>
       </aside>
 
       <section className="panel editor-panel">
@@ -1042,19 +1562,39 @@ export function PageEditorScreen(props: {
             <h2>{props.page.name}</h2>
           </div>
           <div className="toolbar-strip">
-            <button className="button button-secondary" onClick={() => createNode("frame")} type="button">
+            <button
+              className="button button-secondary"
+              onClick={() => createNode("frame")}
+              type="button"
+            >
               Frame
             </button>
-            <button className="button button-secondary" onClick={() => createNode("rectangle")} type="button">
+            <button
+              className="button button-secondary"
+              onClick={() => createNode("rectangle")}
+              type="button"
+            >
               Rectangle
             </button>
-            <button className="button button-secondary" onClick={() => createNode("ellipse")} type="button">
+            <button
+              className="button button-secondary"
+              onClick={() => createNode("ellipse")}
+              type="button"
+            >
               Ellipse
             </button>
-            <button className="button button-secondary" onClick={() => createNode("line")} type="button">
+            <button
+              className="button button-secondary"
+              onClick={() => createNode("line")}
+              type="button"
+            >
               Line
             </button>
-            <button className="button button-secondary" onClick={() => createNode("text")} type="button">
+            <button
+              className="button button-secondary"
+              onClick={() => createNode("text")}
+              type="button"
+            >
               Text
             </button>
             <button
@@ -1067,7 +1607,10 @@ export function PageEditorScreen(props: {
             </button>
             <button
               className="button button-secondary"
-              disabled={sessionSnapshot.document.nodes[primarySelectionId ?? ""]?.type !== "group"}
+              disabled={
+                sessionSnapshot.document.nodes[primarySelectionId ?? ""]
+                  ?.type !== "group"
+              }
               onClick={ungroupSelection}
               type="button"
             >
@@ -1091,17 +1634,31 @@ export function PageEditorScreen(props: {
             </button>
             <button
               className="button button-secondary"
-              onClick={() => setViewport((current) => ({ ...current, zoom: clampZoom(current.zoom * 0.9) }))}
+              onClick={() =>
+                setViewport((current) => ({
+                  ...current,
+                  zoom: clampZoom(current.zoom * 0.9)
+                }))
+              }
               type="button"
             >
               Zoom out
             </button>
-            <button className="button button-secondary" onClick={() => setViewport(createInitialViewport())} type="button">
+            <button
+              className="button button-secondary"
+              onClick={() => setViewport(createInitialViewport())}
+              type="button"
+            >
               Reset view
             </button>
             <button
               className="button button-secondary"
-              onClick={() => setViewport((current) => ({ ...current, zoom: clampZoom(current.zoom * 1.1) }))}
+              onClick={() =>
+                setViewport((current) => ({
+                  ...current,
+                  zoom: clampZoom(current.zoom * 1.1)
+                }))
+              }
               type="button"
             >
               Zoom in
@@ -1112,12 +1669,30 @@ export function PageEditorScreen(props: {
         <div className="editor-meta">
           <span>Collab: {collabStatus}</span>
           <span>
-            Viewport: {viewport.zoom.toFixed(2)}x · pan {Math.round(viewport.panX)}/
-            {Math.round(viewport.panY)}
+            Viewport: {viewport.zoom.toFixed(2)}x · pan{" "}
+            {Math.round(viewport.panX)}/{Math.round(viewport.panY)}
           </span>
           <span>Nodes: {paintRecords.length}</span>
           <span>Selection: {effectivePrimarySelectionId ?? "None"}</span>
           <span>Scope: {activeScopeId ?? "Root"}</span>
+          <div className="presence-strip">
+            <span className="presence-chip presence-chip-self">
+              You · {props.currentUser.displayName}
+            </span>
+            {visiblePresenceEntries.map((entry) => (
+              <span
+                className="presence-chip"
+                key={entry.clientId}
+                style={{ borderColor: `${entry.payload.participant.color}80` }}
+              >
+                <span
+                  className="presence-dot"
+                  style={{ backgroundColor: entry.payload.participant.color }}
+                />
+                {entry.payload.participant.displayName}
+              </span>
+            ))}
+          </div>
         </div>
 
         <div className="editor-canvas-shell" ref={canvasShellRef}>
@@ -1128,12 +1703,74 @@ export function PageEditorScreen(props: {
             onPointerDown={handlePointerDown}
             onPointerLeave={() => {
               setHoveredId(null);
+              sessionRef.current?.clearPresence();
             }}
             onPointerMove={handlePointerMove}
             onPointerUp={stopInteraction}
             onWheel={handleWheel}
             ref={canvasRef}
           />
+          {remoteSelectionEntries.map((entry) =>
+            entry.nodeRecords.map((record) => {
+              const topLeft = pagePointToScreenPoint(
+                { x: record.bounds.x, y: record.bounds.y },
+                viewport
+              );
+
+              return (
+                <div
+                  className="remote-selection-overlay"
+                  key={`${entry.displayName}-${record.node.id}`}
+                  style={{
+                    borderColor: entry.color,
+                    color: entry.color,
+                    height: `${record.bounds.height * viewport.zoom}px`,
+                    left: `${topLeft.x}px`,
+                    top: `${topLeft.y}px`,
+                    width: `${record.bounds.width * viewport.zoom}px`
+                  }}
+                >
+                  <span
+                    className="remote-selection-label"
+                    style={{ backgroundColor: entry.color }}
+                  >
+                    {entry.displayName}
+                  </span>
+                </div>
+              );
+            })
+          )}
+          {remoteCursorEntries.map((entry) => {
+            const cursor = entry.payload.cursor;
+
+            if (!cursor) {
+              return null;
+            }
+
+            const screenPoint = pagePointToScreenPoint(cursor, viewport);
+
+            return (
+              <div
+                className="remote-cursor"
+                key={`cursor-${entry.clientId}`}
+                style={{
+                  left: `${screenPoint.x}px`,
+                  top: `${screenPoint.y}px`
+                }}
+              >
+                <span
+                  className="remote-cursor-dot"
+                  style={{ backgroundColor: entry.payload.participant.color }}
+                />
+                <span
+                  className="remote-cursor-label"
+                  style={{ backgroundColor: entry.payload.participant.color }}
+                >
+                  {entry.payload.participant.displayName}
+                </span>
+              </div>
+            );
+          })}
           {activeTextEdit && textEditStyle && activeTextNode ? (
             <textarea
               autoFocus
@@ -1196,13 +1833,20 @@ function InlineRenameForm(props: {
   }
 
   return (
-    <form className="inline-form compact-inline-form" onSubmit={(event) => void handleSubmit(event)}>
+    <form
+      className="inline-form compact-inline-form"
+      onSubmit={(event) => void handleSubmit(event)}
+    >
       <input
         onChange={(event) => setValue(event.target.value)}
         placeholder={props.label}
         value={value}
       />
-      <button className="button button-secondary" disabled={isSubmitting} type="submit">
+      <button
+        className="button button-secondary"
+        disabled={isSubmitting}
+        type="submit"
+      >
         Save
       </button>
     </form>
@@ -1232,13 +1876,20 @@ function CreatePageForm(props: { onCreate: (name: string) => Promise<void> }) {
   }
 
   return (
-    <form className="inline-form compact-inline-form" onSubmit={(event) => void handleSubmit(event)}>
+    <form
+      className="inline-form compact-inline-form"
+      onSubmit={(event) => void handleSubmit(event)}
+    >
       <input
         onChange={(event) => setValue(event.target.value)}
         placeholder="New page name"
         value={value}
       />
-      <button className="button button-primary" disabled={isSubmitting} type="submit">
+      <button
+        className="button button-primary"
+        disabled={isSubmitting}
+        type="submit"
+      >
         Add page
       </button>
     </form>

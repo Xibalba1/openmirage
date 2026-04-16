@@ -152,7 +152,9 @@ function parseRoute(pathname: string): AppRoute {
     };
   }
 
-  const projectMatch = pathname.match(/^\/app\/workspaces\/([^/]+)\/projects\/([^/]+)$/);
+  const projectMatch = pathname.match(
+    /^\/app\/workspaces\/([^/]+)\/projects\/([^/]+)$/
+  );
 
   if (projectMatch) {
     return {
@@ -264,10 +266,14 @@ async function fetchJson<T>(
 
   if (!response.ok) {
     const failure =
-      response.status === 204 ? {} : ((await response.json().catch(() => ({}))) as {
-          error?: string;
-        });
-    throw new Error(failure.error ?? `Request failed with HTTP ${response.status}`);
+      response.status === 204
+        ? {}
+        : ((await response.json().catch(() => ({}))) as {
+            error?: string;
+          });
+    throw new Error(
+      failure.error ?? `Request failed with HTTP ${response.status}`
+    );
   }
 
   return (await response.json()) as T;
@@ -279,9 +285,13 @@ async function fetchRouteResource(
 ): Promise<ResourceData> {
   switch (route.kind) {
     case "app-home": {
-      const payload = await fetchJson<WorkspacesResponse>(apiBaseUrl, "/v1/workspaces", {
-        method: "GET"
-      });
+      const payload = await fetchJson<WorkspacesResponse>(
+        apiBaseUrl,
+        "/v1/workspaces",
+        {
+          method: "GET"
+        }
+      );
 
       return {
         kind: "workspaces",
@@ -335,7 +345,9 @@ async function fetchRouteResource(
         pages: payload.pages,
         project: payload.project,
         selectedPageId:
-          route.kind === "page" ? route.pageId : payload.defaultPageId ?? null,
+          route.kind === "page"
+            ? route.pageId
+            : (payload.defaultPageId ?? null),
         workspace: payload.workspace
       };
     }
@@ -346,9 +358,8 @@ async function fetchRouteResource(
 
 export function App() {
   const runtime = readRuntimeWebEnv();
-  const [location, setLocation] = useState<BrowserLocationState>(
-    readBrowserLocation
-  );
+  const [location, setLocation] =
+    useState<BrowserLocationState>(readBrowserLocation);
   const [sessionState, setSessionState] = useState<SessionState>({
     status: "loading"
   });
@@ -410,7 +421,9 @@ export function App() {
     const nextPath = path.startsWith("/") ? path : "/";
 
     if (
-      window.location.pathname + window.location.search + window.location.hash ===
+      window.location.pathname +
+        window.location.search +
+        window.location.hash ===
       nextPath
     ) {
       return;
@@ -442,7 +455,10 @@ export function App() {
 
     if (sessionState.status === "unauthenticated") {
       if (isProtectedRoute(route)) {
-        navigateTo(`/auth?redirectTo=${encodeURIComponent(getRoutePath(route))}`, "replace");
+        navigateTo(
+          `/auth?redirectTo=${encodeURIComponent(getRoutePath(route))}`,
+          "replace"
+        );
         return;
       }
 
@@ -467,7 +483,10 @@ export function App() {
     setSessionState({ status: "loading" });
 
     try {
-      const auth = await fetchSession(runtime.urls.apiBaseUrl, runtime.urls.authPath);
+      const auth = await fetchSession(
+        runtime.urls.apiBaseUrl,
+        runtime.urls.authPath
+      );
 
       if (!auth) {
         setSessionState({ status: "unauthenticated" });
@@ -484,10 +503,13 @@ export function App() {
   }
 
   async function handleLogout() {
-    await fetch(createApiUrl(runtime.urls.apiBaseUrl, `${runtime.urls.authPath}/logout`), {
-      credentials: "include",
-      method: "POST"
-    });
+    await fetch(
+      createApiUrl(runtime.urls.apiBaseUrl, `${runtime.urls.authPath}/logout`),
+      {
+        credentials: "include",
+        method: "POST"
+      }
+    );
 
     setSessionState({ status: "unauthenticated" });
     navigateTo("/auth", "replace");
@@ -589,7 +611,9 @@ function AuthScreen(props: {
 
       if (!response.ok) {
         const failure = (await response.json()) as { error?: string };
-        throw new Error(failure.error ?? `Request failed with HTTP ${response.status}`);
+        throw new Error(
+          failure.error ?? `Request failed with HTTP ${response.status}`
+        );
       }
 
       const payload = (await response.json()) as MagicLinkRequestResponse;
@@ -622,7 +646,8 @@ function AuthScreen(props: {
               <h2>What you get now</h2>
               <p>
                 Workspace-scoped metadata APIs, multi-page file creation, and
-                stable browser routes for reopening a file and page after reload.
+                stable browser routes for reopening a file and page after
+                reload.
               </p>
             </div>
             <div className="note-card">
@@ -651,7 +676,10 @@ function AuthScreen(props: {
               Your session is not active. Request a new magic link to continue.
             </div>
           ) : null}
-          <form className="auth-form" onSubmit={(event) => void handleSubmit(event)}>
+          <form
+            className="auth-form"
+            onSubmit={(event) => void handleSubmit(event)}
+          >
             <label className="field">
               <span>Email</span>
               <input
@@ -685,7 +713,10 @@ function AuthScreen(props: {
                 : "Send magic link"}
             </button>
           </form>
-          <AuthRequestResult redirectTo={redirectTo} requestState={requestState} />
+          <AuthRequestResult
+            redirectTo={redirectTo}
+            requestState={requestState}
+          />
         </article>
       </section>
     </main>
@@ -724,7 +755,9 @@ function AuthRequestResult(props: {
       <p>
         Delivery mode: <strong>{props.requestState.delivery}</strong>
       </p>
-      <p>Expires at: {new Date(props.requestState.expiresAt).toLocaleString()}</p>
+      <p>
+        Expires at: {new Date(props.requestState.expiresAt).toLocaleString()}
+      </p>
       <p>After sign-in, OpenMirage will send you to {props.redirectTo}.</p>
       {props.requestState.magicLinkUrl ? (
         <a
@@ -956,11 +989,13 @@ function AuthenticatedApp(props: {
   const currentPageId = props.route.kind === "page" ? props.route.pageId : null;
   const editorPage =
     editorData && currentPageId
-      ? editorData.pages.find((page) => page.id === currentPageId) ?? null
+      ? (editorData.pages.find((page) => page.id === currentPageId) ?? null)
       : null;
 
   return (
-    <main className={`screen app-screen ${isEditorRoute ? "app-screen-editor" : ""}`}>
+    <main
+      className={`screen app-screen ${isEditorRoute ? "app-screen-editor" : ""}`}
+    >
       <header className="app-header">
         <div>
           <p className="eyebrow">OpenMirage</p>
@@ -978,7 +1013,11 @@ function AuthenticatedApp(props: {
             <strong>{props.auth.user.displayName}</strong>
             <span>{props.auth.user.email}</span>
           </div>
-          <button className="button button-secondary" onClick={props.onLogout} type="button">
+          <button
+            className="button button-secondary"
+            onClick={props.onLogout}
+            type="button"
+          >
             Log out
           </button>
         </div>
@@ -987,6 +1026,7 @@ function AuthenticatedApp(props: {
       {editorData && editorPage && props.route.kind === "page" ? (
         <PageEditorScreen
           collab={props.runtimeUrls}
+          currentUser={props.auth.user}
           file={editorData.file}
           onCreatePage={handleCreatePage}
           onNavigate={props.onNavigate}
@@ -1018,7 +1058,9 @@ function AuthenticatedApp(props: {
               </div>
               <div>
                 <dt>Session expires</dt>
-                <dd>{new Date(props.auth.session.expiresAt).toLocaleString()}</dd>
+                <dd>
+                  {new Date(props.auth.session.expiresAt).toLocaleString()}
+                </dd>
               </div>
               <div>
                 <dt>Memberships</dt>
@@ -1032,7 +1074,9 @@ function AuthenticatedApp(props: {
               <article className="panel">
                 <p className="eyebrow">Loading</p>
                 <h2>Fetching metadata</h2>
-                <p className="muted">Reading the current workspace navigation state.</p>
+                <p className="muted">
+                  Reading the current workspace navigation state.
+                </p>
               </article>
             ) : null}
             {resourceState.status === "error" ? (
@@ -1085,7 +1129,8 @@ function NavigationContent(props: {
           <p className="eyebrow">Workspace selection</p>
           <h2>Available workspaces</h2>
           <p className="muted">
-            Pick a workspace to list its projects and continue the metadata flow.
+            Pick a workspace to list its projects and continue the metadata
+            flow.
           </p>
           <ul className="resource-list">
             {props.data.workspaces.map((workspace) => (
@@ -1093,7 +1138,10 @@ function NavigationContent(props: {
                 <button
                   className="resource-button"
                   onClick={() =>
-                    props.onNavigate({ kind: "workspace", workspaceId: workspace.id })
+                    props.onNavigate({
+                      kind: "workspace",
+                      workspaceId: workspace.id
+                    })
                   }
                   type="button"
                 >
@@ -1107,9 +1155,8 @@ function NavigationContent(props: {
           </ul>
         </article>
       );
-    case "projects":
-      {
-        const data = props.data;
+    case "projects": {
+      const data = props.data;
 
       return (
         <>
@@ -1152,11 +1199,15 @@ function NavigationContent(props: {
                       type="button"
                     >
                       <strong>{project.name}</strong>
-                      <span>Updated {new Date(project.updatedAt).toLocaleString()}</span>
+                      <span>
+                        Updated {new Date(project.updatedAt).toLocaleString()}
+                      </span>
                     </button>
                     <InlineRenameForm
                       label="Rename project"
-                      onSubmit={(name) => props.onRenameProject(project.id, name)}
+                      onSubmit={(name) =>
+                        props.onRenameProject(project.id, name)
+                      }
                     />
                   </div>
                 </li>
@@ -1165,10 +1216,9 @@ function NavigationContent(props: {
           </article>
         </>
       );
-      }
-    case "files":
-      {
-        const data = props.data;
+    }
+    case "files": {
+      const data = props.data;
 
       return (
         <>
@@ -1222,7 +1272,9 @@ function NavigationContent(props: {
                       type="button"
                     >
                       <strong>{file.name}</strong>
-                      <span>Updated {new Date(file.updatedAt).toLocaleString()}</span>
+                      <span>
+                        Updated {new Date(file.updatedAt).toLocaleString()}
+                      </span>
                     </button>
                     <InlineRenameForm
                       label="Rename file"
@@ -1235,10 +1287,9 @@ function NavigationContent(props: {
           </article>
         </>
       );
-      }
-    case "file-open":
-      {
-        const data = props.data;
+    }
+    case "file-open": {
+      const data = props.data;
 
       return (
         <>
@@ -1309,7 +1360,9 @@ function NavigationContent(props: {
                   <div className="resource-row">
                     <button
                       className={`resource-button ${
-                        page.id === data.selectedPageId ? "resource-button-active" : ""
+                        page.id === data.selectedPageId
+                          ? "resource-button-active"
+                          : ""
                       }`}
                       onClick={() =>
                         props.onNavigate({
@@ -1336,7 +1389,7 @@ function NavigationContent(props: {
           </article>
         </>
       );
-      }
+    }
   }
 }
 
@@ -1360,7 +1413,9 @@ function Breadcrumbs(props: {
   );
 }
 
-function CreateProjectForm(props: { onCreate: (name: string) => Promise<void> }) {
+function CreateProjectForm(props: {
+  onCreate: (name: string) => Promise<void>;
+}) {
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1392,14 +1447,21 @@ function CreateProjectForm(props: { onCreate: (name: string) => Promise<void> })
   }
 
   return (
-    <form className="inline-form" onSubmit={(event) => void handleSubmit(event)}>
+    <form
+      className="inline-form"
+      onSubmit={(event) => void handleSubmit(event)}
+    >
       <input
         onChange={(event) => setName(event.target.value)}
         placeholder="New project name"
         type="text"
         value={name}
       />
-      <button className="button button-primary" disabled={submitting} type="submit">
+      <button
+        className="button button-primary"
+        disabled={submitting}
+        type="submit"
+      >
         {submitting ? "Creating..." : "Create project"}
       </button>
       {error ? <p className="form-error">{error}</p> : null}
@@ -1417,14 +1479,18 @@ function CreateFileForm(props: {
 
   function updatePageName(index: number, value: string) {
     setPageNames((current) =>
-      current.map((entry, currentIndex) => (currentIndex === index ? value : entry))
+      current.map((entry, currentIndex) =>
+        currentIndex === index ? value : entry
+      )
     );
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedName = name.trim();
-    const trimmedPages = pageNames.map((pageName) => pageName.trim()).filter(Boolean);
+    const trimmedPages = pageNames
+      .map((pageName) => pageName.trim())
+      .filter(Boolean);
 
     if (!trimmedName) {
       setError("File name is required.");
@@ -1477,13 +1543,20 @@ function CreateFileForm(props: {
         <button
           className="button button-secondary"
           onClick={() =>
-            setPageNames((current) => [...current, `Page ${current.length + 1}`])
+            setPageNames((current) => [
+              ...current,
+              `Page ${current.length + 1}`
+            ])
           }
           type="button"
         >
           Add page field
         </button>
-        <button className="button button-primary" disabled={submitting} type="submit">
+        <button
+          className="button button-primary"
+          disabled={submitting}
+          type="submit"
+        >
           {submitting ? "Creating..." : "Create file"}
         </button>
       </div>
@@ -1524,14 +1597,21 @@ function CreatePageForm(props: { onCreate: (name: string) => Promise<void> }) {
   }
 
   return (
-    <form className="inline-form" onSubmit={(event) => void handleSubmit(event)}>
+    <form
+      className="inline-form"
+      onSubmit={(event) => void handleSubmit(event)}
+    >
       <input
         onChange={(event) => setName(event.target.value)}
         placeholder="New page name"
         type="text"
         value={name}
       />
-      <button className="button button-primary" disabled={submitting} type="submit">
+      <button
+        className="button button-primary"
+        disabled={submitting}
+        type="submit"
+      >
         {submitting ? "Creating..." : "Create page"}
       </button>
       {error ? <p className="form-error">{error}</p> : null}
@@ -1588,14 +1668,21 @@ function InlineRenameForm(props: {
   }
 
   return (
-    <form className="rename-form" onSubmit={(event) => void handleSubmit(event)}>
+    <form
+      className="rename-form"
+      onSubmit={(event) => void handleSubmit(event)}
+    >
       <input
         onChange={(event) => setName(event.target.value)}
         placeholder="New name"
         type="text"
         value={name}
       />
-      <button className="button button-primary" disabled={submitting} type="submit">
+      <button
+        className="button button-primary"
+        disabled={submitting}
+        type="submit"
+      >
         Save
       </button>
       <button

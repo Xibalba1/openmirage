@@ -2,6 +2,8 @@ import {
   type EditorCommand,
   type PageDocumentDto,
   type PageDto,
+  type PresenceParticipant,
+  type PresencePayload,
   type SceneGraphNode
 } from "@openmirage/types";
 
@@ -79,6 +81,8 @@ export interface EditorSessionSnapshot {
   canRedo: boolean;
   canUndo: boolean;
   document: PageDocumentDto;
+  localClientId: number;
+  presenceEntries: EditorPresenceEntry[];
 }
 
 export interface EditorSession {
@@ -86,9 +90,21 @@ export interface EditorSession {
   connect(): void;
   destroy(): void;
   getSnapshot(): EditorSessionSnapshot;
+  clearPresence(): void;
+  setPresenceCursor(cursor: Point | null): void;
+  setPresenceSelection(nodeIds: string[]): void;
   redo(): boolean;
   subscribe(listener: (snapshot: EditorSessionSnapshot) => void): () => void;
   undo(): boolean;
+}
+
+export interface EditorPresenceEntry {
+  clientId: number;
+  payload: PresencePayload;
+}
+
+export interface EditorPresenceIdentity {
+  participant: PresenceParticipant;
 }
 
 export interface ActiveTextEdit {
