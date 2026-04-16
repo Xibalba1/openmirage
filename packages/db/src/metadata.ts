@@ -1,13 +1,19 @@
 import {
+  randomUUID,
+} from "node:crypto";
+import {
+  type AssetDto,
   type CollabPageSessionDto,
   type CommentDto,
+  type CreateAssetInput,
+  type CreateCommentInput,
   type CreateFilePageInput,
   type FileDto,
   type FileOpenResponse,
   type ListCommentsInput,
+  type ListAssetsInput,
   type PageDto,
   type ProjectDto,
-  type CreateCommentInput,
   type ResolveCommentInput,
   type WorkspaceDetailDto,
   createCollabDocumentName
@@ -58,6 +64,23 @@ interface PageRow {
   order_index: number;
   updated_at: Date;
   width: number | null;
+}
+
+interface AssetRow {
+  byte_size: string | number;
+  created_at: Date;
+  deleted_at: Date | null;
+  file_id: string | null;
+  filename: string;
+  height: number | null;
+  id: string;
+  kind: AssetDto["kind"];
+  mime_type: string;
+  storage_key: string;
+  updated_at: Date;
+  uploaded_by_user_id: string;
+  width: number | null;
+  workspace_id: string;
 }
 
 interface AuthorizedCollabPageRow {
@@ -135,6 +158,25 @@ function mapPage(row: PageRow): PageDto {
     orderIndex: row.order_index,
     updatedAt: row.updated_at.toISOString(),
     width: row.width
+  };
+}
+
+function mapAsset(row: AssetRow): AssetDto {
+  return {
+    byteSize: Number(row.byte_size),
+    createdAt: row.created_at.toISOString(),
+    deletedAt: row.deleted_at?.toISOString() ?? null,
+    fileId: row.file_id,
+    filename: row.filename,
+    height: row.height,
+    id: row.id,
+    kind: row.kind,
+    mimeType: row.mime_type,
+    storageKey: row.storage_key,
+    updatedAt: row.updated_at.toISOString(),
+    uploadedByUserId: row.uploaded_by_user_id,
+    width: row.width,
+    workspaceId: row.workspace_id
   };
 }
 
@@ -844,6 +886,175 @@ export async function renamePage(
   );
 
   return result.rows[0] ? mapPage(result.rows[0]) : null;
+}
+
+export async function listAssets(
+  userId: string,
+  workspaceId: string,
+  projectId: string,
+  input: ListAssetsInput,
+  poolOrClient?: Pool | PoolClient
+): Promise<AssetDto[] | null> {
+  const file = await getFileRow(
+    userId,
+    workspaceId,
+    projectId,
+    input.fileId,
+    poolOrClient
+  );
+
+  if (!file) {
+    return null;
+  }
+
+  const db = requireClient(poolOrClient);
+  const includeWorkspaceAssets = input.includeWorkspaceAssets !== false;
+  const result = await db.query<AssetRow>(
+    `
+      select
+        byte_size,
+        created_at,
+        deleted_at,
+        file_id,
+        filename,
+        height,
+        id,
+        kind,
+        mime_type,
+        storage_key,
+        updated_at,
+        uploaded_by_user_id,
+        width,
+        workspace_id
+      from assets
+      where workspace_id = $1
+        and deleted_at is null
+        and (file_id = $2 or ($3 and file_id is null))
+      order by created_at desc, id desc
+    `,
+    [workspaceId, input.fileId, includeWorkspaceAssets]
+  );
+
+  return result.rows.map(mapAsset);
+}
+
+export async function createAsset(
+  userId: string,
+  workspaceId: string,
+  projectId: string,
+  fileId: string,
+  input: CreateAssetInput,
+  poolOrClient?: Pool | PoolClient
+): Promise<AssetDto | null> {
+  return withTransaction(poolOrClient, async (client) => {
+    const file = await getFileRow(userId, workspaceId, projectId, fileId, client);
+
+    if (!file) {
+      return null;
+    }
+
+    const scopedFileId = input.scope === "workspace" ? null : fileId;
+    const assetId = input.id ?? randomUUID();
+    const result = await client.query<AssetRow>(
+      `
+        insert into assets (
+          id,
+          workspace_id,
+          file_id,
+          uploaded_by_user_id,
+          kind,
+          filename,
+          mime_type,
+          byte_size,
+          storage_key,
+          width,
+          height
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        returning
+          byte_size,
+          created_at,
+          deleted_at,
+          file_id,
+          filename,
+          height,
+          id,
+          kind,
+          mime_type,
+          storage_key,
+          updated_at,
+          uploaded_by_user_id,
+          width,
+          workspace_id
+      `,
+      [
+        assetId,
+        workspaceId,
+        scopedFileId,
+        userId,
+        input.kind,
+        input.filename,
+        input.mimeType,
+        input.byteSize,
+        input.storageKey,
+        input.width ?? null,
+        input.height ?? null
+      ]
+    );
+
+    return mapAsset(result.rows[0] as AssetRow);
+  });
+}
+
+export async function getAuthorizedAsset(
+  userId: string,
+  workspaceId: string,
+  projectId: string,
+  fileId: string,
+  assetId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<AssetDto | null> {
+  const file = await getFileRow(
+    userId,
+    workspaceId,
+    projectId,
+    fileId,
+    poolOrClient
+  );
+
+  if (!file) {
+    return null;
+  }
+
+  const db = requireClient(poolOrClient);
+  const result = await db.query<AssetRow>(
+    `
+      select
+        byte_size,
+        created_at,
+        deleted_at,
+        file_id,
+        filename,
+        height,
+        id,
+        kind,
+        mime_type,
+        storage_key,
+        updated_at,
+        uploaded_by_user_id,
+        width,
+        workspace_id
+      from assets
+      where workspace_id = $1
+        and id = $2
+        and deleted_at is null
+        and (file_id = $3 or file_id is null)
+      limit 1
+    `,
+    [workspaceId, assetId, fileId]
+  );
+
+  return result.rows[0] ? mapAsset(result.rows[0]) : null;
 }
 
 export async function listComments(

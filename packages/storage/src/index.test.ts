@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { createStorage, readObjectFromLocalStorage } from "./index.js";
 
-test("local storage adapter supports ensureBucket, put, list, resolve, and delete", async () => {
+test("local storage adapter supports ensureBucket, put, list, read, resolve, and delete", async () => {
   const rootDirectory = await mkdtemp(join(tmpdir(), "openmirage-storage-"));
   const storage = createStorage({
     provider: "local",
@@ -29,6 +29,9 @@ test("local storage adapter supports ensureBucket, put, list, resolve, and delet
   assert.equal(listed.length, 1);
   assert.equal(listed[0]?.key, "smoke/hello.txt");
 
+  const readResult = await storage.read("smoke/hello.txt");
+  assert.equal(Buffer.from(readResult.body).toString("utf8"), "hello");
+
   const url = await storage.resolveDownloadUrl("smoke/hello.txt");
   assert.match(url, /^file:\/\//);
 
@@ -49,7 +52,7 @@ test("local storage adapter supports ensureBucket, put, list, resolve, and delet
   await rm(rootDirectory, { recursive: true, force: true });
 });
 
-test("s3-compatible storage uses injected client for bucket bootstrap and health", async () => {
+test("s3-compatible storage uses injected client for bucket bootstrap, read, and health", async () => {
   const seenCommands: string[] = [];
   let bucketExists = false;
 
@@ -79,6 +82,13 @@ test("s3-compatible storage uses injected client for bucket bootstrap and health
             bucketExists = true;
           }
 
+          if (command.constructor.name === "GetObjectCommand") {
+            return {
+              Body: Buffer.from("asset-body"),
+              ContentType: "image/png"
+            } as never;
+          }
+
           return {} as never;
         }
       }
@@ -86,13 +96,17 @@ test("s3-compatible storage uses injected client for bucket bootstrap and health
   );
 
   await storage.ensureBucket();
+  const readResult = await storage.read("smoke/hello.txt");
   const health = await storage.healthCheck();
 
   assert.deepEqual(seenCommands, [
     "HeadBucketCommand",
     "CreateBucketCommand",
+    "GetObjectCommand",
     "HeadBucketCommand"
   ]);
+  assert.equal(Buffer.from(readResult.body).toString("utf8"), "asset-body");
+  assert.equal(readResult.contentType, "image/png");
   assert.equal(health.ok, true);
   assert.equal(health.bucket, "assets");
 });

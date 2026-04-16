@@ -2,6 +2,7 @@ import {
   DeleteObjectCommand,
   type DeleteObjectCommandOutput,
   GetObjectCommand,
+  type GetObjectCommandOutput,
   HeadBucketCommand,
   type HeadBucketCommandOutput,
   ListObjectsV2Command,
@@ -30,6 +31,7 @@ import {
   type StorageHealthStatus,
   type StorageObjectDescriptor,
   type StoragePutInput,
+  type StorageReadResult,
   type S3StorageConfig
 } from "@openmirage/types";
 
@@ -39,6 +41,7 @@ export interface StorageAdapter {
   healthCheck(): Promise<StorageHealthStatus>;
   list(prefix?: string): Promise<StorageObjectDescriptor[]>;
   put(input: StoragePutInput): Promise<StorageObjectDescriptor>;
+  read(key: string): Promise<StorageReadResult>;
   resolveDownloadUrl(key: string): Promise<string>;
 }
 
@@ -57,10 +60,59 @@ export interface S3ClientLike {
       | PutObjectCommand
   ): Promise<
     | DeleteObjectCommandOutput
+    | GetObjectCommandOutput
     | HeadBucketCommandOutput
     | ListObjectsV2CommandOutput
     | PutObjectCommandOutput
   >;
+}
+
+interface ByteReadableBody {
+  transformToByteArray?: () => Promise<Uint8Array>;
+  [Symbol.asyncIterator]?: () => AsyncIterator<Uint8Array | Buffer | string>;
+}
+
+async function readBodyToUint8Array(
+  body: ByteReadableBody | Uint8Array | Buffer | string | undefined
+): Promise<Uint8Array> {
+  if (!body) {
+    return new Uint8Array();
+  }
+
+  if (body instanceof Uint8Array) {
+    return body;
+  }
+
+  if (Buffer.isBuffer(body)) {
+    return new Uint8Array(body);
+  }
+
+  if (typeof body === "string") {
+    return new Uint8Array(Buffer.from(body));
+  }
+
+  if (typeof body.transformToByteArray === "function") {
+    return body.transformToByteArray();
+  }
+
+  if (typeof body[Symbol.asyncIterator] === "function") {
+    const asyncIterable = body as AsyncIterable<Uint8Array | Buffer | string>;
+    const chunks: Buffer[] = [];
+
+    for await (const chunk of asyncIterable) {
+      chunks.push(
+        Buffer.isBuffer(chunk)
+          ? chunk
+          : typeof chunk === "string"
+            ? Buffer.from(chunk)
+            : Buffer.from(chunk)
+      );
+    }
+
+    return new Uint8Array(Buffer.concat(chunks));
+  }
+
+  throw new Error("Unsupported storage body type");
 }
 
 class LocalStorageAdapter implements StorageAdapter {
@@ -135,6 +187,14 @@ class LocalStorageAdapter implements StorageAdapter {
     const targetPath = this.#resolveKeyPath(key);
     await stat(targetPath);
     return pathToFileURL(targetPath).toString();
+  }
+
+  async read(key: string): Promise<StorageReadResult> {
+    const targetPath = this.#resolveKeyPath(key);
+
+    return {
+      body: await readFile(targetPath)
+    };
   }
 
   async delete(key: string): Promise<StorageDeleteResult> {
@@ -265,6 +325,22 @@ class S3StorageAdapter implements StorageAdapter {
         expiresIn: 900
       }
     );
+  }
+
+  async read(key: string): Promise<StorageReadResult> {
+    const response = (await this.#client.send(
+      new GetObjectCommand({
+        Bucket: this.#config.bucket,
+        Key: key
+      })
+    )) as GetObjectCommandOutput;
+
+    return {
+      body: await readBodyToUint8Array(
+        response.Body as ByteReadableBody | Uint8Array | Buffer | string | undefined
+      ),
+      ...(response.ContentType ? { contentType: response.ContentType } : {})
+    };
   }
 
   async delete(key: string): Promise<StorageDeleteResult> {

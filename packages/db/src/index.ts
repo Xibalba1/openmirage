@@ -30,11 +30,14 @@ export {
   type UpsertUserInput
 } from "./auth.js";
 export {
+  createAsset,
   createComment,
   createFileWithPages,
   createPage,
+  getAuthorizedAsset,
   getAuthorizedCollabPageSession,
   createProject,
+  listAssets,
   listComments,
   getFileOpenDetails,
   listAuthorizedWorkspaces,

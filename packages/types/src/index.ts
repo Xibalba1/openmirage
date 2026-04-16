@@ -46,6 +46,10 @@ export const assetKinds = ["image", "font", "export", "thumbnail"] as const;
 
 export type AssetKind = (typeof assetKinds)[number];
 
+export const assetScopes = ["file", "workspace"] as const;
+
+export type AssetScope = (typeof assetScopes)[number];
+
 export const exportJobFormats = ["png", "jpeg", "svg", "pdf"] as const;
 
 export type ExportJobFormat = (typeof exportJobFormats)[number];
@@ -186,6 +190,31 @@ export interface AssetDto {
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
+}
+
+export interface AssetRecordDto extends AssetDto {
+  contentUrl: string;
+}
+
+export interface CreateAssetInput {
+  byteSize: number;
+  filename: string;
+  height?: number | null;
+  id?: string;
+  kind: AssetKind;
+  mimeType: string;
+  scope: AssetScope;
+  storageKey: string;
+  width?: number | null;
+}
+
+export interface ListAssetsInput {
+  fileId: string;
+  includeWorkspaceAssets?: boolean;
+}
+
+export interface ListAssetsResponse {
+  assets: AssetRecordDto[];
 }
 
 export interface CommentDto {
@@ -565,6 +594,11 @@ export interface StoragePutInput {
 
 export interface StorageDeleteResult {
   key: string;
+}
+
+export interface StorageReadResult {
+  body: Uint8Array;
+  contentType?: string;
 }
 
 export interface StorageHealthStatus {

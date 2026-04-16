@@ -197,6 +197,62 @@ function drawImagePlaceholder(
   });
 }
 
+function drawResolvedImage(
+  ctx: CanvasRenderingContext2D,
+  record: PaintRecord,
+  image: CanvasImageSource
+): void {
+  const { node } = record;
+
+  if (node.type !== "image") {
+    return;
+  }
+
+  const imageWidth =
+    "naturalWidth" in image && typeof image.naturalWidth === "number"
+      ? image.naturalWidth
+      : "videoWidth" in image && typeof image.videoWidth === "number"
+        ? image.videoWidth
+        : "width" in image && typeof image.width === "number"
+          ? image.width
+          : node.width;
+  const imageHeight =
+    "naturalHeight" in image && typeof image.naturalHeight === "number"
+      ? image.naturalHeight
+      : "videoHeight" in image && typeof image.videoHeight === "number"
+        ? image.videoHeight
+        : "height" in image && typeof image.height === "number"
+          ? image.height
+          : node.height;
+
+  applyRotation(ctx, node, record.absoluteX, record.absoluteY, () => {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(record.absoluteX, record.absoluteY, node.width, node.height);
+    ctx.clip();
+
+    if (node.fitMode === "fill" || imageWidth <= 0 || imageHeight <= 0) {
+      ctx.drawImage(image, record.absoluteX, record.absoluteY, node.width, node.height);
+      ctx.restore();
+      return;
+    }
+
+    const widthScale = node.width / imageWidth;
+    const heightScale = node.height / imageHeight;
+    const scale =
+      node.fitMode === "contain"
+        ? Math.min(widthScale, heightScale)
+        : Math.max(widthScale, heightScale);
+    const drawWidth = imageWidth * scale;
+    const drawHeight = imageHeight * scale;
+    const offsetX = record.absoluteX + (node.width - drawWidth) / 2;
+    const offsetY = record.absoluteY + (node.height - drawHeight) / 2;
+
+    ctx.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
+    ctx.restore();
+  });
+}
+
 export function renderSceneToCanvas(
   canvas: HTMLCanvasElement,
   viewport: ViewportState,
@@ -206,6 +262,7 @@ export function renderSceneToCanvas(
     width: number;
   },
   records: PaintRecord[],
+  images: Record<string, CanvasImageSource | null | undefined>,
   overlay: {
     hoveredId: string | null;
     marquee: { end: Point; start: Point } | null;
@@ -263,7 +320,15 @@ export function renderSceneToCanvas(
         drawText(ctx, record);
         break;
       case "image":
-        drawImagePlaceholder(ctx, record);
+        if (record.node.assetId && images[record.node.assetId]) {
+          drawResolvedImage(
+            ctx,
+            record,
+            images[record.node.assetId] as CanvasImageSource
+          );
+        } else {
+          drawImagePlaceholder(ctx, record);
+        }
         break;
       case "group":
         break;
