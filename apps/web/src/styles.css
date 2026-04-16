@@ -195,7 +195,7 @@ h3 {
 }
 
 .button:disabled {
-  cursor: not-allowed;
+  cursor: wait;
   opacity: 0.72;
 }
 
