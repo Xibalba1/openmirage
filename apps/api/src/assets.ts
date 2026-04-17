@@ -10,7 +10,6 @@ import {
 } from "@openmirage/types";
 
 const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
-const MAX_MULTIPART_BODY_BYTES = MAX_IMAGE_UPLOAD_BYTES + 1024 * 1024;
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/gif",
   "image/jpeg",
@@ -79,12 +78,23 @@ export interface AssetResponseContext {
 export interface AssetBadRequest {
   error:
     | "content-type must be multipart/form-data"
+    | "invalid multipart form data"
     | "file is required"
     | "file must be 10 MB or smaller"
     | "file must be an image/png, image/jpeg, image/webp, or image/gif"
     | "file must contain a valid raster image matching the declared type"
     | "scope must be file or workspace"
     | "upload filename is required";
+}
+
+interface AssetFailureResponse {
+  error:
+    | "forbidden"
+    | "internal_error"
+    | "not_found"
+    | "storage_unavailable"
+    | "unauthenticated"
+    | "upload_persist_failed";
 }
 
 export interface AssetListResolution {
@@ -99,8 +109,8 @@ export interface AssetMutationResolution {
   body:
     | AssetBadRequest
     | AssetRecordDto
-    | { error: "forbidden" | "not_found" | "unauthenticated" };
-  status: 201 | 400 | 401 | 403 | 404;
+    | AssetFailureResponse;
+  status: 201 | 400 | 401 | 403 | 404 | 500 | 503;
 }
 
 export type AssetContentResolution =
@@ -381,27 +391,6 @@ export function readImageDimensions(
   };
 }
 
-async function readRequestBody(
-  stream: NodeJS.ReadableStream,
-  limitBytes: number
-): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  let totalBytes = 0;
-
-  for await (const chunk of stream) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    totalBytes += buffer.byteLength;
-
-    if (totalBytes > limitBytes) {
-      throw new Error("payload_too_large");
-    }
-
-    chunks.push(buffer);
-  }
-
-  return Buffer.concat(chunks);
-}
-
 function readMultipartBoundary(contentType: string): string | null {
   const match = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
   return match?.[1] ?? match?.[2] ?? null;
@@ -444,6 +433,70 @@ function parseContentDisposition(
   };
 }
 
+function createPayloadTooLargeError(): Error {
+  return new Error("payload_too_large");
+}
+
+function createInvalidMultipartError(): Error {
+  const error = new Error("invalid_multipart");
+  (error as Error & { code?: string }).code = "invalid_multipart";
+  return error;
+}
+
+function appendMultipartPartChunk(
+  part: {
+    chunks: Buffer[];
+    disposition: { filename: string | null; name: string | null };
+    size: number;
+  },
+  chunk: Buffer
+): void {
+  if (chunk.byteLength === 0) {
+    return;
+  }
+
+  part.size += chunk.byteLength;
+
+  if (
+    part.disposition.filename !== null &&
+    part.size > MAX_IMAGE_UPLOAD_BYTES
+  ) {
+    throw createPayloadTooLargeError();
+  }
+
+  part.chunks.push(chunk);
+}
+
+function finalizeMultipartPart(
+  part: {
+    chunks: Buffer[];
+    disposition: { filename: string | null; name: string | null };
+    headers: Record<string, string>;
+    size: number;
+  },
+  fields: Record<string, string>,
+  files: UploadAssetFile[]
+): void {
+  const fieldName = part.disposition.name;
+
+  if (!fieldName) {
+    return;
+  }
+
+  const content = Buffer.concat(part.chunks, part.size);
+
+  if (part.disposition.filename !== null) {
+    files.push({
+      body: new Uint8Array(content.buffer, content.byteOffset, content.byteLength),
+      filename: part.disposition.filename,
+      mimeType: part.headers["content-type"] ?? "application/octet-stream"
+    });
+    return;
+  }
+
+  fields[fieldName] = content.toString("utf8");
+}
+
 export async function parseMultipartUpload(input: {
   contentTypeHeader: string | undefined;
   stream: NodeJS.ReadableStream;
@@ -462,62 +515,172 @@ export async function parseMultipartUpload(input: {
     throw error;
   }
 
-  const body = await readRequestBody(input.stream, MAX_MULTIPART_BODY_BYTES);
   const boundaryBuffer = Buffer.from(`--${boundary}`);
-  let cursor = body.indexOf(boundaryBuffer);
+  const nextBoundaryBuffer = Buffer.from(`\r\n--${boundary}`);
   const fields: Record<string, string> = {};
   const files: UploadAssetFile[] = [];
-
-  while (cursor !== -1) {
-    cursor += boundaryBuffer.byteLength;
-
-    if (
-      readByte(body, cursor) === 0x2d &&
-      readByte(body, cursor + 1) === 0x2d
-    ) {
-      break;
-    }
-
-    if (
-      readByte(body, cursor) === CRLF[0] &&
-      readByte(body, cursor + 1) === CRLF[1]
-    ) {
-      cursor += CRLF.byteLength;
-    }
-
-    const nextBoundary = body.indexOf(Buffer.from(`\r\n--${boundary}`), cursor);
-
-    if (nextBoundary === -1) {
-      break;
-    }
-
-    const part = body.slice(cursor, nextBoundary);
-    const headerEnd = part.indexOf(HEADER_DELIMITER);
-
-    if (headerEnd !== -1) {
-      const headers = parsePartHeaders(part.slice(0, headerEnd).toString("utf8"));
-      const disposition = parseContentDisposition(headers["content-disposition"]);
-      const content = part.slice(headerEnd + HEADER_DELIMITER.byteLength);
-      const fieldName = disposition.name;
-
-      if (fieldName) {
-        if (disposition.filename !== null) {
-          files.push({
-            body: new Uint8Array(
-              content.buffer,
-              content.byteOffset,
-              content.byteLength
-            ),
-            filename: disposition.filename,
-            mimeType: headers["content-type"] ?? "application/octet-stream"
-          });
-        } else {
-          fields[fieldName] = content.toString("utf8");
-        }
+  let buffer = Buffer.alloc(0);
+  let isStarted = false;
+  let isFinished = false;
+  let activePart:
+    | {
+        chunks: Buffer[];
+        disposition: { filename: string | null; name: string | null };
+        headers: Record<string, string>;
+        size: number;
       }
+    | null = null;
+
+  const parseBuffer = (isEndOfStream: boolean): void => {
+    while (!isFinished) {
+      if (!isStarted) {
+        const startIndex = buffer.indexOf(boundaryBuffer);
+
+        if (startIndex === -1) {
+          if (isEndOfStream) {
+            throw createInvalidMultipartError();
+          }
+
+          if (buffer.byteLength > boundaryBuffer.byteLength) {
+            buffer = buffer.subarray(
+              buffer.byteLength - boundaryBuffer.byteLength
+            );
+          }
+          return;
+        }
+
+        const markerEnd = startIndex + boundaryBuffer.byteLength;
+
+        if (buffer.byteLength < markerEnd + 2) {
+          if (isEndOfStream) {
+            throw createInvalidMultipartError();
+          }
+          return;
+        }
+
+        if (
+          readByte(buffer, markerEnd) === 0x2d &&
+          readByte(buffer, markerEnd + 1) === 0x2d
+        ) {
+          isFinished = true;
+          buffer = buffer.subarray(markerEnd + 2);
+          return;
+        }
+
+        if (
+          readByte(buffer, markerEnd) !== CRLF[0] ||
+          readByte(buffer, markerEnd + 1) !== CRLF[1]
+        ) {
+          throw createInvalidMultipartError();
+        }
+
+        buffer = buffer.subarray(markerEnd + CRLF.byteLength);
+        isStarted = true;
+        continue;
+      }
+
+      if (!activePart) {
+        const headerEnd = buffer.indexOf(HEADER_DELIMITER);
+
+        if (headerEnd === -1) {
+          if (isEndOfStream) {
+            throw createInvalidMultipartError();
+          }
+          return;
+        }
+
+        const headers = parsePartHeaders(
+          buffer.subarray(0, headerEnd).toString("utf8")
+        );
+        activePart = {
+          chunks: [],
+          disposition: parseContentDisposition(headers["content-disposition"]),
+          headers,
+          size: 0
+        };
+        buffer = buffer.subarray(headerEnd + HEADER_DELIMITER.byteLength);
+        continue;
+      }
+
+      const nextBoundaryIndex = buffer.indexOf(nextBoundaryBuffer);
+
+      if (nextBoundaryIndex === -1) {
+        const retainByteLength = Math.min(
+          buffer.byteLength,
+          nextBoundaryBuffer.byteLength - 1
+        );
+        const consumableByteLength = buffer.byteLength - retainByteLength;
+
+        if (consumableByteLength > 0) {
+          appendMultipartPartChunk(
+            activePart,
+            buffer.subarray(0, consumableByteLength)
+          );
+          buffer = buffer.subarray(consumableByteLength);
+        }
+
+        if (isEndOfStream) {
+          throw createInvalidMultipartError();
+        }
+        return;
+      }
+
+      if (nextBoundaryIndex > 0) {
+        appendMultipartPartChunk(activePart, buffer.subarray(0, nextBoundaryIndex));
+        buffer = buffer.subarray(nextBoundaryIndex);
+      }
+
+      if (buffer.byteLength < nextBoundaryBuffer.byteLength + 2) {
+        if (isEndOfStream) {
+          throw createInvalidMultipartError();
+        }
+        return;
+      }
+
+      buffer = buffer.subarray(nextBoundaryBuffer.byteLength);
+      finalizeMultipartPart(activePart, fields, files);
+      activePart = null;
+
+      if (readByte(buffer, 0) === 0x2d && readByte(buffer, 1) === 0x2d) {
+        buffer = buffer.subarray(2);
+        isFinished = true;
+        return;
+      }
+
+      if (readByte(buffer, 0) !== CRLF[0] || readByte(buffer, 1) !== CRLF[1]) {
+        throw createInvalidMultipartError();
+      }
+
+      buffer = buffer.subarray(CRLF.byteLength);
+    }
+  };
+
+  try {
+    for await (const chunk of input.stream) {
+      const nextChunk = Buffer.from(chunk as Uint8Array);
+      buffer =
+        buffer.byteLength === 0 ? nextChunk : Buffer.concat([buffer, nextChunk]);
+      parseBuffer(false);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === "payload_too_large") {
+      throw error;
     }
 
-    cursor = nextBoundary + CRLF.byteLength;
+    if (
+      error instanceof Error &&
+      (error as Error & { code?: string }).code === "invalid_multipart"
+    ) {
+      throw error;
+    }
+
+    throw createInvalidMultipartError();
+  }
+
+  parseBuffer(true);
+
+  if (!isFinished || activePart) {
+    throw createInvalidMultipartError();
   }
 
   return {
@@ -746,11 +909,18 @@ export async function resolveCreateAssetRequest(
     workspaceId: request.workspaceId
   });
 
-  await storage.put({
-    body: normalized.file.body,
-    contentType: normalized.file.mimeType,
-    key: storageKey
-  });
+  try {
+    await storage.put({
+      body: normalized.file.body,
+      contentType: normalized.file.mimeType,
+      key: storageKey
+    });
+  } catch {
+    return {
+      body: { error: "storage_unavailable" },
+      status: 503
+    };
+  }
 
   try {
     const created = await createAsset(
@@ -793,9 +963,12 @@ export async function resolveCreateAssetRequest(
       ),
       status: 201
     };
-  } catch (error) {
+  } catch {
     await storage.delete(storageKey).catch(() => undefined);
-    throw error;
+    return {
+      body: { error: "upload_persist_failed" },
+      status: 500
+    };
   }
 }
 

@@ -85,6 +85,19 @@ export interface EditorSessionSnapshot {
   presenceEntries: EditorPresenceEntry[];
 }
 
+export type EditorSessionConnectionState =
+  | "connecting"
+  | "connected"
+  | "disconnected"
+  | "error"
+  | "retrying";
+
+export interface EditorSessionStatus {
+  attemptCount: number;
+  lastFailureReason: string | null;
+  state: EditorSessionConnectionState;
+}
+
 export interface EditorSession {
   commit(command: EditorCommand): boolean;
   connect(): void;

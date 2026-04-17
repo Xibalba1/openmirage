@@ -10,6 +10,7 @@ import * as awarenessProtocol from "y-protocols/awareness";
 import * as syncProtocol from "y-protocols/sync";
 import * as Y from "yjs";
 import {
+  buildPageCollabSessionUrl,
   buildPageCollabWebSocketUrl,
   type PageCollabLocation
 } from "../collab";
@@ -19,6 +20,7 @@ import {
   type EditorSession,
   type EditorPresenceIdentity,
   type EditorSessionSnapshot,
+  type EditorSessionStatus,
   type HistoryEntry,
   type Point
 } from "./types";
@@ -34,6 +36,16 @@ const AUTH_PERMISSION_DENIED = 1;
 const AUTHENTICATED = 2;
 const CURSOR_THROTTLE_MS = 50;
 const RECONNECT_DELAY_MS = 1_000;
+const MAX_RECONNECT_DELAY_MS = 5_000;
+
+interface CollabSessionPreflightSuccess {
+  documentName: string;
+}
+
+interface CollabSessionPreflightFailure {
+  reason: string;
+  retryable: boolean;
+}
 
 function readBinaryMessage(
   data: Blob | ArrayBuffer | Uint8Array
@@ -204,6 +216,7 @@ interface SessionInput {
   presence?: EditorPresenceIdentity | undefined;
   transport?:
     | {
+        apiBaseUrl?: string;
         collabWsPath: string;
         collabWsUrl: string;
         location: PageCollabLocation;
@@ -211,11 +224,48 @@ interface SessionInput {
     | undefined;
 }
 
+async function resolveCollabSessionPreflight(input: {
+  apiBaseUrl: string;
+  location: PageCollabLocation;
+}): Promise<CollabSessionPreflightFailure | CollabSessionPreflightSuccess> {
+  try {
+    const response = await fetch(
+      buildPageCollabSessionUrl(input.apiBaseUrl, input.location),
+      {
+        credentials: "include",
+        method: "GET"
+      }
+    );
+
+    if (response.ok) {
+      const payload = (await response.json()) as { documentName?: string };
+      return {
+        documentName:
+          typeof payload.documentName === "string"
+            ? payload.documentName
+            : createCollabDocumentName(input.location.pageId)
+      };
+    }
+
+    const payload = (await response.json().catch(() => ({}))) as {
+      error?: string;
+    };
+
+    return {
+      reason: payload.error ?? `http_${response.status}`,
+      retryable: response.status >= 500
+    };
+  } catch {
+    return {
+      reason: "network_error",
+      retryable: true
+    };
+  }
+}
+
 export function createEditorSession(
   input: SessionInput,
-  onStatus?: (
-    status: "connecting" | "connected" | "disconnected" | "error"
-  ) => void
+  onStatus?: (status: EditorSessionStatus) => void
 ): EditorSession {
   const doc = input.doc ?? new Y.Doc();
   const documentName = createCollabDocumentName(input.pageId);
@@ -230,7 +280,10 @@ export function createEditorSession(
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingCursor: Point | null | undefined;
   let isSocketAuthenticated = false;
+  let isBootstrapping = false;
   let authDenied = false;
+  let attemptCount = 0;
+  let lastFailureReason: string | null = null;
   let snapshot: EditorSessionSnapshot = {
     canRedo: false,
     canUndo: false,
@@ -251,6 +304,14 @@ export function createEditorSession(
     for (const listener of listeners) {
       listener(snapshot);
     }
+  };
+
+  const emitStatus = (state: EditorSessionStatus["state"]) => {
+    onStatus?.({
+      attemptCount,
+      lastFailureReason,
+      state
+    });
   };
 
   const handleDocUpdate = (update: Uint8Array, origin: unknown) => {
@@ -397,7 +458,7 @@ export function createEditorSession(
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       connect();
-    }, RECONNECT_DELAY_MS);
+    }, Math.min(RECONNECT_DELAY_MS * Math.max(attemptCount, 1), MAX_RECONNECT_DELAY_MS));
   }
 
   function sendInitialSync(activeSocket: WebSocket): void {
@@ -418,133 +479,192 @@ export function createEditorSession(
   }
 
   function connect(): void {
-    if (destroyed || !input.transport || socket) {
+    if (destroyed || !input.transport || socket || isBootstrapping) {
       return;
     }
 
+    const transport = input.transport;
     clearReconnectTimer();
     authDenied = false;
     isSocketAuthenticated = false;
-    onStatus?.("connecting");
-    const activeSocket = new WebSocket(
-      buildPageCollabWebSocketUrl(
-        input.transport.collabWsUrl,
-        input.transport.collabWsPath,
-        input.transport.location
-      )
-    );
-    socket = activeSocket;
-    activeSocket.binaryType = "arraybuffer";
+    attemptCount += 1;
+    emitStatus(attemptCount === 1 ? "connecting" : "retrying");
+    isBootstrapping = true;
 
-    activeSocket.addEventListener("open", () => {
-      if (socket !== activeSocket) {
-        return;
-      }
+    void (async () => {
+      const preflight =
+        transport.apiBaseUrl
+          ? await resolveCollabSessionPreflight({
+              apiBaseUrl: transport.apiBaseUrl,
+              location: transport.location
+            })
+          : {
+              documentName
+            };
 
-      activeSocket.send(writeAuthMessage(documentName));
-    });
-
-    activeSocket.addEventListener("message", (event) => {
-      void readBinaryMessage(event.data as Blob | ArrayBuffer | Uint8Array)
-        .then((message) => {
-          try {
-            const decoder = decoding.createDecoder(message);
-            const incomingDocumentName = decoding.readVarString(decoder);
-
-            if (incomingDocumentName !== documentName) {
-              return;
-            }
-
-            const messageType = decoding.readVarUint(decoder);
-
-            if (messageType === MESSAGE_AUTH && socket === activeSocket) {
-              const authType = decoding.readVarUint(decoder);
-
-              if (authType === AUTH_TOKEN) {
-                activeSocket.send(writeAuthMessage(documentName));
-                return;
-              }
-
-              if (authType === AUTH_PERMISSION_DENIED) {
-                authDenied = true;
-                onStatus?.("error");
-                activeSocket.close();
-                return;
-              }
-
-              if (authType === AUTHENTICATED) {
-                isSocketAuthenticated = true;
-                onStatus?.("connected");
-                sendInitialSync(activeSocket);
-              }
-              return;
-            }
-
-            if (
-              (messageType === MESSAGE_SYNC ||
-                messageType === MESSAGE_SYNC_REPLY) &&
-              socket === activeSocket
-            ) {
-              const encoder = encoding.createEncoder();
-              encoding.writeVarString(encoder, documentName);
-              encoding.writeVarUint(encoder, MESSAGE_SYNC);
-              syncProtocol.readSyncMessage(decoder, encoder, doc, "remote");
-
-              if (encoding.length(encoder) > minSyncMessageLength) {
-                socket.send(encoding.toUint8Array(encoder));
-              }
-              return;
-            }
-
-            if (messageType === MESSAGE_AWARENESS) {
-              awarenessProtocol.applyAwarenessUpdate(
-                awareness,
-                decoding.readVarUint8Array(decoder),
-                "remote"
-              );
-              return;
-            }
-
-            if (
-              messageType === MESSAGE_QUERY_AWARENESS &&
-              socket === activeSocket &&
-              awareness.getLocalState()
-            ) {
-              activeSocket.send(
-                writeAwarenessMessage(documentName, awareness, [doc.clientID])
-              );
-              return;
-            }
-
-            if (messageType === MESSAGE_CLOSE) {
-              authDenied = true;
-              onStatus?.("error");
-              activeSocket.close();
-            }
-          } catch {
-            // Ignore malformed websocket frames instead of breaking the session loop.
-          }
-        })
-        .catch(() => undefined);
-    });
-
-    activeSocket.addEventListener("close", () => {
-      if (socket === activeSocket) {
-        socket = null;
-      }
-      isSocketAuthenticated = false;
-      clearRemotePresence();
       if (destroyed) {
-        onStatus?.("disconnected");
+        isBootstrapping = false;
         return;
       }
 
-      onStatus?.("error");
-      scheduleReconnect();
-    });
-    activeSocket.addEventListener("error", () => {
-      onStatus?.("error");
-    });
+      if ("reason" in preflight) {
+        isBootstrapping = false;
+        lastFailureReason = preflight.reason;
+
+        if (preflight.retryable) {
+          emitStatus("retrying");
+          scheduleReconnect();
+          return;
+        }
+
+        emitStatus("error");
+        return;
+      }
+
+      let activeSocket: WebSocket;
+
+      try {
+        activeSocket = new WebSocket(
+          buildPageCollabWebSocketUrl(
+            transport.collabWsUrl,
+            transport.collabWsPath,
+            transport.location
+          )
+        );
+      } catch {
+        isBootstrapping = false;
+        socket = null;
+        lastFailureReason = "websocket_construction_failed";
+        emitStatus("retrying");
+        scheduleReconnect();
+        return;
+      }
+
+      socket = activeSocket;
+      isBootstrapping = false;
+      activeSocket.binaryType = "arraybuffer";
+
+      activeSocket.addEventListener("open", () => {
+        if (socket !== activeSocket) {
+          return;
+        }
+
+        activeSocket.send(writeAuthMessage(preflight.documentName));
+      });
+
+      activeSocket.addEventListener("message", (event) => {
+        void readBinaryMessage(event.data as Blob | ArrayBuffer | Uint8Array)
+          .then((message) => {
+            try {
+              const decoder = decoding.createDecoder(message);
+              const incomingDocumentName = decoding.readVarString(decoder);
+
+              if (incomingDocumentName !== preflight.documentName) {
+                return;
+              }
+
+              const messageType = decoding.readVarUint(decoder);
+
+              if (messageType === MESSAGE_AUTH && socket === activeSocket) {
+                const authType = decoding.readVarUint(decoder);
+
+                if (authType === AUTH_TOKEN) {
+                  activeSocket.send(writeAuthMessage(preflight.documentName));
+                  return;
+                }
+
+                if (authType === AUTH_PERMISSION_DENIED) {
+                  authDenied = true;
+                  lastFailureReason = "websocket_auth_denied";
+                  emitStatus("error");
+                  activeSocket.close();
+                  return;
+                }
+
+                if (authType === AUTHENTICATED) {
+                  isSocketAuthenticated = true;
+                  lastFailureReason = null;
+                  emitStatus("connected");
+                  sendInitialSync(activeSocket);
+                }
+                return;
+              }
+
+              if (
+                (messageType === MESSAGE_SYNC ||
+                  messageType === MESSAGE_SYNC_REPLY) &&
+                socket === activeSocket
+              ) {
+                const encoder = encoding.createEncoder();
+                encoding.writeVarString(encoder, documentName);
+                encoding.writeVarUint(encoder, MESSAGE_SYNC);
+                syncProtocol.readSyncMessage(decoder, encoder, doc, "remote");
+
+                if (encoding.length(encoder) > minSyncMessageLength) {
+                  socket.send(encoding.toUint8Array(encoder));
+                }
+                return;
+              }
+
+              if (messageType === MESSAGE_AWARENESS) {
+                awarenessProtocol.applyAwarenessUpdate(
+                  awareness,
+                  decoding.readVarUint8Array(decoder),
+                  "remote"
+                );
+                return;
+              }
+
+              if (
+                messageType === MESSAGE_QUERY_AWARENESS &&
+                socket === activeSocket &&
+                awareness.getLocalState()
+              ) {
+                activeSocket.send(
+                  writeAwarenessMessage(preflight.documentName, awareness, [
+                    doc.clientID
+                  ])
+                );
+                return;
+              }
+
+              if (messageType === MESSAGE_CLOSE) {
+                authDenied = true;
+                lastFailureReason = "websocket_closed";
+                emitStatus("error");
+                activeSocket.close();
+              }
+            } catch {
+              // Ignore malformed websocket frames instead of breaking the session loop.
+            }
+          })
+          .catch(() => undefined);
+      });
+
+      activeSocket.addEventListener("close", () => {
+        if (socket === activeSocket) {
+          socket = null;
+        }
+        isSocketAuthenticated = false;
+        clearRemotePresence();
+        if (destroyed) {
+          emitStatus("disconnected");
+          return;
+        }
+
+        if (authDenied) {
+          emitStatus("error");
+          return;
+        }
+
+        lastFailureReason ??= "websocket_closed";
+        emitStatus("retrying");
+        scheduleReconnect();
+      });
+      activeSocket.addEventListener("error", () => {
+        lastFailureReason = "websocket_error";
+      });
+    })();
   }
 
   function commit(command: EditorCommand): boolean {
@@ -605,7 +725,8 @@ export function createEditorSession(
     connect,
     destroy() {
       destroyed = true;
-      onStatus?.("disconnected");
+      isBootstrapping = false;
+      emitStatus("disconnected");
       doc.off("update", handleDocUpdate);
       awareness.off("update", handleAwarenessUpdate);
       clearReconnectTimer();

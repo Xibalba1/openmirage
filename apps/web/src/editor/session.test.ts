@@ -317,6 +317,15 @@ async function waitFor(
   }
 }
 
+function createJsonResponse(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    headers: {
+      "content-type": "application/json"
+    },
+    status
+  });
+}
+
 test("editor session commit, undo, and redo track one local command at a time", () => {
   const doc = new Y.Doc();
   writePageDocument(doc, createDocument());
@@ -451,6 +460,7 @@ test("committed document changes sync to another connected session", async () =>
       collabWsUrl: "ws://example.test",
       location: {
         fileId: "file-1",
+        projectId: "project-1",
         pageId: "page-1",
         workspaceId: "workspace-1"
       }
@@ -463,6 +473,7 @@ test("committed document changes sync to another connected session", async () =>
       collabWsUrl: "ws://example.test",
       location: {
         fileId: "file-1",
+        projectId: "project-1",
         pageId: "page-1",
         workspaceId: "workspace-1"
       }
@@ -529,6 +540,7 @@ test("awareness publishes remote presence without affecting undo history", async
       collabWsUrl: "ws://example.test",
       location: {
         fileId: "file-1",
+        projectId: "project-1",
         pageId: "page-1",
         workspaceId: "workspace-1"
       }
@@ -549,6 +561,7 @@ test("awareness publishes remote presence without affecting undo history", async
       collabWsUrl: "ws://example.test",
       location: {
         fileId: "file-1",
+        projectId: "project-1",
         pageId: "page-1",
         workspaceId: "workspace-1"
       }
@@ -592,11 +605,112 @@ test("awareness publishes remote presence without affecting undo history", async
   }
 });
 
-test("session reconnects after an unexpected websocket close", async () => {
+test("session does not open a websocket when collab preflight returns not_found", async () => {
   const originalWebSocket = globalThis.WebSocket;
+  const originalFetch = globalThis.fetch;
   globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
-  const statuses: Array<"connecting" | "connected" | "disconnected" | "error"> =
-    [];
+  globalThis.fetch = (async () =>
+    createJsonResponse({ error: "not_found" }, 404)) as typeof fetch;
+  const statuses: string[] = [];
+  const session = createEditorSession(
+    {
+      pageId: "page-1",
+      transport: {
+        apiBaseUrl: "https://api.example.test",
+        collabWsPath: "/collab",
+        collabWsUrl: "ws://example.test",
+        location: {
+          fileId: "file-1",
+          projectId: "project-1",
+          pageId: "page-1",
+          workspaceId: "workspace-1"
+        }
+      }
+    },
+    (status) => {
+      statuses.push(status.state);
+    }
+  );
+
+  try {
+    session.connect();
+    await waitFor(() => statuses.includes("error"));
+    assert.equal(FakeWebSocket.rooms.size, 0);
+  } finally {
+    session.destroy();
+    FakeWebSocket.resetRooms();
+    globalThis.fetch = originalFetch;
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
+
+test("session retries preflight after a transient collab bootstrap failure", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const originalFetch = globalThis.fetch;
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+  let fetchCount = 0;
+  globalThis.fetch = (async () => {
+    fetchCount += 1;
+
+    if (fetchCount === 1) {
+      return createJsonResponse({ error: "internal_error" }, 503);
+    }
+
+    return createJsonResponse({ documentName: "page:page-1" }, 200);
+  }) as typeof fetch;
+  const states: string[] = [];
+  const session = createEditorSession(
+    {
+      pageId: "page-1",
+      transport: {
+        apiBaseUrl: "https://api.example.test",
+        collabWsPath: "/collab",
+        collabWsUrl: "ws://example.test",
+        location: {
+          fileId: "file-1",
+          projectId: "project-1",
+          pageId: "page-1",
+          workspaceId: "workspace-1"
+        }
+      }
+    },
+    (status) => {
+      states.push(status.state);
+    }
+  );
+
+  try {
+    session.connect();
+    await waitFor(() => fetchCount >= 2, 1_500);
+    await waitFor(() => states.includes("connected"), 1_500);
+  } finally {
+    session.destroy();
+    FakeWebSocket.resetRooms();
+    globalThis.fetch = originalFetch;
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
+
+test("session retries after synchronous websocket construction failure", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  let constructionAttempts = 0;
+  function ThrowingWebSocket(url: string) {
+    constructionAttempts += 1;
+
+    if (constructionAttempts === 1) {
+      throw new Error("mixed content");
+    }
+
+    return new FakeWebSocket(url) as unknown as WebSocket;
+  }
+  Object.assign(ThrowingWebSocket, {
+    CLOSED: FakeWebSocket.CLOSED,
+    CLOSING: FakeWebSocket.CLOSING,
+    CONNECTING: FakeWebSocket.CONNECTING,
+    OPEN: FakeWebSocket.OPEN
+  });
+  globalThis.WebSocket = ThrowingWebSocket as unknown as typeof WebSocket;
+  const states: string[] = [];
   const session = createEditorSession(
     {
       pageId: "page-1",
@@ -605,13 +719,49 @@ test("session reconnects after an unexpected websocket close", async () => {
         collabWsUrl: "ws://example.test",
         location: {
           fileId: "file-1",
+          projectId: "project-1",
           pageId: "page-1",
           workspaceId: "workspace-1"
         }
       }
     },
     (status) => {
-      statuses.push(status);
+      states.push(status.state);
+    }
+  );
+
+  try {
+    session.connect();
+    await waitFor(() => constructionAttempts >= 2, 1_500);
+    await waitFor(() => states.includes("connected"), 1_500);
+    assert.equal(states.includes("retrying"), true);
+  } finally {
+    session.destroy();
+    FakeWebSocket.resetRooms();
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
+
+test("session reconnects after an unexpected websocket close", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+  const statuses: string[] = [];
+  const session = createEditorSession(
+    {
+      pageId: "page-1",
+      transport: {
+        collabWsPath: "/collab",
+        collabWsUrl: "ws://example.test",
+        location: {
+          fileId: "file-1",
+          projectId: "project-1",
+          pageId: "page-1",
+          workspaceId: "workspace-1"
+        }
+      }
+    },
+    (status) => {
+      statuses.push(status.state);
     }
   );
 
@@ -625,7 +775,7 @@ test("session reconnects after an unexpected websocket close", async () => {
         statuses.some((status, index) => {
           return (
             status === "connected" &&
-            statuses.slice(0, index).includes("error")
+            statuses.slice(0, index).includes("retrying")
           );
         }),
       1_500

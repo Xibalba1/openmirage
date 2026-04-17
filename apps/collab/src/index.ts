@@ -26,6 +26,7 @@ import {
   rewriteRequestUrlWithDocumentName
 } from "./collab-auth.js";
 import { PgCollabPersistence } from "./persistence.js";
+import { inspectApiDependency } from "./readiness.js";
 
 async function createCollabHealthStatus(
   documentsCount: number,
@@ -72,10 +73,23 @@ async function createCollabReadyStatus(
   connectionsCount: number
 ): Promise<ReadyStatus> {
   const health = await createCollabHealthStatus(documentsCount, connectionsCount);
+  const env = readCollabEnv();
+  const apiDependency = await inspectApiDependency(env.apiBaseUrl, env.authPath);
+  const checks = {
+    ...health.checks,
+    apiDependency
+  };
+  const ok = Object.values(checks).every((check) => check.ok);
 
   return {
     ...health,
-    ready: health.ok
+    checks,
+    details: {
+      ...health.details,
+      ...summarizeChecks(checks)
+    },
+    ok,
+    ready: ok
   };
 }
 

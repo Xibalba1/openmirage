@@ -711,6 +711,30 @@ async function startApiServer(): Promise<void> {
     return authContext;
   });
   app.get<{
+    Params: PageParams;
+  }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/pages/:pageId/collab-session",
+    async (request, reply) => {
+      const authContext = await readAuthContextFromRequest(
+        request,
+        databasePool,
+        sessionContract
+      );
+      const resolution = await resolveCollabPageSession(
+        authContext,
+        {
+          fileId: request.params.fileId,
+          pageId: request.params.pageId,
+          workspaceId: request.params.workspaceId
+        },
+        databasePool
+      );
+
+      reply.status(resolution.status);
+      return resolution.body;
+    }
+  );
+  app.get<{
     Params: Pick<PageParams, "pageId">;
     Querystring: CollabPageSessionQuerystring;
   }>("/internal/collab/pages/:pageId/session", async (request, reply) => {
@@ -1403,6 +1427,30 @@ async function startApiServer(): Promise<void> {
           }
         );
 
+        if (resolution.status !== 201) {
+          logger[
+            resolution.status >= 500 ? "error" : "warn"
+          ]("asset upload failed", {
+            error:
+              "error" in resolution.body ? resolution.body.error : "unknown",
+            fileId: request.params.fileId,
+            filename:
+              parsedUpload.files.length === 1
+                ? parsedUpload.files[0]?.filename
+                : undefined,
+            method: request.method,
+            mimeType:
+              parsedUpload.files.length === 1
+                ? parsedUpload.files[0]?.mimeType
+                : undefined,
+            path: request.url,
+            projectId: request.params.projectId,
+            requestId: request.id,
+            statusCode: resolution.status,
+            workspaceId: request.params.workspaceId
+          });
+        }
+
         reply.status(resolution.status);
         return resolution.body satisfies AssetRecordDto | { error: string };
       } catch (error) {
@@ -1410,13 +1458,50 @@ async function startApiServer(): Promise<void> {
           error instanceof Error &&
           (error as Error & { code?: string }).code === "invalid_content_type"
         ) {
+          logger.warn("asset upload rejected", {
+            error: "content-type must be multipart/form-data",
+            fileId: request.params.fileId,
+            method: request.method,
+            path: request.url,
+            projectId: request.params.projectId,
+            requestId: request.id,
+            workspaceId: request.params.workspaceId
+          });
           reply.status(400);
           return {
             error: "content-type must be multipart/form-data"
           };
         }
 
+        if (
+          error instanceof Error &&
+          (error as Error & { code?: string }).code === "invalid_multipart"
+        ) {
+          logger.warn("asset upload rejected", {
+            error: "invalid multipart form data",
+            fileId: request.params.fileId,
+            method: request.method,
+            path: request.url,
+            projectId: request.params.projectId,
+            requestId: request.id,
+            workspaceId: request.params.workspaceId
+          });
+          reply.status(400);
+          return {
+            error: "invalid multipart form data"
+          };
+        }
+
         if (error instanceof Error && error.message === "payload_too_large") {
+          logger.warn("asset upload rejected", {
+            error: "file must be 10 MB or smaller",
+            fileId: request.params.fileId,
+            method: request.method,
+            path: request.url,
+            projectId: request.params.projectId,
+            requestId: request.id,
+            workspaceId: request.params.workspaceId
+          });
           reply.status(400);
           return {
             error: "file must be 10 MB or smaller"
