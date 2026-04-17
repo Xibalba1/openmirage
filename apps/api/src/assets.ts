@@ -8,6 +8,7 @@ import {
   type CreateAssetInput,
   type ListAssetsResponse
 } from "@openmirage/types";
+import type { FastifyInstance } from "fastify";
 
 const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
@@ -179,6 +180,15 @@ function buildStorageKey(input: {
   }
 
   return `workspaces/${input.workspaceId}/files/${input.fileId}/assets/${input.assetId}/${safeFilename}`;
+}
+
+export function registerRawMultipartParser(app: FastifyInstance): void {
+  app.addContentTypeParser(
+    /^multipart\/form-data(?:;.*)?$/u,
+    (_request, _payload, done) => {
+      done(null);
+    }
+  );
 }
 
 export function buildAssetContentPath(input: AssetContentRequest): string {
