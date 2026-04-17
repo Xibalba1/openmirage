@@ -42,6 +42,11 @@ import {
   deriveResizeUpdates,
   getContainerInsertionTarget
 } from "./interactions";
+import {
+  createImageLoadManager,
+  type ImageLoadManager,
+  type ImageResourceState
+} from "./image-load-manager";
 import { renderSceneToCanvas } from "./render";
 import {
   createPaintRecords,
@@ -89,15 +94,6 @@ type AssetLoadState =
       requestId?: string;
       status: "error";
     };
-
-type ImageResourceState = Record<
-  string,
-  {
-    image: HTMLImageElement | null;
-    status: "error" | "loaded" | "loading";
-    url: string;
-  }
->;
 
 const PRESENCE_COLORS = [
   "#f97316",
@@ -488,6 +484,9 @@ export function PageEditorScreen(props: {
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasShellRef = useRef<HTMLDivElement | null>(null);
+  const imageLoadManagerRef = useRef<ImageLoadManager<HTMLImageElement> | null>(
+    null
+  );
   const imageUploadInputRef = useRef<HTMLInputElement | null>(null);
   const requestedMissingAssetKeyRef = useRef<string | null>(null);
   const sessionRef = useRef<EditorSession | null>(null);
@@ -537,6 +536,14 @@ export function PageEditorScreen(props: {
   const [resolvingCommentId, setResolvingCommentId] = useState<string | null>(
     null
   );
+
+  if (!imageLoadManagerRef.current) {
+    imageLoadManagerRef.current = createImageLoadManager({
+      createImage: () => new Image(),
+      updateResources: setImageResources
+    });
+  }
+
   const resizeVersion = useCanvasResizeVersion(canvasRef);
   const presenceParticipant = useMemo(
     () => createPresenceParticipant(props.currentUser),
@@ -544,6 +551,7 @@ export function PageEditorScreen(props: {
   );
 
   useEffect(() => {
+    imageLoadManagerRef.current?.clear();
     setSessionSnapshot({
       canRedo: false,
       canUndo: false,
@@ -597,6 +605,7 @@ export function PageEditorScreen(props: {
     session.connect();
 
     return () => {
+      imageLoadManagerRef.current?.clear();
       unsubscribe();
       session.destroy();
       sessionRef.current = null;
@@ -913,72 +922,12 @@ export function PageEditorScreen(props: {
   ]);
 
   useEffect(() => {
-    const activeLoads = referencedAssetIds
-      .map((assetId) => ({
-        asset: assetsById[assetId],
-        assetId
-      }))
-      .filter(
-        (entry): entry is { asset: AssetRecordDto; assetId: string } =>
-          entry.asset !== undefined
-      )
-      .filter((entry) => {
-        const existing = imageResources[entry.assetId];
-
-        return !existing || existing.url !== entry.asset.contentUrl;
-      });
-
-    if (activeLoads.length === 0) {
-      return;
-    }
-
-    const cleanups: Array<() => void> = [];
-
-    for (const entry of activeLoads) {
-      const image = new Image();
-
-      setImageResources((current) => ({
-        ...current,
-        [entry.assetId]: {
-          image: null,
-          status: "loading",
-          url: entry.asset.contentUrl
-        }
-      }));
-
-      image.onload = () => {
-        setImageResources((current) => ({
-          ...current,
-          [entry.assetId]: {
-            image,
-            status: "loaded",
-            url: entry.asset.contentUrl
-          }
-        }));
-      };
-      image.onerror = () => {
-        setImageResources((current) => ({
-          ...current,
-          [entry.assetId]: {
-            image: null,
-            status: "error",
-            url: entry.asset.contentUrl
-          }
-        }));
-      };
-      image.src = entry.asset.contentUrl;
-      cleanups.push(() => {
-        image.onload = null;
-        image.onerror = null;
-      });
-    }
-
-    return () => {
-      for (const cleanup of cleanups) {
-        cleanup();
-      }
-    };
-  }, [assetsById, imageResources, referencedAssetIds]);
+    imageLoadManagerRef.current?.sync({
+      assetsById,
+      imageResources,
+      referencedAssetIds
+    });
+  }, [assetsById, referencedAssetIds]);
 
   useEffect(() => {
     let cancelled = false;
