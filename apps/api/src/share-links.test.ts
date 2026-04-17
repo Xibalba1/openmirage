@@ -342,3 +342,58 @@ test("share link request helpers enforce writable access and resolve public shar
     t.skip("database unavailable");
   }
 });
+
+test("share link creation tolerates an invalid app base url by returning a null shareUrl", async (t) => {
+  const ran = await withDatabaseTransaction(async (client) => {
+    const ownerUserId = await insertUser(
+      client,
+      `share-invalid-url-${Date.now()}@example.com`,
+      "Share Owner"
+    );
+    const workspaceId = await insertWorkspace(
+      client,
+      "Share Invalid Url Workspace",
+      `share-invalid-url-${Date.now()}`
+    );
+
+    await insertMembership(client, workspaceId, ownerUserId, "owner");
+
+    const project = await createProject(
+      ownerUserId,
+      workspaceId,
+      "Share Invalid Url Project",
+      client as Parameters<typeof createProject>[3]
+    );
+    const file = await createFileWithPages(
+      ownerUserId,
+      workspaceId,
+      project?.id as string,
+      "Share Invalid Url File",
+      [{ name: "Page One" }],
+      client as Parameters<typeof createFileWithPages>[5]
+    );
+
+    const created = await resolveCreateShareLinkRequest(
+      createAuthContext(ownerUserId, workspaceId),
+      {
+        fileId: file?.file.id as string,
+        projectId: project?.id as string,
+        workspaceId
+      },
+      client,
+      "staging.openmirage.iankinskey.com"
+    );
+    assert.equal(created.status, 201);
+    if (created.status !== 201) {
+      throw new Error("expected share link create success");
+    }
+
+    const createdShareLink = created.body as CreatedShareLinkResponse;
+    assert.equal(createdShareLink.shareLink.shareUrl, null);
+    assert.equal(typeof createdShareLink.token, "string");
+  });
+
+  if (!ran) {
+    t.skip("database unavailable");
+  }
+});
