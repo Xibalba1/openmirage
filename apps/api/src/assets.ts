@@ -717,7 +717,7 @@ async function resolveAssetContentUrl(
   storage: StorageLike,
   context: AssetResponseContext
 ): Promise<string> {
-  if (context.storageProvider === "local") {
+  if (context.storageProvider !== "s3") {
     return createApiUrl(
       context.appBaseUrl,
       buildAssetContentPath({
