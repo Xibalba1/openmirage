@@ -63,6 +63,7 @@ import {
   type ActiveTextEdit,
   type EditorSession,
   type EditorSessionSnapshot,
+  type EditorSessionStatus,
   type Point,
   type ViewportState
 } from "./types";
@@ -82,7 +83,12 @@ type CommentLoadState =
 type AssetLoadState =
   | { assets: AssetRecordDto[]; status: "loaded" }
   | { assets: AssetRecordDto[]; status: "loading" }
-  | { assets: AssetRecordDto[]; message: string; status: "error" };
+  | {
+      assets: AssetRecordDto[];
+      message: string;
+      requestId?: string;
+      status: "error";
+    };
 
 type ImageResourceState = Record<
   string,
@@ -149,9 +155,23 @@ async function fetchEditorJson<T>(
     const failure = (await response.json().catch(() => ({}))) as {
       error?: string;
     };
-    throw new Error(
+    const error = new Error(
       failure.error ?? `Request failed with HTTP ${response.status}`
-    );
+    ) as Error & {
+      code?: string;
+      requestId?: string;
+      status?: number;
+    };
+
+    if (failure.error) {
+      error.code = failure.error;
+    }
+    const requestId = response.headers.get("x-request-id");
+    if (requestId) {
+      error.requestId = requestId;
+    }
+    error.status = response.status;
+    throw error;
   }
 
   return (await response.json()) as T;
@@ -176,9 +196,23 @@ async function uploadEditorAsset(
     const failure = (await response.json().catch(() => ({}))) as {
       error?: string;
     };
-    throw new Error(
+    const error = new Error(
       failure.error ?? `Request failed with HTTP ${response.status}`
-    );
+    ) as Error & {
+      code?: string;
+      requestId?: string;
+      status?: number;
+    };
+
+    if (failure.error) {
+      error.code = failure.error;
+    }
+    const requestId = response.headers.get("x-request-id");
+    if (requestId) {
+      error.requestId = requestId;
+    }
+    error.status = response.status;
+    throw error;
   }
 
   return (await response.json()) as AssetRecordDto;
@@ -195,6 +229,53 @@ async function fetchEditorAssets(
       method: "GET"
     }
   );
+}
+
+function readEditorRequestId(error: unknown): string | undefined {
+  return error instanceof Error &&
+    typeof (error as Error & { requestId?: string }).requestId === "string"
+    ? (error as Error & { requestId?: string }).requestId
+    : undefined;
+}
+
+function formatAssetErrorMessage(
+  error: unknown,
+  fallback: string
+): string {
+  const code =
+    error instanceof Error &&
+    typeof (error as Error & { code?: string }).code === "string"
+      ? (error as Error & { code?: string }).code
+      : null;
+
+  if (
+    code === "internal_error" ||
+    code === "storage_unavailable" ||
+    code === "upload_persist_failed"
+  ) {
+    return fallback;
+  }
+
+  return error instanceof Error ? error.message : String(error);
+}
+
+function createAssetErrorState(
+  assets: AssetRecordDto[],
+  message: string,
+  requestId?: string
+): Extract<AssetLoadState, { status: "error" }> {
+  return requestId
+    ? {
+        assets,
+        message,
+        requestId,
+        status: "error"
+      }
+    : {
+        assets,
+        message,
+        status: "error"
+      };
 }
 
 function createPresenceParticipant(
@@ -427,9 +508,11 @@ export function PageEditorScreen(props: {
   const [viewport, setViewport] = useState<ViewportState>(
     createInitialViewport
   );
-  const [collabStatus, setCollabStatus] = useState<
-    "connecting" | "connected" | "disconnected" | "error"
-  >("connecting");
+  const [collabStatus, setCollabStatus] = useState<EditorSessionStatus>({
+    attemptCount: 0,
+    lastFailureReason: null,
+    state: "connecting"
+  });
   const [activeScopeId, setActiveScopeId] = useState<string | null>(null);
   const [activeTextEdit, setActiveTextEdit] = useState<ActiveTextEdit | null>(
     null
@@ -475,6 +558,11 @@ export function PageEditorScreen(props: {
     setActiveScopeId(null);
     setActiveTextEdit(null);
     setActiveInteraction(null);
+    setCollabStatus({
+      attemptCount: 0,
+      lastFailureReason: null,
+      state: "connecting"
+    });
     setAssetLoadState({
       assets: [],
       status: "loading"
@@ -488,10 +576,12 @@ export function PageEditorScreen(props: {
           participant: presenceParticipant
         },
         transport: {
+          apiBaseUrl: props.collab.apiBaseUrl,
           collabWsPath: props.collab.collabWsPath,
           collabWsUrl: props.collab.collabWsUrl,
           location: {
             fileId: props.route.fileId,
+            projectId: props.route.projectId,
             pageId: props.route.pageId,
             workspaceId: props.route.workspaceId
           }
@@ -512,11 +602,13 @@ export function PageEditorScreen(props: {
       sessionRef.current = null;
     };
   }, [
+    props.collab.apiBaseUrl,
     props.collab.collabWsPath,
     props.collab.collabWsUrl,
     props.page.id,
     presenceParticipant,
     props.route.fileId,
+    props.route.projectId,
     props.route.pageId,
     props.route.workspaceId
   ]);
@@ -734,11 +826,16 @@ export function PageEditorScreen(props: {
           return;
         }
 
-        setAssetLoadState((current) => ({
-          assets: current.assets,
-          message: error instanceof Error ? error.message : String(error),
-          status: "error"
-        }));
+        setAssetLoadState((current) =>
+          createAssetErrorState(
+            current.assets,
+            formatAssetErrorMessage(
+              error,
+              "Assets couldn't be loaded. Refresh to retry."
+            ),
+            readEditorRequestId(error)
+          )
+        );
       }
     }
 
@@ -792,11 +889,16 @@ export function PageEditorScreen(props: {
           return;
         }
 
-        setAssetLoadState((current) => ({
-          assets: current.assets,
-          message: error instanceof Error ? error.message : String(error),
-          status: "error"
-        }));
+        setAssetLoadState((current) =>
+          createAssetErrorState(
+            current.assets,
+            formatAssetErrorMessage(
+              error,
+              "Assets couldn't be loaded. Refresh to retry."
+            ),
+            readEditorRequestId(error)
+          )
+        );
       });
 
     return () => {
@@ -1214,11 +1316,13 @@ export function PageEditorScreen(props: {
       insertImageAsset(asset);
       await refreshAssets();
     } catch (error) {
-      setAssetLoadState((current) => ({
-        assets: current.assets,
-        message: error instanceof Error ? error.message : String(error),
-        status: "error"
-      }));
+      setAssetLoadState((current) =>
+        createAssetErrorState(
+          current.assets,
+          formatAssetErrorMessage(error, "Image upload failed. Please retry."),
+          readEditorRequestId(error)
+        )
+      );
     } finally {
       setIsUploadingAsset(false);
       if (imageUploadInputRef.current) {
@@ -2075,7 +2179,7 @@ export function PageEditorScreen(props: {
         </div>
 
         <div className="editor-meta">
-          <span>Collab: {collabStatus}</span>
+          <span>Collab: {collabStatus.state}</span>
           <span>
             Assets:{" "}
             {assetLoadState.status === "error"
@@ -2111,7 +2215,12 @@ export function PageEditorScreen(props: {
           </div>
         </div>
         {assetLoadState.status === "error" ? (
-          <p className="muted">{assetLoadState.message}</p>
+          <p className="muted">
+            {assetLoadState.message}
+            {assetLoadState.requestId
+              ? ` Request ID: ${assetLoadState.requestId}`
+              : ""}
+          </p>
         ) : null}
 
         <div className="editor-canvas-shell" ref={canvasShellRef}>

@@ -156,10 +156,10 @@ async function verifyHttpSurface() {
     fail("/readyz did not report ready");
   }
 
-  const collabHealth = await expectOk("/collab/healthz");
+  const collabReady = await expectOk("/collab/readyz");
 
-  if (!collabHealth?.ok) {
-    fail("/collab/healthz did not report ok");
+  if (!collabReady?.ok || !collabReady?.ready) {
+    fail("/collab/readyz did not report ready");
   }
 
   const workerReady = await expectOk("/worker/readyz");

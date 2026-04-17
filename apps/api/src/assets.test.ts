@@ -202,6 +202,50 @@ test("detectRasterImageMimeType recognizes supported image signatures", () => {
   );
 });
 
+test("parseMultipartUpload rejects malformed multipart bodies", async () => {
+  await assert.rejects(
+    () =>
+      parseMultipartUpload({
+        contentTypeHeader: "multipart/form-data; boundary=broken",
+        stream: Readable.from(Buffer.from("--broken\r\nnot-valid"))
+      }),
+    (error: unknown) =>
+      error instanceof Error &&
+      (error as Error & { code?: string }).code === "invalid_multipart"
+  );
+});
+
+test("parseMultipartUpload rejects oversized files before buffering the tail", async () => {
+  const boundary = "openmirage-boundary";
+  const totalFileChunks = 20;
+  let emittedChunkCount = 0;
+  const oversizeBody = async function* (): AsyncGenerator<Buffer> {
+    emittedChunkCount += 1;
+    yield Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="hero.png"\r\nContent-Type: image/png\r\n\r\n`
+    );
+
+    for (let index = 0; index < totalFileChunks; index += 1) {
+      emittedChunkCount += 1;
+      yield Buffer.alloc(1024 * 1024, index);
+    }
+
+    emittedChunkCount += 1;
+    yield Buffer.from(`\r\n--${boundary}--\r\n`);
+  };
+
+  await assert.rejects(
+    () =>
+      parseMultipartUpload({
+        contentTypeHeader: `multipart/form-data; boundary=${boundary}`,
+        stream: Readable.from(oversizeBody())
+      }),
+    (error: unknown) =>
+      error instanceof Error && error.message === "payload_too_large"
+  );
+  assert.equal(emittedChunkCount < totalFileChunks + 2, true);
+});
+
 test("asset request helpers enforce auth, validation, storage writes, and list resolution", async (t) => {
   const ran = await withDatabaseTransaction(async (client) => {
     const userId = await insertUser(
@@ -444,6 +488,71 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
       Buffer.from(content.body.body).toString("base64"),
       Buffer.from(png).toString("base64")
     );
+
+    const storageFailure = new (class extends FakeStorage {
+      override async put(_input: {
+        body: Uint8Array;
+        contentType?: string;
+        key: string;
+      }): Promise<void> {
+        throw new Error("storage offline");
+      }
+    })();
+    const storageUnavailable = await resolveCreateAssetRequest(
+      createAuthContext(userId, workspaceId),
+      {
+        file: {
+          body: png,
+          filename: "hero.png",
+          mimeType: "image/png"
+        },
+        fileId,
+        projectId: project?.id as string,
+        scope: "file",
+        workspaceId
+      },
+      client,
+      storageFailure,
+      s3Context
+    );
+    assert.equal(storageUnavailable.status, 503);
+    assert.deepEqual(storageUnavailable.body, {
+      error: "storage_unavailable"
+    });
+
+    const failingClient = {
+      ...client,
+      async query<T>(sql: string, values?: unknown[]) {
+        if (sql.includes("insert into assets")) {
+          throw new Error("write failed");
+        }
+
+        return client.query<T>(sql, values);
+      }
+    } satisfies DatabaseClient;
+    const persistFailureStorage = new FakeStorage();
+    const persistFailure = await resolveCreateAssetRequest(
+      createAuthContext(userId, workspaceId),
+      {
+        file: {
+          body: png,
+          filename: "hero.png",
+          mimeType: "image/png"
+        },
+        fileId,
+        projectId: project?.id as string,
+        scope: "file",
+        workspaceId
+      },
+      failingClient,
+      persistFailureStorage,
+      s3Context
+    );
+    assert.equal(persistFailure.status, 500);
+    assert.deepEqual(persistFailure.body, {
+      error: "upload_persist_failed"
+    });
+    assert.equal(persistFailureStorage.objects.size, 0);
   });
 
   if (!ran) {
