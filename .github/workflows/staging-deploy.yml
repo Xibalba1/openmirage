@@ -197,7 +197,7 @@ jobs:
             -H 'Upgrade: websocket' \
             -H 'Sec-WebSocket-Key: SGVsbG8sIHdvcmxkIQ==' \
             -H 'Sec-WebSocket-Version: 13' \
-            "$base_url/collab" || true
+            "$base_url/collab?pageId=probe-page&fileId=probe-file&workspaceId=probe-workspace" || true
 
           grep -Eq '^HTTP/1\.1 (101|401)' "$headers_file"
           node ./scripts/verify-staging-deploy.mjs

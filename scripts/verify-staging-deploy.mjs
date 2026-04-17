@@ -18,6 +18,8 @@ if (!baseUrlInput) {
 
 const baseUrl = baseUrlInput.replace(/\/+$/, "");
 const baseOrigin = new URL(baseUrl).origin;
+const websocketProbeQuery =
+  "?pageId=probe-page&fileId=probe-file&workspaceId=probe-workspace";
 
 function createSmokePngBytes() {
   return Buffer.from(
@@ -349,7 +351,7 @@ function verifyWebsocketUpgrade() {
         "Sec-WebSocket-Key: SGVsbG8sIHdvcmxkIQ==",
         "-H",
         "Sec-WebSocket-Version: 13",
-        `${baseUrl}/collab`
+        `${baseUrl}/collab${websocketProbeQuery}`
       ],
       {
         cwd: process.cwd(),
