@@ -65,6 +65,7 @@ import {
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import {
   parseMultipartUpload,
+  registerRawMultipartParser,
   resolveAssetContentRequest,
   resolveCreateAssetRequest,
   resolveListAssetsRequest
@@ -436,6 +437,7 @@ async function startApiServer(): Promise<void> {
       return createRequestId(typeof header === "string" ? header : undefined);
     }
   });
+  registerRawMultipartParser(app);
 
   await app.register(cors, {
     origin: true,
@@ -491,13 +493,26 @@ async function startApiServer(): Promise<void> {
   });
 
   app.setErrorHandler(async (error, request, reply) => {
+    const errorStatusCode =
+      typeof (error as { statusCode?: unknown }).statusCode === "number"
+        ? (error as { statusCode: number }).statusCode
+        : undefined;
+    const statusCode =
+      errorStatusCode !== undefined &&
+      errorStatusCode >= 400 &&
+      errorStatusCode < 600
+        ? errorStatusCode
+        : reply.statusCode >= 400
+          ? reply.statusCode
+          : 500;
+
     logger.error(
       "request failed",
       createErrorLogFields(error, {
         method: request.method,
         path: request.url,
         requestId: request.id,
-        statusCode: reply.statusCode >= 400 ? reply.statusCode : 500
+        statusCode
       })
     );
     reporter.captureException(error, {
@@ -506,6 +521,17 @@ async function startApiServer(): Promise<void> {
     });
 
     if (!reply.sent) {
+      if (
+        error instanceof Error &&
+        (error as Error & { code?: string }).code ===
+          "FST_ERR_CTP_INVALID_MEDIA_TYPE"
+      ) {
+        reply.status(415).send({
+          error: "unsupported_media_type"
+        });
+        return;
+      }
+
       reply.status(500).send({
         error: "internal_error"
       });

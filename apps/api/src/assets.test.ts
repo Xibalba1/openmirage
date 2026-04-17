@@ -7,11 +7,13 @@ import {
   createProject
 } from "@openmirage/db";
 import { type AuthContext, type AssetRecordDto } from "@openmirage/types";
+import Fastify from "fastify";
 import {
   buildAssetContentPath,
   detectRasterImageMimeType,
   parseMultipartUpload,
   readImageDimensions,
+  registerRawMultipartParser,
   resolveAssetContentRequest,
   resolveCreateAssetRequest,
   resolveListAssetsRequest
@@ -244,6 +246,57 @@ test("parseMultipartUpload rejects oversized files before buffering the tail", a
       error instanceof Error && error.message === "payload_too_large"
   );
   assert.equal(emittedChunkCount < totalFileChunks + 2, true);
+});
+
+test("registerRawMultipartParser allows multipart uploads to reach route handlers", async () => {
+  const app = Fastify();
+  const boundary = "openmirage-boundary";
+  const png = createPngBytes();
+  const body = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="scope"\r\n\r\nfile\r\n`
+    ),
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="hero.png"\r\nContent-Type: image/png\r\n\r\n`
+    ),
+    Buffer.from(png),
+    Buffer.from(`\r\n--${boundary}--\r\n`)
+  ]);
+
+  registerRawMultipartParser(app);
+  app.post("/upload", async (request) => {
+    const parsed = await parseMultipartUpload({
+      contentTypeHeader:
+        typeof request.headers["content-type"] === "string"
+          ? request.headers["content-type"]
+          : undefined,
+      stream: request.raw
+    });
+
+    return {
+      filename: parsed.files[0]?.filename,
+      scope: parsed.fields.scope
+    };
+  });
+
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: "/upload",
+      headers: {
+        "content-type": `multipart/form-data; boundary=${boundary}`
+      },
+      payload: body
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json(), {
+      filename: "hero.png",
+      scope: "file"
+    });
+  } finally {
+    await app.close();
+  }
 });
 
 test("asset request helpers enforce auth, validation, storage writes, and list resolution", async (t) => {
