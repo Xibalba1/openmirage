@@ -351,6 +351,10 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
       appBaseUrl: "https://app.test",
       storageProvider: "local"
     } as const;
+    const minioContext = {
+      appBaseUrl: "https://app.test",
+      storageProvider: "minio"
+    } as const;
 
     const unauthenticatedList = await resolveListAssetsRequest(
       null,
@@ -510,6 +514,39 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
 
     assert.deepEqual(
       listed.body.assets.map((asset) => ({
+        contentUrl: asset.contentUrl,
+        filename: asset.filename
+      })),
+      [
+        {
+          contentUrl: createdAsset.contentUrl,
+          filename: "hero.png"
+        }
+      ]
+    );
+
+    const listedViaMinio = await resolveListAssetsRequest(
+      createAuthContext(userId, workspaceId),
+      {
+        fileId,
+        includeWorkspaceAssets: true,
+        projectId: project?.id as string,
+        workspaceId
+      },
+      client,
+      storage,
+      minioContext
+    );
+    assert.equal(listedViaMinio.status, 200);
+    if (listedViaMinio.status !== 200) {
+      throw new Error("expected asset list success for minio-backed assets");
+    }
+    if (!("assets" in listedViaMinio.body)) {
+      throw new Error("expected asset list payload for minio-backed assets");
+    }
+
+    assert.deepEqual(
+      listedViaMinio.body.assets.map((asset) => ({
         contentUrl: asset.contentUrl,
         filename: asset.filename
       })),
