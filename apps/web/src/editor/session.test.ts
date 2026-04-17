@@ -361,6 +361,40 @@ test("editor session commit, undo, and redo track one local command at a time", 
   }
 });
 
+test("read-only editor sessions block commit, undo, and redo", () => {
+  const doc = new Y.Doc();
+  writePageDocument(doc, createDocument());
+  const session = createEditorSession({
+    accessMode: "read-only",
+    doc,
+    pageId: "page-1"
+  });
+
+  try {
+    assert.equal(
+      session.commit({
+        pageId: "page-1",
+        type: "move-node",
+        updates: [
+          {
+            height: 80,
+            nodeId: "rect",
+            width: 120,
+            x: 80,
+            y: 90
+          }
+        ]
+      }),
+      false
+    );
+    assert.equal(session.undo(), false);
+    assert.equal(session.redo(), false);
+    assert.equal(session.getSnapshot().document.nodes.rect?.x, 20);
+  } finally {
+    session.destroy();
+  }
+});
+
 test("image node commits persist asset references without embedded binary payloads", () => {
   const doc = new Y.Doc();
   writePageDocument(doc, createDocument());

@@ -6,14 +6,21 @@ import {
   createComment,
   createDatabasePool,
   createFileWithPages,
+  createFileShareLink,
   createPage,
+  getFileOpenDetails,
   getAuthorizedCollabPageSession,
   getAuthorizedAsset,
+  getSharedCollabPageSession,
+  getSharedFileOpenDetails,
   listAuthorizedWorkspaces,
+  listFileShareLinks,
+  listSharedAssets,
   listAssets,
   listComments,
   listWorkspaceProjects,
   resolveComment,
+  revokeFileShareLink,
   renameProject
 } from "./index.js";
 
@@ -370,6 +377,191 @@ test("getAuthorizedCollabPageSession stays page/file/workspace scoped", async (t
       client
     );
     assert.equal(nonMember, null);
+  });
+
+  if (!ran) {
+    t.skip("database unavailable");
+  }
+});
+
+test("viewer access stays read-only while owner share links resolve shared file, assets, and collab sessions", async (t) => {
+  const ran = await withDatabaseTransaction(async (client) => {
+    const ownerUserId = await insertUser(
+      client,
+      `share-owner-${Date.now()}@example.com`,
+      "Share Owner"
+    );
+    const viewerUserId = await insertUser(
+      client,
+      `share-viewer-${Date.now()}@example.com`,
+      "Share Viewer"
+    );
+    const workspaceId = await insertWorkspace(
+      client,
+      "Share Workspace",
+      `share-${Date.now()}`
+    );
+
+    await insertMembership(client, workspaceId, ownerUserId, "owner");
+    await insertMembership(client, workspaceId, viewerUserId, "viewer");
+
+    const projectId = await insertProject(client, workspaceId, "Share Project");
+    const file = await createFileWithPages(
+      ownerUserId,
+      workspaceId,
+      projectId,
+      "Shared File",
+      [{ name: "Page A" }],
+      client
+    );
+
+    const fileId = file?.file.id as string;
+    const pageId = file?.pages[0]?.id as string;
+
+    const viewerFileOpen = await getFileOpenDetails(
+      viewerUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      client
+    );
+    assert.equal(viewerFileOpen?.access.mode, "read-only");
+    assert.equal(viewerFileOpen?.access.role, "viewer");
+    assert.equal(viewerFileOpen?.access.canMutate, false);
+
+    const blockedViewerPage = await createPage(
+      viewerUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      "Blocked Page",
+      client
+    );
+    assert.equal(blockedViewerPage, null);
+
+    const blockedViewerComment = await createComment(
+      viewerUserId,
+      workspaceId,
+      projectId,
+      {
+        body: "Should fail",
+        target: {
+          fileId,
+          pageId,
+          type: "page"
+        }
+      },
+      client
+    );
+    assert.equal(blockedViewerComment, null);
+
+    const blockedViewerAsset = await createAsset(
+      viewerUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      {
+        byteSize: 128,
+        filename: "blocked.png",
+        height: 32,
+        kind: "image",
+        mimeType: "image/png",
+        scope: "file",
+        storageKey: "blocked",
+        width: 32
+      },
+      client
+    );
+    assert.equal(blockedViewerAsset, null);
+
+    const blockedViewerShareList = await listFileShareLinks(
+      viewerUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      client
+    );
+    assert.equal(blockedViewerShareList, null);
+
+    const workspaceAsset = await createAsset(
+      ownerUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      {
+        byteSize: 256,
+        filename: "shared.png",
+        height: 64,
+        kind: "image",
+        mimeType: "image/png",
+        scope: "workspace",
+        storageKey: "shared-asset",
+        width: 64
+      },
+      client
+    );
+    assert.ok(workspaceAsset);
+
+    const createdShareLink = await createFileShareLink(
+      ownerUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      client
+    );
+    assert.ok(createdShareLink);
+    assert.equal(createdShareLink?.shareLink.fileId, fileId);
+
+    const listedShareLinks = await listFileShareLinks(
+      ownerUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      client
+    );
+    assert.equal(listedShareLinks?.length, 1);
+    assert.equal(listedShareLinks?.[0]?.id, createdShareLink?.shareLink.id);
+
+    const sharedOpen = await getSharedFileOpenDetails(
+      createdShareLink?.token as string,
+      client
+    );
+    assert.equal(sharedOpen?.access.mode, "read-only");
+    assert.equal(sharedOpen?.access.source, "share-link");
+    assert.equal(sharedOpen?.file.id, fileId);
+    assert.equal(sharedOpen?.defaultPageId, pageId);
+
+    const sharedAssets = await listSharedAssets(
+      createdShareLink?.token as string,
+      client
+    );
+    assert.equal(sharedAssets?.length, 1);
+    assert.equal(sharedAssets?.[0]?.id, workspaceAsset?.id);
+
+    const sharedSession = await getSharedCollabPageSession(
+      createdShareLink?.token as string,
+      pageId,
+      client
+    );
+    assert.equal(sharedSession?.access.mode, "read-only");
+    assert.equal(sharedSession?.fileId, fileId);
+    assert.equal(sharedSession?.pageId, pageId);
+
+    const revoked = await revokeFileShareLink(
+      ownerUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      createdShareLink?.shareLink.id as string,
+      client
+    );
+    assert.ok(revoked?.revokedAt);
+
+    const revokedOpen = await getSharedFileOpenDetails(
+      createdShareLink?.token as string,
+      client
+    );
+    assert.equal(revokedOpen, null);
   });
 
   if (!ran) {

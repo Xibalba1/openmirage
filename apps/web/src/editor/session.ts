@@ -1,4 +1,5 @@
 import type {
+  EditorAccessMode,
   EditorCommand,
   PageDocumentDto,
   PresencePayload
@@ -39,6 +40,7 @@ const RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 5_000;
 
 interface CollabSessionPreflightSuccess {
+  accessMode?: EditorAccessMode;
   documentName: string;
 }
 
@@ -211,6 +213,7 @@ export function writePageDocument(doc: Y.Doc, document: PageDocumentDto): void {
 }
 
 interface SessionInput {
+  accessMode?: EditorAccessMode;
   doc?: Y.Doc;
   pageId: string;
   presence?: EditorPresenceIdentity | undefined;
@@ -238,12 +241,16 @@ async function resolveCollabSessionPreflight(input: {
     );
 
     if (response.ok) {
-      const payload = (await response.json()) as { documentName?: string };
+      const payload = (await response.json()) as {
+        access?: { mode?: EditorAccessMode };
+        documentName?: string;
+      };
       return {
         documentName:
           typeof payload.documentName === "string"
             ? payload.documentName
-            : createCollabDocumentName(input.location.pageId)
+            : createCollabDocumentName(input.location.pageId),
+        ...(payload.access?.mode ? { accessMode: payload.access.mode } : {})
       };
     }
 
@@ -281,6 +288,7 @@ export function createEditorSession(
   let pendingCursor: Point | null | undefined;
   let isSocketAuthenticated = false;
   let isBootstrapping = false;
+  let isReadOnly = input.accessMode === "read-only";
   let authDenied = false;
   let attemptCount = 0;
   let lastFailureReason: string | null = null;
@@ -521,6 +529,10 @@ export function createEditorSession(
         return;
       }
 
+      if (preflight.accessMode) {
+        isReadOnly = preflight.accessMode === "read-only";
+      }
+
       let activeSocket: WebSocket;
 
       try {
@@ -668,6 +680,10 @@ export function createEditorSession(
   }
 
   function commit(command: EditorCommand): boolean {
+    if (isReadOnly) {
+      return false;
+    }
+
     const before = snapshot.document;
     const after = applyEditorCommand(before, command);
 
@@ -686,6 +702,10 @@ export function createEditorSession(
   }
 
   function undo(): boolean {
+    if (isReadOnly) {
+      return false;
+    }
+
     const entry = past.pop();
 
     if (!entry) {
@@ -698,6 +718,10 @@ export function createEditorSession(
   }
 
   function redo(): boolean {
+    if (isReadOnly) {
+      return false;
+    }
+
     const entry = future.pop();
 
     if (!entry) {

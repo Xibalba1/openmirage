@@ -6,6 +6,10 @@ import {
   type ListCommentsInput,
   type ResolveCommentInput
 } from "@openmirage/types";
+import {
+  hasWorkspaceMembership,
+  hasWritableWorkspaceAccess
+} from "./access.js";
 
 interface QueryableDatabase {
   query<T>(sql: string, values?: unknown[]): Promise<{ rows: T[] }>;
@@ -56,15 +60,6 @@ export interface CommentMutationResolution {
     | CommentDto
     | { error: "forbidden" | "not_found" | "unauthenticated" };
   status: 200 | 201 | 400 | 401 | 403 | 404;
-}
-
-function hasWorkspaceMembership(
-  authContext: AuthContext,
-  workspaceId: string
-): boolean {
-  return authContext.memberships.some(
-    (membership) => membership.workspaceId === workspaceId
-  );
 }
 
 function readNonEmptyString(value: unknown): string | null {
@@ -259,7 +254,7 @@ export async function resolveCreateCommentRequest(
     };
   }
 
-  if (!hasWorkspaceMembership(authContext, request.workspaceId)) {
+  if (!hasWritableWorkspaceAccess(authContext, request.workspaceId)) {
     return {
       body: { error: "forbidden" },
       status: 403
@@ -308,7 +303,7 @@ export async function resolveResolveCommentRequest(
     };
   }
 
-  if (!hasWorkspaceMembership(authContext, request.workspaceId)) {
+  if (!hasWritableWorkspaceAccess(authContext, request.workspaceId)) {
     return {
       body: { error: "forbidden" },
       status: 403

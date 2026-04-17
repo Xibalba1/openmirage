@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { createAsset, getAuthorizedAsset, listAssets } from "@openmirage/db";
+import {
+  createAsset,
+  getAuthorizedAsset,
+  getSharedAsset,
+  listAssets,
+  listSharedAssets
+} from "@openmirage/db";
 import {
   type AssetDto,
   type StorageProviderKind,
@@ -10,6 +16,10 @@ import {
   type ListAssetsResponse
 } from "@openmirage/types";
 import type { FastifyInstance } from "fastify";
+import {
+  hasWorkspaceMembership,
+  hasWritableWorkspaceAccess
+} from "./access.js";
 
 const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
@@ -72,6 +82,11 @@ export interface AssetContentRequest {
   workspaceId: string;
 }
 
+export interface SharedAssetRequest {
+  assetId?: string;
+  token: string;
+}
+
 export type AssetDeliveryMode = "direct" | "proxy";
 
 export interface AssetResponseContext {
@@ -131,15 +146,6 @@ export type AssetContentResolution =
       status: 401 | 403 | 404;
     };
 
-function hasWorkspaceMembership(
-  authContext: AuthContext,
-  workspaceId: string
-): boolean {
-  return authContext.memberships.some(
-    (membership) => membership.workspaceId === workspaceId
-  );
-}
-
 function readNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -196,6 +202,10 @@ export function registerRawMultipartParser(app: FastifyInstance): void {
 
 export function buildAssetContentPath(input: AssetContentRequest): string {
   return `/v1/workspaces/${encodeURIComponent(input.workspaceId)}/projects/${encodeURIComponent(input.projectId)}/files/${encodeURIComponent(input.fileId)}/assets/${encodeURIComponent(input.assetId)}/content`;
+}
+
+export function buildSharedAssetContentPath(token: string, assetId: string): string {
+  return `/v1/share-links/${encodeURIComponent(token)}/assets/${encodeURIComponent(assetId)}/content`;
 }
 
 function readByte(body: Uint8Array, index: number): number {
@@ -868,7 +878,7 @@ export async function resolveCreateAssetRequest(
     };
   }
 
-  if (!hasWorkspaceMembership(authContext, request.workspaceId)) {
+  if (!hasWritableWorkspaceAccess(authContext, request.workspaceId)) {
     return {
       body: { error: "forbidden" },
       status: 403
@@ -1039,6 +1049,86 @@ export async function resolveAssetContentRequest(
     request.fileId,
     request.assetId,
     databasePool as Parameters<typeof getAuthorizedAsset>[5]
+  );
+
+  if (!asset) {
+    return {
+      body: { error: "not_found" },
+      status: 404
+    };
+  }
+
+  try {
+    const storedObject = await storage.read(asset.storageKey);
+
+    return {
+      body: {
+        body: storedObject.body,
+        cacheControl: "private, max-age=60",
+        contentType:
+          asset.mimeType || storedObject.contentType || "application/octet-stream"
+      },
+      status: 200
+    };
+  } catch (error) {
+    if (isMissingStorageObjectError(error)) {
+      return {
+        body: { error: "not_found" },
+        status: 404
+      };
+    }
+
+    throw error;
+  }
+}
+
+export async function resolveListSharedAssetsRequest(
+  request: Pick<SharedAssetRequest, "token">,
+  databasePool: QueryableDatabase,
+  storage: StorageLike,
+  context: AssetResponseContext
+): Promise<AssetListResolution> {
+  const assets = await listSharedAssets(
+    request.token,
+    databasePool as Parameters<typeof listSharedAssets>[1]
+  );
+
+  if (!assets) {
+    return {
+      body: { error: "not_found" },
+      status: 404
+    };
+  }
+
+  return {
+    body: {
+      assets: await Promise.all(
+        assets.map(async (asset) => ({
+          ...asset,
+          contentUrl:
+            context.assetDeliveryMode === "proxy"
+              ? createApiUrl(
+                  context.appBaseUrl,
+                  buildSharedAssetContentPath(request.token, asset.id)
+                )
+              : await storage.resolveDownloadUrl(asset.storageKey)
+        })
+        )
+      )
+    },
+    status: 200
+  };
+}
+
+export async function resolveSharedAssetContentRequest(
+  request: Required<Pick<SharedAssetRequest, "assetId" | "token">>,
+  databasePool: QueryableDatabase,
+  storage: StorageLike
+): Promise<AssetContentResolution> {
+  const asset = await getSharedAsset(
+    request.token,
+    request.assetId,
+    databasePool as Parameters<typeof getSharedAsset>[2]
   );
 
   if (!asset) {

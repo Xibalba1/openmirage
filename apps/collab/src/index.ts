@@ -1,8 +1,5 @@
 import { Hocuspocus } from "@hocuspocus/server";
-import {
-  createSessionContract,
-  readSessionTokenFromCookie
-} from "@openmirage/auth";
+import { createSessionContract } from "@openmirage/auth";
 import { readCollabEnv } from "@openmirage/config-env";
 import { checkDatabaseConnection, createDatabasePool } from "@openmirage/db";
 import {
@@ -26,6 +23,7 @@ import {
   rewriteRequestUrlWithDocumentName
 } from "./collab-auth.js";
 import { PgCollabPersistence } from "./persistence.js";
+import { assertSyncAllowedForAccess } from "./read-only-guard.js";
 import { inspectApiDependency } from "./readiness.js";
 
 async function createCollabHealthStatus(
@@ -123,9 +121,6 @@ function writeUpgradeError(
 
 async function startCollabServer(): Promise<void> {
   const env = readCollabEnv();
-  const sessionContract = createSessionContract({
-    sessionCookieName: env.sessionCookieName
-  });
   const logger = createServiceLogger({
     service: "collab",
     environment: env.environment,
@@ -212,9 +207,43 @@ async function startCollabServer(): Promise<void> {
         socketId: data.socketId
       });
     },
+    async onAuthenticate(data) {
+      const authorized = await authorizeCollabConnection(
+        readCollabConnectionRequest(data.requestParameters),
+        {
+          apiBaseUrl: env.apiBaseUrl,
+          cookieHeader:
+            typeof data.requestHeaders.cookie === "string"
+              ? data.requestHeaders.cookie
+              : ""
+        }
+      );
+
+      if (!authorized.ok) {
+        const error = new Error(authorized.reason) as Error & {
+          reason?: string;
+        };
+        error.reason = authorized.reason;
+        throw error;
+      }
+
+      data.connectionConfig.readOnly =
+        authorized.session.access.mode === "read-only";
+
+      return {
+        access: authorized.session.access,
+        user: authorized.session.user
+      };
+    },
     async connected(data) {
       syncRealtimeMetrics();
       logger.info("collab document session established", {
+        accessMode:
+          (
+            data.context as {
+              access?: { mode?: string };
+            }
+          ).access?.mode ?? "unknown",
         documentName: data.documentName,
         socketId: data.socketId
       });
@@ -235,6 +264,12 @@ async function startCollabServer(): Promise<void> {
         socketId: data.socketId
       });
       return loaded.document;
+    },
+    async beforeSync(data) {
+      assertSyncAllowedForAccess({
+        connection: data.connection,
+        type: data.type
+      });
     },
     async onChange(data) {
       const pageId = readPageIdFromDocumentName(data.documentName);
@@ -387,25 +422,12 @@ async function startCollabServer(): Promise<void> {
       return;
     }
 
-    const sessionToken = readSessionTokenFromCookie(
-      request.headers.cookie,
-      sessionContract
-    );
     const connectionRequest = readCollabConnectionRequest(
       requestUrl.searchParams
     );
     const documentName = connectionRequest.documentName ?? "unknown";
     const workspaceId = connectionRequest.workspaceId;
 
-    if (!sessionToken) {
-      writeUpgradeError(socket, 401);
-      logger.warn("collab websocket rejected", {
-        connectionReason: "missing-session-cookie",
-        documentName,
-        workspaceId
-      });
-      return;
-    }
     const authorized = await authorizeCollabConnection(connectionRequest, {
       apiBaseUrl: env.apiBaseUrl,
       cookieHeader: request.headers.cookie ?? ""
@@ -444,6 +466,7 @@ async function startCollabServer(): Promise<void> {
       syncRealtimeMetrics();
       logger.info("collab websocket accepted", {
         authenticated: true,
+        accessMode: authorized.session.access.mode,
         connectionId,
         documentName: canonicalDocumentName,
         fileId: authorized.session.fileId,
@@ -465,6 +488,7 @@ async function startCollabServer(): Promise<void> {
       });
 
       hocuspocus.handleConnection(websocket, request, {
+        access: authorized.session.access,
         connectedAt: new Date().toISOString(),
         user: authorized.session.user
       });

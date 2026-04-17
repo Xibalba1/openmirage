@@ -1,13 +1,13 @@
-import {
-  randomUUID,
-} from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   type AssetDto,
   type CollabPageSessionDto,
   type CommentDto,
   type CreateAssetInput,
+  type CreatedShareLinkResponse,
   type CreateCommentInput,
   type CreateFilePageInput,
+  createEditorAccess,
   type FileDto,
   type FileOpenResponse,
   type ListCommentsInput,
@@ -15,7 +15,11 @@ import {
   type PageDto,
   type ProjectDto,
   type ResolveCommentInput,
+  type ShareLinkDto,
+  type ShareLinkRecordDto,
+  type SharedFileOpenResponse,
   type WorkspaceDetailDto,
+  type WorkspaceDto,
   createCollabDocumentName
 } from "@openmirage/types";
 import { type Pool, type PoolClient } from "pg";
@@ -86,11 +90,47 @@ interface AssetRow {
 interface AuthorizedCollabPageRow {
   file_id: string;
   page_id: string;
+  role: WorkspaceDetailDto["role"];
   user_avatar_url: string | null;
   user_display_name: string;
   user_email: string;
   user_id: string;
   workspace_id: string;
+}
+
+interface ShareLinkRow {
+  created_at: Date;
+  created_by_user_id: string;
+  expires_at: Date | null;
+  file_id: string;
+  id: string;
+  revoked_at: Date | null;
+}
+
+interface ShareLinkAccessRow {
+  file_created_at: Date;
+  file_created_by_user_id: string;
+  file_deleted_at: Date | null;
+  file_description: string | null;
+  file_id: string;
+  file_name: string;
+  file_project_id: string;
+  file_updated_at: Date;
+  file_workspace_id: string;
+  project_created_at: Date;
+  project_deleted_at: Date | null;
+  project_description: string | null;
+  project_id: string;
+  project_name: string;
+  project_updated_at: Date;
+  project_workspace_id: string;
+  share_link_id: string;
+  workspace_created_at: Date;
+  workspace_deleted_at: Date | null;
+  workspace_id: string;
+  workspace_name: string;
+  workspace_slug: string;
+  workspace_updated_at: Date;
 }
 
 interface CommentRow {
@@ -200,6 +240,35 @@ function mapComment(row: CommentRow): CommentDto {
   };
 }
 
+function mapShareLink(row: ShareLinkRow): ShareLinkDto {
+  return {
+    createdAt: row.created_at.toISOString(),
+    createdByUserId: row.created_by_user_id,
+    expiresAt: row.expires_at?.toISOString() ?? null,
+    fileId: row.file_id,
+    id: row.id,
+    revokedAt: row.revoked_at?.toISOString() ?? null
+  };
+}
+
+function mapShareLinkRecord(
+  row: ShareLinkRow,
+  shareUrl: string | null
+): ShareLinkRecordDto {
+  return {
+    ...mapShareLink(row),
+    shareUrl
+  };
+}
+
+function hashShareToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function createShareToken(): string {
+  return randomBytes(24).toString("base64url");
+}
+
 function requireClient(poolOrClient?: Pool | PoolClient): Pool | PoolClient {
   return poolOrClient ?? createDatabasePool();
 }
@@ -258,6 +327,13 @@ async function getAuthorizedWorkspaceRow(
   );
 
   return result.rows[0] ?? null;
+}
+
+function canMutateWorkspace(role: WorkspaceDetailDto["role"]): boolean {
+  return createEditorAccess({
+    role,
+    source: "membership"
+  }).canMutate;
 }
 
 async function getProjectRow(
@@ -453,7 +529,7 @@ export async function createProject(
       client
     );
 
-    if (!workspace) {
+    if (!workspace || !canMutateWorkspace(workspace.role)) {
       return null;
     }
 
@@ -498,6 +574,7 @@ export async function renameProject(
           from memberships
           where memberships.workspace_id = projects.workspace_id
             and memberships.user_id = $1
+            and memberships.role in ('owner', 'editor')
         )
       returning
         created_at,
@@ -592,7 +669,7 @@ export async function createFileWithPages(
       client
     );
 
-    if (!workspace) {
+    if (!workspace || !canMutateWorkspace(workspace.role)) {
       return null;
     }
 
@@ -644,6 +721,10 @@ export async function createFileWithPages(
     }
 
     return {
+      access: createEditorAccess({
+        role: workspace.role,
+        source: "membership"
+      }),
       defaultPageId: pages[0]?.id ?? null,
       file: mapFile(file),
       pages,
@@ -676,6 +757,7 @@ export async function renameFile(
           from memberships
           where memberships.workspace_id = files.workspace_id
             and memberships.user_id = $1
+            and memberships.role in ('owner', 'editor')
         )
       returning
         created_at,
@@ -756,6 +838,10 @@ export async function getFileOpenDetails(
   const pages = result.rows.map(mapPage);
 
   return {
+    access: createEditorAccess({
+      role: workspace.role,
+      source: "membership"
+    }),
     defaultPageId: pages[0]?.id ?? null,
     file: mapFile(file),
     pages,
@@ -800,6 +886,7 @@ export async function createPage(
   poolOrClient?: Pool | PoolClient
 ): Promise<PageDto | null> {
   return withTransaction(poolOrClient, async (client) => {
+    const workspace = await getAuthorizedWorkspaceRow(userId, workspaceId, client);
     const file = await getFileRow(
       userId,
       workspaceId,
@@ -808,7 +895,7 @@ export async function createPage(
       client
     );
 
-    if (!file) {
+    if (!file || !workspace || !canMutateWorkspace(workspace.role)) {
       return null;
     }
 
@@ -870,6 +957,7 @@ export async function renamePage(
             and files.project_id = $3
             and files.deleted_at is null
             and memberships.user_id = $1
+            and memberships.role in ('owner', 'editor')
         )
       returning
         background,
@@ -947,9 +1035,10 @@ export async function createAsset(
   poolOrClient?: Pool | PoolClient
 ): Promise<AssetDto | null> {
   return withTransaction(poolOrClient, async (client) => {
+    const workspace = await getAuthorizedWorkspaceRow(userId, workspaceId, client);
     const file = await getFileRow(userId, workspaceId, projectId, fileId, client);
 
-    if (!file) {
+    if (!file || !workspace || !canMutateWorkspace(workspace.role)) {
       return null;
     }
 
@@ -1137,6 +1226,12 @@ export async function createComment(
   poolOrClient?: Pool | PoolClient
 ): Promise<CommentDto | null> {
   const db = requireClient(poolOrClient);
+  const workspace = await getAuthorizedWorkspaceRow(userId, workspaceId, db);
+
+  if (!workspace || !canMutateWorkspace(workspace.role)) {
+    return null;
+  }
+
   const file = await getFileRow(
     userId,
     workspaceId,
@@ -1224,6 +1319,12 @@ export async function resolveComment(
   poolOrClient?: Pool | PoolClient
 ): Promise<CommentDto | null> {
   const db = requireClient(poolOrClient);
+  const workspace = await getAuthorizedWorkspaceRow(userId, workspaceId, db);
+
+  if (!workspace || !canMutateWorkspace(workspace.role)) {
+    return null;
+  }
+
   const file = await getFileRow(
     userId,
     workspaceId,
@@ -1266,6 +1367,406 @@ export async function resolveComment(
   return result.rows[0] ? mapComment(result.rows[0]) : null;
 }
 
+function mapFileFromShareLinkAccess(row: ShareLinkAccessRow): FileDto {
+  return {
+    createdAt: row.file_created_at.toISOString(),
+    createdByUserId: row.file_created_by_user_id,
+    deletedAt: row.file_deleted_at?.toISOString() ?? null,
+    description: row.file_description,
+    id: row.file_id,
+    name: row.file_name,
+    projectId: row.file_project_id,
+    updatedAt: row.file_updated_at.toISOString(),
+    workspaceId: row.file_workspace_id
+  };
+}
+
+function mapProjectFromShareLinkAccess(row: ShareLinkAccessRow): ProjectDto {
+  return {
+    createdAt: row.project_created_at.toISOString(),
+    deletedAt: row.project_deleted_at?.toISOString() ?? null,
+    description: row.project_description,
+    id: row.project_id,
+    name: row.project_name,
+    updatedAt: row.project_updated_at.toISOString(),
+    workspaceId: row.project_workspace_id
+  };
+}
+
+function mapWorkspaceFromShareLinkAccess(row: ShareLinkAccessRow): WorkspaceDto {
+  return {
+    createdAt: row.workspace_created_at.toISOString(),
+    deletedAt: row.workspace_deleted_at?.toISOString() ?? null,
+    id: row.workspace_id,
+    name: row.workspace_name,
+    slug: row.workspace_slug,
+    updatedAt: row.workspace_updated_at.toISOString()
+  };
+}
+
+async function getShareLinkAccessRow(
+  token: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<ShareLinkAccessRow | null> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<ShareLinkAccessRow>(
+    `
+      select
+        files.created_at as file_created_at,
+        files.created_by_user_id as file_created_by_user_id,
+        files.deleted_at as file_deleted_at,
+        files.description as file_description,
+        files.id as file_id,
+        files.name as file_name,
+        files.project_id as file_project_id,
+        files.updated_at as file_updated_at,
+        files.workspace_id as file_workspace_id,
+        projects.created_at as project_created_at,
+        projects.deleted_at as project_deleted_at,
+        projects.description as project_description,
+        projects.id as project_id,
+        projects.name as project_name,
+        projects.updated_at as project_updated_at,
+        projects.workspace_id as project_workspace_id,
+        share_links.id as share_link_id,
+        workspaces.created_at as workspace_created_at,
+        workspaces.deleted_at as workspace_deleted_at,
+        workspaces.id as workspace_id,
+        workspaces.name as workspace_name,
+        workspaces.slug as workspace_slug,
+        workspaces.updated_at as workspace_updated_at
+      from share_links
+      inner join files
+        on files.id = share_links.file_id
+      inner join projects
+        on projects.id = files.project_id
+      inner join workspaces
+        on workspaces.id = files.workspace_id
+      where share_links.token_hash = $1
+        and share_links.revoked_at is null
+        and (share_links.expires_at is null or share_links.expires_at > now())
+        and files.deleted_at is null
+        and projects.deleted_at is null
+        and workspaces.deleted_at is null
+      limit 1
+    `,
+    [hashShareToken(token)]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function listPagesForFile(
+  fileId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<PageDto[]> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<PageRow>(
+    `
+      select
+        background,
+        created_at,
+        file_id,
+        height,
+        id,
+        name,
+        order_index,
+        updated_at,
+        width
+      from pages
+      where file_id = $1
+      order by order_index asc, created_at asc, id asc
+    `,
+    [fileId]
+  );
+
+  return result.rows.map(mapPage);
+}
+
+export async function listFileShareLinks(
+  userId: string,
+  workspaceId: string,
+  projectId: string,
+  fileId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<ShareLinkRecordDto[] | null> {
+  const workspace = await getAuthorizedWorkspaceRow(
+    userId,
+    workspaceId,
+    poolOrClient
+  );
+  const file = await getFileRow(
+    userId,
+    workspaceId,
+    projectId,
+    fileId,
+    poolOrClient
+  );
+
+  if (!workspace || !canMutateWorkspace(workspace.role) || !file) {
+    return null;
+  }
+
+  const db = requireClient(poolOrClient);
+  const result = await db.query<ShareLinkRow>(
+    `
+      select
+        created_at,
+        created_by_user_id,
+        expires_at,
+        file_id,
+        id,
+        revoked_at
+      from share_links
+      where file_id = $1
+      order by created_at desc, id desc
+    `,
+    [fileId]
+  );
+
+  return result.rows.map((row) => mapShareLinkRecord(row, null));
+}
+
+export async function createFileShareLink(
+  userId: string,
+  workspaceId: string,
+  projectId: string,
+  fileId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<CreatedShareLinkResponse | null> {
+  return withTransaction(poolOrClient, async (client) => {
+    const workspace = await getAuthorizedWorkspaceRow(userId, workspaceId, client);
+    const file = await getFileRow(userId, workspaceId, projectId, fileId, client);
+
+    if (!workspace || !canMutateWorkspace(workspace.role) || !file) {
+      return null;
+    }
+
+    const token = createShareToken();
+    const inserted = await client.query<ShareLinkRow>(
+      `
+        insert into share_links (file_id, token_hash, created_by_user_id)
+        values ($1, $2, $3)
+        returning
+          created_at,
+          created_by_user_id,
+          expires_at,
+          file_id,
+          id,
+          revoked_at
+      `,
+      [fileId, hashShareToken(token), userId]
+    );
+
+    return {
+      shareLink: mapShareLinkRecord(inserted.rows[0] as ShareLinkRow, null),
+      token
+    };
+  });
+}
+
+export async function revokeFileShareLink(
+  userId: string,
+  workspaceId: string,
+  projectId: string,
+  fileId: string,
+  shareLinkId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<ShareLinkDto | null> {
+  const workspace = await getAuthorizedWorkspaceRow(
+    userId,
+    workspaceId,
+    poolOrClient
+  );
+  const file = await getFileRow(
+    userId,
+    workspaceId,
+    projectId,
+    fileId,
+    poolOrClient
+  );
+
+  if (!workspace || !canMutateWorkspace(workspace.role) || !file) {
+    return null;
+  }
+
+  const db = requireClient(poolOrClient);
+  const result = await db.query<ShareLinkRow>(
+    `
+      update share_links
+      set revoked_at = coalesce(revoked_at, now())
+      where id = $1
+        and file_id = $2
+      returning
+        created_at,
+        created_by_user_id,
+        expires_at,
+        file_id,
+        id,
+        revoked_at
+    `,
+    [shareLinkId, fileId]
+  );
+
+  return result.rows[0] ? mapShareLink(result.rows[0]) : null;
+}
+
+export async function getSharedFileOpenDetails(
+  token: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<SharedFileOpenResponse | null> {
+  const row = await getShareLinkAccessRow(token, poolOrClient);
+
+  if (!row) {
+    return null;
+  }
+
+  const pages = await listPagesForFile(row.file_id, poolOrClient);
+
+  return {
+    access: createEditorAccess({
+      role: null,
+      source: "share-link"
+    }),
+    defaultPageId: pages[0]?.id ?? null,
+    file: mapFileFromShareLinkAccess(row),
+    pages,
+    project: mapProjectFromShareLinkAccess(row),
+    shareLink: {
+      fileId: row.file_id,
+      id: row.share_link_id
+    },
+    workspace: mapWorkspaceFromShareLinkAccess(row)
+  };
+}
+
+export async function listSharedAssets(
+  token: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<AssetDto[] | null> {
+  const row = await getShareLinkAccessRow(token, poolOrClient);
+
+  if (!row) {
+    return null;
+  }
+
+  const db = requireClient(poolOrClient);
+  const result = await db.query<AssetRow>(
+    `
+      select
+        byte_size,
+        created_at,
+        deleted_at,
+        file_id,
+        filename,
+        height,
+        id,
+        kind,
+        mime_type,
+        storage_key,
+        updated_at,
+        uploaded_by_user_id,
+        width,
+        workspace_id
+      from assets
+      where workspace_id = $1
+        and deleted_at is null
+        and (file_id = $2 or file_id is null)
+      order by created_at desc, id desc
+    `,
+    [row.file_workspace_id, row.file_id]
+  );
+
+  return result.rows.map(mapAsset);
+}
+
+export async function getSharedAsset(
+  token: string,
+  assetId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<AssetDto | null> {
+  const row = await getShareLinkAccessRow(token, poolOrClient);
+
+  if (!row) {
+    return null;
+  }
+
+  const db = requireClient(poolOrClient);
+  const result = await db.query<AssetRow>(
+    `
+      select
+        byte_size,
+        created_at,
+        deleted_at,
+        file_id,
+        filename,
+        height,
+        id,
+        kind,
+        mime_type,
+        storage_key,
+        updated_at,
+        uploaded_by_user_id,
+        width,
+        workspace_id
+      from assets
+      where workspace_id = $1
+        and id = $2
+        and deleted_at is null
+        and (file_id = $3 or file_id is null)
+      limit 1
+    `,
+    [row.file_workspace_id, assetId, row.file_id]
+  );
+
+  return result.rows[0] ? mapAsset(result.rows[0]) : null;
+}
+
+export async function getSharedCollabPageSession(
+  token: string,
+  pageId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<CollabPageSessionDto | null> {
+  const row = await getShareLinkAccessRow(token, poolOrClient);
+
+  if (!row) {
+    return null;
+  }
+
+  const db = requireClient(poolOrClient);
+  const page = await db.query<{ id: string }>(
+    `
+      select id
+      from pages
+      where id = $1
+        and file_id = $2
+      limit 1
+    `,
+    [pageId, row.file_id]
+  );
+
+  if (!page.rows[0]) {
+    return null;
+  }
+
+  return {
+    access: createEditorAccess({
+      role: null,
+      source: "share-link"
+    }),
+    documentName: createCollabDocumentName(pageId),
+    fileId: row.file_id,
+    pageId,
+    user: {
+      avatarUrl: null,
+      displayName: "Shared viewer",
+      email: `share-link-${row.share_link_id}@openmirage.local`,
+      id: `share-link-${row.share_link_id}`
+    },
+    workspaceId: row.workspace_id
+  };
+}
+
 export async function getAuthorizedCollabPageSession(
   userId: string,
   workspaceId: string,
@@ -1279,6 +1780,7 @@ export async function getAuthorizedCollabPageSession(
       select
         files.id as file_id,
         pages.id as page_id,
+        memberships.role,
         users.avatar_url as user_avatar_url,
         users.display_name as user_display_name,
         users.email as user_email,
@@ -1307,6 +1809,10 @@ export async function getAuthorizedCollabPageSession(
   }
 
   return {
+    access: createEditorAccess({
+      role: row.role,
+      source: "membership"
+    }),
     documentName: createCollabDocumentName(row.page_id),
     fileId: row.file_id,
     pageId: row.page_id,
