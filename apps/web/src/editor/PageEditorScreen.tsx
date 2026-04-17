@@ -122,6 +122,14 @@ function createApiUrl(baseUrl: string, path: string): string {
   return new URL(path, baseUrl).toString();
 }
 
+function buildBrowserShareUrl(token: string): string | null {
+  try {
+    return new URL(`/share/${encodeURIComponent(token)}`, window.location.origin).toString();
+  } catch {
+    return null;
+  }
+}
+
 function resolveInsertedImageSize(asset: AssetRecordDto): {
   height: number;
   width: number;
@@ -1412,17 +1420,21 @@ export function PageEditorScreen(props: {
 
     try {
       const payload = await createFileShareLink(props.collab.apiBaseUrl, props.route);
+      const shareUrl = payload.shareLink.shareUrl ?? buildBrowserShareUrl(payload.token);
       setShareLinkLoadState((current) => ({
         shareLinks: [
-          payload.shareLink,
+          {
+            ...payload.shareLink,
+            shareUrl
+          },
           ...current.shareLinks.filter(
             (shareLink) => shareLink.id !== payload.shareLink.id
           )
         ],
         status: "loaded"
       }));
-      if (navigator.clipboard?.writeText && payload.shareLink.shareUrl) {
-        await navigator.clipboard.writeText(payload.shareLink.shareUrl);
+      if (navigator.clipboard?.writeText && shareUrl) {
+        await navigator.clipboard.writeText(shareUrl);
         setCopiedShareLinkId(payload.shareLink.id);
       }
     } catch (error) {

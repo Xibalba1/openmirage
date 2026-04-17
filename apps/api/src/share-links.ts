@@ -45,8 +45,12 @@ export interface ShareLinkResolution {
   status: 200 | 201 | 401 | 403 | 404;
 }
 
-function buildShareUrl(appBaseUrl: string, token: string): string {
-  return new URL(`/share/${encodeURIComponent(token)}`, appBaseUrl).toString();
+function buildShareUrl(appBaseUrl: string, token: string): string | null {
+  try {
+    return new URL(`/share/${encodeURIComponent(token)}`, appBaseUrl).toString();
+  } catch {
+    return null;
+  }
 }
 
 export async function resolveListShareLinksRequest(
