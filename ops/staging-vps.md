@@ -112,10 +112,12 @@ Preferred storage default:
 
 - `STORAGE_PROVIDER=s3-compatible`
 - use an external S3-compatible backend for staging by default
+- keep editor asset delivery on the API content route unless object URLs are intentionally public and browser-reachable
 
 Optional supported variant:
 
 - self-hosted MinIO on the VPS, only if explicitly chosen
+- when using self-hosted MinIO, `STORAGE_S3_ENDPOINT` may stay on an internal service address such as `http://minio:9000`, but that internal host must not leak into browser-facing asset URLs
 
 ## Fresh VPS Preparation
 
@@ -192,6 +194,10 @@ Each deploy is only successful if all of these checks pass through the public Ca
    - `GET /internal/storage/smoke`
    - `POST /internal/storage/smoke`
    - `DELETE /internal/storage/smoke?key=...`
+8. authenticated editor asset path:
+   - bootstrap a disposable smoke workspace/session
+   - upload a tiny image through the public asset API
+   - verify the returned `contentUrl` stays on the public staging origin and the image bytes can be fetched successfully
 
 The workflow uses the checked-in verifier:
 

@@ -66,6 +66,7 @@ import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import {
   parseMultipartUpload,
   registerRawMultipartParser,
+  resolveAssetDeliveryMode,
   resolveAssetContentRequest,
   resolveCreateAssetRequest,
   resolveListAssetsRequest
@@ -1369,8 +1370,8 @@ async function startApiServer(): Promise<void> {
         databasePool,
         storage,
         {
+          assetDeliveryMode: resolveAssetDeliveryMode(env.storage.provider),
           appBaseUrl: env.appBaseUrl,
-          storageProvider: env.storage.provider
         }
       );
 
@@ -1448,8 +1449,8 @@ async function startApiServer(): Promise<void> {
           databasePool,
           storage,
           {
-            appBaseUrl: env.appBaseUrl,
-            storageProvider: env.storage.provider
+            assetDeliveryMode: resolveAssetDeliveryMode(env.storage.provider),
+            appBaseUrl: env.appBaseUrl
           }
         );
 

@@ -14,6 +14,7 @@ import {
   parseMultipartUpload,
   readImageDimensions,
   registerRawMultipartParser,
+  resolveAssetDeliveryMode,
   resolveAssetContentRequest,
   resolveCreateAssetRequest,
   resolveListAssetsRequest
@@ -164,6 +165,12 @@ function createPngBytes(): Uint8Array {
     "base64"
   );
 }
+
+test("asset delivery mode proxies editor assets for all MVP storage providers", () => {
+  assert.equal(resolveAssetDeliveryMode("local"), "proxy");
+  assert.equal(resolveAssetDeliveryMode("minio"), "proxy");
+  assert.equal(resolveAssetDeliveryMode("s3-compatible"), "proxy");
+});
 
 test("parseMultipartUpload reads one file and scalar fields", async () => {
   const boundary = "openmirage-boundary";
@@ -343,17 +350,17 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
     const fileId = file?.file.id as string;
     const storage = new FakeStorage();
     const png = createPngBytes();
-    const s3Context = {
+    const minioContext = {
       appBaseUrl: "https://app.test",
-      storageProvider: "s3"
+      assetDeliveryMode: resolveAssetDeliveryMode("minio")
     } as const;
     const localContext = {
       appBaseUrl: "https://app.test",
-      storageProvider: "local"
+      assetDeliveryMode: resolveAssetDeliveryMode("local")
     } as const;
-    const minioContext = {
+    const s3CompatibleContext = {
       appBaseUrl: "https://app.test",
-      storageProvider: "minio"
+      assetDeliveryMode: resolveAssetDeliveryMode("s3-compatible")
     } as const;
 
     const unauthenticatedList = await resolveListAssetsRequest(
@@ -366,7 +373,7 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
       },
       client,
       storage,
-      s3Context
+      minioContext
     );
     assert.equal(unauthenticatedList.status, 401);
 
@@ -385,7 +392,7 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
       },
       client,
       storage,
-      s3Context
+      minioContext
     );
     assert.equal(forbiddenCreate.status, 403);
 
@@ -404,7 +411,7 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
       },
       client,
       storage,
-      s3Context
+      minioContext
     );
     assert.equal(invalidMime.status, 400);
     assert.deepEqual(invalidMime.body, {
@@ -426,7 +433,7 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
       },
       client,
       storage,
-      s3Context
+      minioContext
     );
     assert.equal(invalidBytes.status, 400);
     assert.deepEqual(invalidBytes.body, {
@@ -448,7 +455,7 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
       },
       client,
       storage,
-      s3Context
+      minioContext
     );
     assert.equal(mismatchedBytes.status, 400);
     assert.deepEqual(mismatchedBytes.body, {
@@ -558,6 +565,41 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
       ]
     );
 
+    const listedViaS3Compatible = await resolveListAssetsRequest(
+      createAuthContext(userId, workspaceId),
+      {
+        fileId,
+        includeWorkspaceAssets: true,
+        projectId: project?.id as string,
+        workspaceId
+      },
+      client,
+      storage,
+      s3CompatibleContext
+    );
+    assert.equal(listedViaS3Compatible.status, 200);
+    if (listedViaS3Compatible.status !== 200) {
+      throw new Error(
+        "expected asset list success for s3-compatible-backed assets"
+      );
+    }
+    if (!("assets" in listedViaS3Compatible.body)) {
+      throw new Error("expected asset list payload");
+    }
+
+    assert.deepEqual(
+      listedViaS3Compatible.body.assets.map((asset) => ({
+        contentUrl: asset.contentUrl,
+        filename: asset.filename
+      })),
+      [
+        {
+          contentUrl: createdAsset.contentUrl,
+          filename: "hero.png"
+        }
+      ]
+    );
+
     const content = await resolveAssetContentRequest(
       createAuthContext(userId, workspaceId),
       {
@@ -599,7 +641,7 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
       },
       client,
       storageFailure,
-      s3Context
+      minioContext
     );
     assert.equal(storageUnavailable.status, 503);
     assert.deepEqual(storageUnavailable.body, {
@@ -632,7 +674,7 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
       },
       failingClient,
       persistFailureStorage,
-      s3Context
+      minioContext
     );
     assert.equal(persistFailure.status, 500);
     assert.deepEqual(persistFailure.body, {
