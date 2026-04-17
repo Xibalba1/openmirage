@@ -490,11 +490,7 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
     );
 
     const storageFailure = new (class extends FakeStorage {
-      override async put(_input: {
-        body: Uint8Array;
-        contentType?: string;
-        key: string;
-      }): Promise<void> {
+      override async put(): Promise<void> {
         throw new Error("storage offline");
       }
     })();
