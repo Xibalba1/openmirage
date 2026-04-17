@@ -212,9 +212,10 @@ The storage-bearing services share the same storage env contract:
 - `STORAGE_S3_ACCESS_KEY_ID=openmirage`
 - `STORAGE_S3_SECRET_ACCESS_KEY=openmirage123`
 - `STORAGE_S3_FORCE_PATH_STYLE=true`
-- `STORAGE_PUBLIC_BASE_URL=` optional public base URL for direct object resolution
+- `STORAGE_PUBLIC_BASE_URL=` optional public base URL for direct object resolution when the browser should fetch from a public object origin
 
 For local development, the default `minio` settings match `docker-compose.yml`. For staging, switch to `STORAGE_PROVIDER=s3-compatible` and point the same variables at the target S3-compatible backend. No application code changes should be required.
+If staging or self-hosted deployments use an internal-only MinIO endpoint such as `http://minio:9000`, keep browser-facing editor assets on the API content route and leave `STORAGE_PUBLIC_BASE_URL` unset unless the object origin is intentionally public and reachable from the browser.
 
 Compose-facing proxy envs for this slice:
 

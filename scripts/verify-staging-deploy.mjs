@@ -17,6 +17,14 @@ if (!baseUrlInput) {
 }
 
 const baseUrl = baseUrlInput.replace(/\/+$/, "");
+const baseOrigin = new URL(baseUrl).origin;
+
+function createSmokePngBytes() {
+  return Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2Z0foAAAAASUVORK5CYII=",
+    "base64"
+  );
+}
 
 function log(message) {
   console.log(`[openmirage] ${message}`);
@@ -223,6 +231,102 @@ async function verifyStorageSmoke() {
   }
 }
 
+async function deleteStorageObject(key) {
+  const deleted = await request(
+    `${baseUrl}/internal/storage/smoke?key=${encodeURIComponent(key)}`,
+    {
+      method: "DELETE"
+    }
+  );
+
+  if (!deleted.ok) {
+    fail(`storage delete failed for ${key}: ${deleted.status} ${deleted.text}`);
+  }
+}
+
+async function verifyEditorAssetDelivery(fixture) {
+  log("verifying editor asset delivery through the public api origin");
+
+  const form = new FormData();
+  form.set("scope", "file");
+  form.set(
+    "file",
+    new Blob([createSmokePngBytes()], { type: "image/png" }),
+    "smoke.png"
+  );
+
+  const assetPath =
+    `/v1/workspaces/${encodeURIComponent(fixture.workspaceId)}` +
+    `/projects/${encodeURIComponent(fixture.projectId)}` +
+    `/files/${encodeURIComponent(fixture.fileId)}/assets`;
+  const upload = await request(`${baseUrl}${assetPath}`, {
+    method: "POST",
+    headers: {
+      Cookie: fixture.sessionCookie
+    },
+    body: form
+  });
+
+  if (!upload.ok) {
+    fail(`asset upload failed: ${upload.status} ${upload.text}`);
+  }
+
+  const asset = upload.body;
+
+  if (
+    typeof asset?.id !== "string" ||
+    typeof asset?.contentUrl !== "string" ||
+    typeof asset?.storageKey !== "string"
+  ) {
+    fail("asset upload response did not include id, contentUrl, and storageKey");
+  }
+
+  const expectedContentPath =
+    `/v1/workspaces/${encodeURIComponent(fixture.workspaceId)}` +
+    `/projects/${encodeURIComponent(fixture.projectId)}` +
+    `/files/${encodeURIComponent(fixture.fileId)}` +
+    `/assets/${encodeURIComponent(asset.id)}/content`;
+  const contentUrl = new URL(asset.contentUrl);
+
+  if (contentUrl.origin !== baseOrigin) {
+    fail(`asset contentUrl leaked a non-public origin: ${asset.contentUrl}`);
+  }
+
+  if (contentUrl.pathname !== expectedContentPath) {
+    fail(
+      `asset contentUrl did not resolve through the api content route: ${asset.contentUrl}`
+    );
+  }
+
+  let contentResponse;
+
+  try {
+    contentResponse = await fetch(asset.contentUrl, {
+      headers: {
+        Cookie: fixture.sessionCookie
+      }
+    });
+  } finally {
+    await deleteStorageObject(asset.storageKey);
+  }
+
+  if (!contentResponse.ok) {
+    fail(`asset content fetch failed: ${contentResponse.status}`);
+  }
+
+  const contentType = contentResponse.headers.get("content-type") ?? "";
+
+  if (!contentType.startsWith("image/")) {
+    fail(`asset content response was not an image: ${contentType || "missing"}`);
+  }
+
+  const body = new Uint8Array(await contentResponse.arrayBuffer());
+
+  if (body.byteLength === 0) {
+    fail("asset content response body was empty");
+  }
+}
+
 function verifyWebsocketUpgrade() {
   log("verifying websocket upgrade behavior at /collab");
 
@@ -311,6 +415,7 @@ async function main() {
 
   try {
     collabFixture = await createAuthenticatedCollabFixture();
+    await verifyEditorAssetDelivery(collabFixture);
     verifyAuthenticatedCollabWebsocket(collabFixture);
     log("staging deploy verification passed");
   } catch (error) {

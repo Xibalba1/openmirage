@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createAsset, getAuthorizedAsset, listAssets } from "@openmirage/db";
 import {
   type AssetDto,
+  type StorageProviderKind,
   type AssetRecordDto,
   type AssetScope,
   type AuthContext,
@@ -71,9 +72,11 @@ export interface AssetContentRequest {
   workspaceId: string;
 }
 
+export type AssetDeliveryMode = "direct" | "proxy";
+
 export interface AssetResponseContext {
+  assetDeliveryMode: AssetDeliveryMode;
   appBaseUrl: string;
-  storageProvider: string;
 }
 
 export interface AssetBadRequest {
@@ -711,13 +714,24 @@ function hasPositiveDimensions(dimensions: {
   );
 }
 
+export function resolveAssetDeliveryMode(
+  storageProvider: StorageProviderKind
+): AssetDeliveryMode {
+  switch (storageProvider) {
+    case "local":
+    case "minio":
+    case "s3-compatible":
+      return "proxy";
+  }
+}
+
 async function resolveAssetContentUrl(
   asset: AssetDto,
   request: Pick<AssetContentRequest, "fileId" | "projectId" | "workspaceId">,
   storage: StorageLike,
   context: AssetResponseContext
 ): Promise<string> {
-  if (context.storageProvider !== "s3") {
+  if (context.assetDeliveryMode === "proxy") {
     return createApiUrl(
       context.appBaseUrl,
       buildAssetContentPath({
