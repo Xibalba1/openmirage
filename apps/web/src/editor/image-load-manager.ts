@@ -1,8 +1,8 @@
 import { type AssetRecordDto } from "@openmirage/types";
 
 export interface LoadableImage {
-  onerror: ((...args: any[]) => unknown) | null;
-  onload: ((...args: any[]) => unknown) | null;
+  onerror: HTMLImageElement["onerror"];
+  onload: HTMLImageElement["onload"];
   src: string;
 }
 

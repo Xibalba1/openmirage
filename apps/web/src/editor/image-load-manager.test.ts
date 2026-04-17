@@ -8,16 +8,24 @@ import {
 } from "./image-load-manager";
 
 class FakeImage implements LoadableImage {
-  onerror: (() => void) | null = null;
-  onload: (() => void) | null = null;
+  onerror: HTMLImageElement["onerror"] = null;
+  onload: HTMLImageElement["onload"] = null;
   src = "";
 
   fail(): void {
-    this.onerror?.();
+    const handler = this.onerror;
+
+    if (typeof handler === "function") {
+      handler.call(this as unknown as GlobalEventHandlers, new Event("error"));
+    }
   }
 
   load(): void {
-    this.onload?.();
+    const handler = this.onload;
+
+    if (typeof handler === "function") {
+      handler.call(this as unknown as GlobalEventHandlers, new Event("load"));
+    }
   }
 }
 
