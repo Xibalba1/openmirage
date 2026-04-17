@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   createDatabasePool,
   createFileWithPages,
+  createFileShareLink,
   createProject
 } from "@openmirage/db";
 import { type AuthContext, type CollabPageSessionDto } from "@openmirage/types";
@@ -76,23 +77,28 @@ async function insertWorkspace(
 async function insertMembership(
   client: DatabaseClient,
   workspaceId: string,
-  userId: string
+  userId: string,
+  role: "owner" | "editor" | "viewer" = "owner"
 ) {
   await client.query(
     `
       insert into memberships (workspace_id, user_id, role)
-      values ($1, $2, 'owner')
+      values ($1, $2, $3)
     `,
-    [workspaceId, userId]
+    [workspaceId, userId, role]
   );
 }
 
-function createAuthContext(userId: string, workspaceId: string): AuthContext {
+function createAuthContext(
+  userId: string,
+  workspaceId: string,
+  role: "owner" | "editor" | "viewer" = "owner"
+): AuthContext {
   return {
     memberships: [
       {
         id: "membership-id",
-        role: "owner",
+        role,
         workspaceId
       }
     ],
@@ -116,6 +122,11 @@ test("resolveCollabPageSession returns 401, 403, 404, and 200 for the collab boo
       `api-visible-${Date.now()}@example.com`,
       "Visible User"
     );
+    const viewerUserId = await insertUser(
+      client,
+      `api-viewer-${Date.now()}@example.com`,
+      "Viewer User"
+    );
     const otherUserId = await insertUser(
       client,
       `api-other-${Date.now()}@example.com`,
@@ -133,6 +144,7 @@ test("resolveCollabPageSession returns 401, 403, 404, and 200 for the collab boo
     );
 
     await insertMembership(client, workspaceId, visibleUserId);
+    await insertMembership(client, workspaceId, viewerUserId, "viewer");
     await insertMembership(client, otherWorkspaceId, otherUserId);
 
     const project = await createProject(
@@ -152,6 +164,13 @@ test("resolveCollabPageSession returns 401, 403, 404, and 200 for the collab boo
 
     const pageId = file?.pages[0]?.id as string;
     const fileId = file?.file.id as string;
+    const shareLink = await createFileShareLink(
+      visibleUserId,
+      workspaceId,
+      project?.id as string,
+      fileId,
+      client as Parameters<typeof createFileShareLink>[4]
+    );
 
     const unauthenticated = await resolveCollabPageSession(
       null,
@@ -174,6 +193,18 @@ test("resolveCollabPageSession returns 401, 403, 404, and 200 for the collab boo
     );
     assert.equal(notFound.status, 404);
 
+    const viewerSuccess = await resolveCollabPageSession(
+      createAuthContext(viewerUserId, workspaceId, "viewer"),
+      { fileId, pageId, workspaceId },
+      client
+    );
+    assert.equal(viewerSuccess.status, 200);
+    if (viewerSuccess.status !== 200) {
+      throw new Error("expected a successful viewer collab session resolution");
+    }
+    const viewerSession = viewerSuccess.body as CollabPageSessionDto;
+    assert.equal(viewerSession.access.mode, "read-only");
+
     const success = await resolveCollabPageSession(
       createAuthContext(visibleUserId, workspaceId),
       { fileId, pageId, workspaceId },
@@ -188,6 +219,23 @@ test("resolveCollabPageSession returns 401, 403, 404, and 200 for the collab boo
     assert.equal(session.fileId, fileId);
     assert.equal(session.workspaceId, workspaceId);
     assert.equal(session.documentName, `page:${pageId}`);
+    assert.equal(session.access.mode, "writable");
+
+    const shared = await resolveCollabPageSession(
+      null,
+      {
+        pageId,
+        shareToken: shareLink?.token as string
+      },
+      client
+    );
+    assert.equal(shared.status, 200);
+    if (shared.status !== 200) {
+      throw new Error("expected a successful shared collab session resolution");
+    }
+    const sharedSession = shared.body as CollabPageSessionDto;
+    assert.equal(sharedSession.access.mode, "read-only");
+    assert.equal(sharedSession.access.source, "share-link");
   });
 
   if (!ran) {

@@ -3,7 +3,9 @@ import {
   type AuthenticatedUser,
   type CommentDto,
   type CommentListResponse,
+  type CreatedShareLinkResponse,
   type CreateCommentInput,
+  type EditorAccessDto,
   type FileDto,
   type GroupNode,
   type GroupNodesCommand,
@@ -14,7 +16,11 @@ import {
   type ProjectDto,
   type RuntimeUrls,
   type SceneGraphNode,
-  type WorkspaceDetailDto
+  type ShareLinkDto,
+  type ShareLinkRecordDto,
+  type ShareLinkListResponse,
+  type WorkspaceDetailDto,
+  type WorkspaceDto
 } from "@openmirage/types";
 import {
   type PointerEvent as ReactPointerEvent,
@@ -63,6 +69,7 @@ import {
   zoomViewportAtPoint
 } from "./viewport";
 import { getMissingAssetRefreshKey } from "./asset-resolution";
+import { deriveInspectDetails } from "./inspect";
 import {
   type ActiveInteraction,
   type ActiveTextEdit,
@@ -94,6 +101,11 @@ type AssetLoadState =
       requestId?: string;
       status: "error";
     };
+
+type ShareLinkLoadState =
+  | { shareLinks: ShareLinkRecordDto[]; status: "loaded" }
+  | { shareLinks: ShareLinkRecordDto[]; status: "loading" }
+  | { message: string; shareLinks: ShareLinkRecordDto[]; status: "error" };
 
 const PRESENCE_COLORS = [
   "#f97316",
@@ -136,10 +148,11 @@ function resolveInsertedImageSize(asset: AssetRecordDto): {
 async function fetchEditorJson<T>(
   apiBaseUrl: string,
   path: string,
-  init?: RequestInit
+  init?: RequestInit,
+  credentials: RequestCredentials = "include"
 ): Promise<T> {
   const response = await fetch(createApiUrl(apiBaseUrl, path), {
-    credentials: "include",
+    credentials,
     ...init,
     headers: {
       "content-type": "application/json",
@@ -171,6 +184,14 @@ async function fetchEditorJson<T>(
   }
 
   return (await response.json()) as T;
+}
+
+async function fetchPublicEditorJson<T>(
+  apiBaseUrl: string,
+  path: string,
+  init?: RequestInit
+): Promise<T> {
+  return fetchEditorJson<T>(apiBaseUrl, path, init, "same-origin");
 }
 
 async function uploadEditorAsset(
@@ -216,13 +237,64 @@ async function uploadEditorAsset(
 
 async function fetchEditorAssets(
   apiBaseUrl: string,
-  route: Pick<AppPageRoute, "fileId" | "projectId" | "workspaceId">
+  route: Pick<AppPageRoute, "fileId" | "projectId" | "workspaceId">,
+  shareToken?: string | null
 ): Promise<ListAssetsResponse> {
+  if (shareToken) {
+    return fetchPublicEditorJson<ListAssetsResponse>(
+      apiBaseUrl,
+      `/v1/share-links/${encodeURIComponent(shareToken)}/assets`,
+      {
+        method: "GET"
+      }
+    );
+  }
+
   return fetchEditorJson<ListAssetsResponse>(
     apiBaseUrl,
     `/v1/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}/assets?includeWorkspaceAssets=true`,
     {
       method: "GET"
+    }
+  );
+}
+
+async function fetchFileShareLinks(
+  apiBaseUrl: string,
+  route: Pick<AppPageRoute, "fileId" | "projectId" | "workspaceId">
+): Promise<ShareLinkListResponse> {
+  return fetchEditorJson<ShareLinkListResponse>(
+    apiBaseUrl,
+    `/v1/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}/share-links`,
+    {
+      method: "GET"
+    }
+  );
+}
+
+async function createFileShareLink(
+  apiBaseUrl: string,
+  route: Pick<AppPageRoute, "fileId" | "projectId" | "workspaceId">
+): Promise<CreatedShareLinkResponse> {
+  return fetchEditorJson<CreatedShareLinkResponse>(
+    apiBaseUrl,
+    `/v1/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}/share-links`,
+    {
+      method: "POST"
+    }
+  );
+}
+
+async function revokeFileShareLink(
+  apiBaseUrl: string,
+  route: Pick<AppPageRoute, "fileId" | "projectId" | "workspaceId">,
+  shareLinkId: string
+): Promise<ShareLinkDto> {
+  return fetchEditorJson<ShareLinkDto>(
+    apiBaseUrl,
+    `/v1/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}/share-links/${encodeURIComponent(shareLinkId)}/revoke`,
+    {
+      method: "POST"
     }
   );
 }
@@ -469,18 +541,20 @@ function flattenLayerTree(
 }
 
 export function PageEditorScreen(props: {
+  access: EditorAccessDto;
   collab: RuntimeUrls;
   currentUser: AuthenticatedUser;
   file: FileDto;
   onCreatePage: (name: string) => Promise<void>;
-  onNavigate: (route: AppPageRoute & { kind: "page" }) => void;
+  onNavigatePage: (pageId: string) => void;
   onRenameFile: (fileId: string, name: string) => Promise<void>;
   onRenamePage: (pageId: string, name: string) => Promise<void>;
   page: PageDto;
   pages: PageDto[];
   project: ProjectDto;
   route: AppPageRoute;
-  workspace: WorkspaceDetailDto;
+  shareToken: string | null;
+  workspace: WorkspaceDetailDto | WorkspaceDto;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasShellRef = useRef<HTMLDivElement | null>(null);
@@ -536,6 +610,22 @@ export function PageEditorScreen(props: {
   const [resolvingCommentId, setResolvingCommentId] = useState<string | null>(
     null
   );
+  const [shareLinkLoadState, setShareLinkLoadState] =
+    useState<ShareLinkLoadState>({
+      shareLinks: [],
+      status: "loading"
+    });
+  const [copiedShareLinkId, setCopiedShareLinkId] = useState<string | null>(
+    null
+  );
+  const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
+  const [revokingShareLinkId, setRevokingShareLinkId] = useState<string | null>(
+    null
+  );
+  const canMutate = props.access.canMutate;
+  const canViewComments = !props.shareToken;
+  const canComment = props.access.canComment && canViewComments;
+  const canManageShareLinks = props.access.canManageShareLinks && !props.shareToken;
 
   if (!imageLoadManagerRef.current) {
     imageLoadManagerRef.current = createImageLoadManager({
@@ -579,6 +669,7 @@ export function PageEditorScreen(props: {
 
     const session = createEditorSession(
       {
+        accessMode: props.access.mode,
         pageId: props.page.id,
         presence: {
           participant: presenceParticipant
@@ -591,6 +682,7 @@ export function PageEditorScreen(props: {
             fileId: props.route.fileId,
             projectId: props.route.projectId,
             pageId: props.route.pageId,
+            ...(props.shareToken ? { shareToken: props.shareToken } : {}),
             workspaceId: props.route.workspaceId
           }
         }
@@ -614,11 +706,13 @@ export function PageEditorScreen(props: {
     props.collab.apiBaseUrl,
     props.collab.collabWsPath,
     props.collab.collabWsUrl,
+    props.access.mode,
     props.page.id,
     presenceParticipant,
     props.route.fileId,
     props.route.projectId,
     props.route.pageId,
+    props.shareToken,
     props.route.workspaceId
   ]);
 
@@ -749,6 +843,13 @@ export function PageEditorScreen(props: {
         .filter((entry) => entry.nodeRecords.length > 0),
     [scopedRecords, visiblePresenceEntries]
   );
+  const inspectDetails = useMemo(
+    () =>
+      effectivePrimarySelectionId
+        ? deriveInspectDetails(sessionSnapshot.document, effectivePrimarySelectionId)
+        : null,
+    [effectivePrimarySelectionId, sessionSnapshot.document]
+  );
   const sortedComments = useMemo(
     () =>
       [...commentLoadState.comments].sort((left, right) => {
@@ -808,6 +909,14 @@ export function PageEditorScreen(props: {
   }, [availableCommentTargetTypes, commentTargetType]);
 
   useEffect(() => {
+    if (!canViewComments) {
+      setCommentLoadState({
+        comments: [],
+        status: "loaded"
+      });
+      return;
+    }
+
     let cancelled = false;
 
     async function loadAssets() {
@@ -819,7 +928,8 @@ export function PageEditorScreen(props: {
       try {
         const payload = await fetchEditorAssets(
           props.collab.apiBaseUrl,
-          props.route
+          props.route,
+          props.shareToken
         );
 
         if (cancelled) {
@@ -854,11 +964,12 @@ export function PageEditorScreen(props: {
       cancelled = true;
     };
   }, [
-    props.collab.apiBaseUrl,
-    props.route.fileId,
-    props.route.projectId,
-    props.route.workspaceId
-  ]);
+      props.collab.apiBaseUrl,
+      props.route.fileId,
+      props.route.projectId,
+      props.shareToken,
+      props.route.workspaceId
+    ]);
 
   useEffect(() => {
     requestedMissingAssetKeyRef.current = null;
@@ -882,7 +993,7 @@ export function PageEditorScreen(props: {
     requestedMissingAssetKeyRef.current = missingAssetRefreshKey;
     let cancelled = false;
 
-    void fetchEditorAssets(props.collab.apiBaseUrl, props.route)
+    void fetchEditorAssets(props.collab.apiBaseUrl, props.route, props.shareToken)
       .then((payload) => {
         if (cancelled) {
           return;
@@ -918,6 +1029,7 @@ export function PageEditorScreen(props: {
     props.collab.apiBaseUrl,
     props.route.fileId,
     props.route.projectId,
+    props.shareToken,
     props.route.workspaceId
   ]);
 
@@ -974,8 +1086,66 @@ export function PageEditorScreen(props: {
       cancelled = true;
     };
   }, [
+      props.collab.apiBaseUrl,
+      canViewComments,
+      props.page.id,
+      props.route.fileId,
+      props.route.projectId,
+      props.route.workspaceId
+    ]);
+
+  useEffect(() => {
+    if (!canManageShareLinks) {
+      setShareLinkLoadState({
+        shareLinks: [],
+        status: "loaded"
+      });
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadShareLinks() {
+      setShareLinkLoadState((current) => ({
+        shareLinks: current.shareLinks,
+        status: "loading"
+      }));
+
+      try {
+        const payload = await fetchFileShareLinks(
+          props.collab.apiBaseUrl,
+          props.route
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        setShareLinkLoadState({
+          shareLinks: payload.shareLinks,
+          status: "loaded"
+        });
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        setShareLinkLoadState((current) => ({
+          message: error instanceof Error ? error.message : String(error),
+          shareLinks: current.shareLinks,
+          status: "error"
+        }));
+      }
+    }
+
+    void loadShareLinks();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    canManageShareLinks,
     props.collab.apiBaseUrl,
-    props.page.id,
     props.route.fileId,
     props.route.projectId,
     props.route.workspaceId
@@ -1035,6 +1205,10 @@ export function PageEditorScreen(props: {
       }
 
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+        if (!canMutate) {
+          return;
+        }
+
         event.preventDefault();
 
         if (event.shiftKey) {
@@ -1047,6 +1221,10 @@ export function PageEditorScreen(props: {
       }
 
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "y") {
+        if (!canMutate) {
+          return;
+        }
+
         event.preventDefault();
         session.redo();
         return;
@@ -1062,6 +1240,10 @@ export function PageEditorScreen(props: {
       }
 
       if (event.key === "Delete" || event.key === "Backspace") {
+        if (!canMutate) {
+          return;
+        }
+
         if (effectiveSelectedIds.length === 0) {
           return;
         }
@@ -1097,6 +1279,10 @@ export function PageEditorScreen(props: {
       }
 
       if (event.key === "Enter" && effectivePrimarySelectionId) {
+        if (!canMutate) {
+          return;
+        }
+
         const node =
           sessionSnapshot.document.nodes[effectivePrimarySelectionId];
 
@@ -1116,6 +1302,7 @@ export function PageEditorScreen(props: {
     activeInteraction,
     activeScopeId,
     activeTextEdit,
+    canMutate,
     effectivePrimarySelectionId,
     effectiveSelectedIds,
     props.page.id,
@@ -1162,7 +1349,7 @@ export function PageEditorScreen(props: {
   function commitTextEdit() {
     const session = sessionRef.current;
 
-    if (!session || !activeTextEdit || !activeTextNode) {
+    if (!session || !activeTextEdit || !activeTextNode || !canMutate) {
       setActiveTextEdit(null);
       return;
     }
@@ -1181,6 +1368,14 @@ export function PageEditorScreen(props: {
   }
 
   async function refreshComments() {
+    if (!canViewComments) {
+      setCommentLoadState({
+        comments: [],
+        status: "loaded"
+      });
+      return;
+    }
+
     const payload = await fetchEditorJson<CommentListResponse>(
       props.collab.apiBaseUrl,
       `/v1/workspaces/${encodeURIComponent(props.route.workspaceId)}/projects/${encodeURIComponent(props.route.projectId)}/files/${encodeURIComponent(props.route.fileId)}/comments?pageId=${encodeURIComponent(props.page.id)}&includeResolved=true`,
@@ -1196,7 +1391,11 @@ export function PageEditorScreen(props: {
   }
 
   async function refreshAssets() {
-    const payload = await fetchEditorAssets(props.collab.apiBaseUrl, props.route);
+    const payload = await fetchEditorAssets(
+      props.collab.apiBaseUrl,
+      props.route,
+      props.shareToken
+    );
 
     setAssetLoadState({
       assets: payload.assets,
@@ -1204,11 +1403,88 @@ export function PageEditorScreen(props: {
     });
   }
 
+  async function handleCreateShareLink() {
+    if (!canManageShareLinks) {
+      return;
+    }
+
+    setIsCreatingShareLink(true);
+
+    try {
+      const payload = await createFileShareLink(props.collab.apiBaseUrl, props.route);
+      setShareLinkLoadState((current) => ({
+        shareLinks: [
+          payload.shareLink,
+          ...current.shareLinks.filter(
+            (shareLink) => shareLink.id !== payload.shareLink.id
+          )
+        ],
+        status: "loaded"
+      }));
+      if (navigator.clipboard?.writeText && payload.shareLink.shareUrl) {
+        await navigator.clipboard.writeText(payload.shareLink.shareUrl);
+        setCopiedShareLinkId(payload.shareLink.id);
+      }
+    } catch (error) {
+      setShareLinkLoadState((current) => ({
+        message: error instanceof Error ? error.message : String(error),
+        shareLinks: current.shareLinks,
+        status: "error"
+      }));
+    } finally {
+      setIsCreatingShareLink(false);
+    }
+  }
+
+  async function handleCopyShareLink(shareLink: ShareLinkRecordDto) {
+    if (!navigator.clipboard?.writeText || !shareLink.shareUrl) {
+      return;
+    }
+
+    await navigator.clipboard.writeText(shareLink.shareUrl);
+    setCopiedShareLinkId(shareLink.id);
+  }
+
+  async function handleRevokeShareLink(shareLinkId: string) {
+    if (!canManageShareLinks) {
+      return;
+    }
+
+    setRevokingShareLinkId(shareLinkId);
+
+    try {
+      const revoked = await revokeFileShareLink(
+        props.collab.apiBaseUrl,
+        props.route,
+        shareLinkId
+      );
+      setShareLinkLoadState((current) => ({
+        shareLinks: current.shareLinks.map((shareLink) =>
+          shareLink.id === shareLinkId
+            ? {
+                ...revoked,
+                shareUrl: shareLink.shareUrl
+              }
+            : shareLink
+        ),
+        status: "loaded"
+      }));
+    } catch (error) {
+      setShareLinkLoadState((current) => ({
+        message: error instanceof Error ? error.message : String(error),
+        shareLinks: current.shareLinks,
+        status: "error"
+      }));
+    } finally {
+      setRevokingShareLinkId(null);
+    }
+  }
+
   function insertImageAsset(asset: AssetRecordDto) {
     const session = sessionRef.current;
     const canvas = canvasRef.current;
 
-    if (!session || !canvas) {
+    if (!session || !canvas || !canMutate) {
       return;
     }
 
@@ -1247,6 +1523,10 @@ export function PageEditorScreen(props: {
   }
 
   async function handleImageFile(file: File) {
+    if (!canMutate) {
+      return;
+    }
+
     setIsUploadingAsset(true);
 
     try {
@@ -1282,6 +1562,10 @@ export function PageEditorScreen(props: {
 
   async function handleSubmitComment(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    if (!canComment) {
+      return;
+    }
 
     const trimmedBody = commentDraft.trim();
 
@@ -1336,6 +1620,10 @@ export function PageEditorScreen(props: {
   }
 
   async function handleResolveComment(commentId: string) {
+    if (!canComment) {
+      return;
+    }
+
     setResolvingCommentId(commentId);
 
     try {
@@ -1442,7 +1730,7 @@ export function PageEditorScreen(props: {
       ? hitTestResizeHandle(primaryScopedRecord, pagePoint, viewport.zoom)
       : null;
 
-    if (handleHit && primaryScopedRecord && pagePoint) {
+    if (canMutate && handleHit && primaryScopedRecord && pagePoint) {
       setActiveInteraction({
         currentPagePoint: pagePoint,
         handle: handleHit.handle,
@@ -1484,12 +1772,14 @@ export function PageEditorScreen(props: {
       ? selectedIds
       : [hit.node.id];
     updateSelection(nextSelectedIds, hit.node.id);
-    setActiveInteraction({
-      currentPagePoint: pagePoint,
-      originalDocument: sessionSnapshot.document,
-      startPagePoint: pagePoint,
-      type: "move"
-    });
+    if (canMutate) {
+      setActiveInteraction({
+        currentPagePoint: pagePoint,
+        originalDocument: sessionSnapshot.document,
+        startPagePoint: pagePoint,
+        type: "move"
+      });
+    }
   }
 
   function stopInteraction(event?: ReactPointerEvent<HTMLCanvasElement>) {
@@ -1504,7 +1794,7 @@ export function PageEditorScreen(props: {
       activeInteraction.currentPagePoint ??
       (event ? readPagePoint(event) : null);
 
-    if (activeInteraction.type === "move" && pagePoint) {
+    if (canMutate && activeInteraction.type === "move" && pagePoint) {
       const delta = {
         x: pagePoint.x - activeInteraction.startPagePoint.x,
         y: pagePoint.y - activeInteraction.startPagePoint.y
@@ -1523,7 +1813,7 @@ export function PageEditorScreen(props: {
       }
     }
 
-    if (activeInteraction.type === "resize" && pagePoint) {
+    if (canMutate && activeInteraction.type === "resize" && pagePoint) {
       session.commit({
         nodeId: activeInteraction.record.node.id,
         pageId: props.page.id,
@@ -1593,7 +1883,7 @@ export function PageEditorScreen(props: {
       return;
     }
 
-    if (hit.node.type === "text") {
+    if (canMutate && hit.node.type === "text") {
       setActiveTextEdit({
         draft: hit.node.content,
         nodeId: hit.node.id
@@ -1614,7 +1904,7 @@ export function PageEditorScreen(props: {
     const session = sessionRef.current;
     const canvas = canvasRef.current;
 
-    if (!session || !canvas) {
+    if (!session || !canvas || !canMutate) {
       return;
     }
 
@@ -1652,7 +1942,7 @@ export function PageEditorScreen(props: {
     const session = sessionRef.current;
     const node = sessionSnapshot.document.nodes[nodeId];
 
-    if (!session || !node) {
+    if (!session || !node || !canMutate) {
       return;
     }
 
@@ -1675,7 +1965,7 @@ export function PageEditorScreen(props: {
   function toggleNodeFlag(nodeId: string, patch: Partial<SceneGraphNode>) {
     const session = sessionRef.current;
 
-    if (!session) {
+    if (!session || !canMutate) {
       return;
     }
 
@@ -1690,7 +1980,7 @@ export function PageEditorScreen(props: {
   function deleteNodes(nodeIds: string[]) {
     const session = sessionRef.current;
 
-    if (!session || nodeIds.length === 0) {
+    if (!session || nodeIds.length === 0 || !canMutate) {
       return;
     }
 
@@ -1710,7 +2000,7 @@ export function PageEditorScreen(props: {
   function groupSelection() {
     const session = sessionRef.current;
 
-    if (!session) {
+    if (!session || !canMutate) {
       return;
     }
 
@@ -1732,7 +2022,7 @@ export function PageEditorScreen(props: {
     const session = sessionRef.current;
     const nodeId = primarySelectionId;
 
-    if (!session || !nodeId) {
+    if (!session || !nodeId || !canMutate) {
       return;
     }
 
@@ -1772,16 +2062,21 @@ export function PageEditorScreen(props: {
         <p className="eyebrow">Editor</p>
         <h2>{props.file.name}</h2>
         <p className="muted">
-          Command-backed local editing with collab persistence, local undo/redo,
-          and DOM-overlay text editing.
+          {canMutate
+            ? "Command-backed editing with collab persistence and inspect-ready values."
+            : "Read-only handoff mode with page navigation, selection, and inspect values."}
         </p>
-        <div className="action-strip">
-          <InlineRenameForm
-            label="Rename file"
-            onSubmit={(name) => props.onRenameFile(props.file.id, name)}
-          />
-          <CreatePageForm onCreate={props.onCreatePage} />
-        </div>
+        {canMutate ? (
+          <div className="action-strip">
+            <InlineRenameForm
+              label="Rename file"
+              onSubmit={(name) => props.onRenameFile(props.file.id, name)}
+            />
+            <CreatePageForm onCreate={props.onCreatePage} />
+          </div>
+        ) : (
+          <div className="inline-alert">This file is open in read-only mode.</div>
+        )}
         <div className="editor-sidebar-section">
           <p className="eyebrow">Pages</p>
           <ul className="resource-list compact-resource-list">
@@ -1792,24 +2087,18 @@ export function PageEditorScreen(props: {
                     className={`resource-button ${
                       page.id === props.page.id ? "resource-button-active" : ""
                     }`}
-                    onClick={() =>
-                      props.onNavigate({
-                        fileId: props.file.id,
-                        kind: "page",
-                        pageId: page.id,
-                        projectId: props.project.id,
-                        workspaceId: props.workspace.id
-                      })
-                    }
+                    onClick={() => props.onNavigatePage(page.id)}
                     type="button"
                   >
                     <strong>{page.name}</strong>
                     <span>Order {page.orderIndex + 1}</span>
                   </button>
-                  <InlineRenameForm
-                    label="Rename page"
-                    onSubmit={(name) => props.onRenamePage(page.id, name)}
-                  />
+                  {canMutate ? (
+                    <InlineRenameForm
+                      label="Rename page"
+                      onSubmit={(name) => props.onRenamePage(page.id, name)}
+                    />
+                  ) : null}
                 </div>
               </li>
             ))}
@@ -1839,160 +2128,168 @@ export function PageEditorScreen(props: {
                     <strong>{node.name}</strong>
                     <span>{node.type}</span>
                   </button>
-                  <div className="layer-actions">
-                    <button
-                      className="button button-secondary button-icon"
-                      onClick={() => reorderNode(node.id, -1)}
-                      type="button"
-                    >
-                      ↑
-                    </button>
-                    <button
-                      className="button button-secondary button-icon"
-                      onClick={() => reorderNode(node.id, 1)}
-                      type="button"
-                    >
-                      ↓
-                    </button>
-                    <button
-                      className="button button-secondary button-icon"
-                      onClick={() =>
-                        toggleNodeFlag(node.id, {
-                          locked: !node.locked
-                        } as Partial<SceneGraphNode>)
-                      }
-                      type="button"
-                    >
-                      {node.locked ? "Unlock" : "Lock"}
-                    </button>
-                    <button
-                      className="button button-secondary button-icon"
-                      onClick={() =>
-                        toggleNodeFlag(node.id, {
-                          visible: !node.visible
-                        } as Partial<SceneGraphNode>)
-                      }
-                      type="button"
-                    >
-                      {node.visible ? "Hide" : "Show"}
-                    </button>
-                    <button
-                      className="button button-secondary button-icon"
-                      onClick={() => deleteNodes([node.id])}
-                      type="button"
-                    >
-                      Del
-                    </button>
-                  </div>
+                  {canMutate ? (
+                    <div className="layer-actions">
+                      <button
+                        className="button button-secondary button-icon"
+                        onClick={() => reorderNode(node.id, -1)}
+                        type="button"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        className="button button-secondary button-icon"
+                        onClick={() => reorderNode(node.id, 1)}
+                        type="button"
+                      >
+                        ↓
+                      </button>
+                      <button
+                        className="button button-secondary button-icon"
+                        onClick={() =>
+                          toggleNodeFlag(node.id, {
+                            locked: !node.locked
+                          } as Partial<SceneGraphNode>)
+                        }
+                        type="button"
+                      >
+                        {node.locked ? "Unlock" : "Lock"}
+                      </button>
+                      <button
+                        className="button button-secondary button-icon"
+                        onClick={() =>
+                          toggleNodeFlag(node.id, {
+                            visible: !node.visible
+                          } as Partial<SceneGraphNode>)
+                        }
+                        type="button"
+                      >
+                        {node.visible ? "Hide" : "Show"}
+                      </button>
+                      <button
+                        className="button button-secondary button-icon"
+                        onClick={() => deleteNodes([node.id])}
+                        type="button"
+                      >
+                        Del
+                      </button>
+                    </div>
+                  ) : null}
                   <span className="layer-order">#{index + 1}</span>
                 </div>
               );
             })}
           </div>
         </div>
-        <div className="editor-sidebar-section">
-          <p className="eyebrow">Comments</p>
-          <form className="comment-form" onSubmit={handleSubmitComment}>
-            <label className="comment-field">
-              <span>Anchor</span>
-              <select
-                className="input"
-                onChange={(event) =>
-                  setCommentTargetType(
-                    event.target.value as "file" | "node" | "page"
-                  )
-                }
-                value={commentTargetType}
-              >
-                {availableCommentTargetTypes.map((targetType) => (
-                  <option key={targetType} value={targetType}>
-                    {targetType === "node"
-                      ? "Selected node"
-                      : targetType === "page"
-                        ? "Current page"
-                        : "Whole file"}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="comment-field">
-              <span>Comment</span>
-              <textarea
-                className="input comment-textarea"
-                onChange={(event) => setCommentDraft(event.target.value)}
-                placeholder="Leave lightweight review context"
-                rows={4}
-                value={commentDraft}
-              />
-            </label>
-            <button
-              className="button button-secondary"
-              disabled={isSubmittingComment || commentDraft.trim().length === 0}
-              type="submit"
-            >
-              {isSubmittingComment ? "Saving..." : "Add comment"}
-            </button>
-          </form>
-          {commentLoadState.status === "error" ? (
-            <p className="muted">{commentLoadState.message}</p>
-          ) : null}
-          <div className="comment-list">
-            {sortedComments.map((comment) => {
-              const nodeMissing =
-                comment.nodeId !== null &&
-                !sessionSnapshot.document.nodes[comment.nodeId];
-              const targetLabel =
-                comment.nodeId !== null
-                  ? nodeMissing
-                    ? "Node (missing)"
-                    : "Node"
-                  : comment.pageId !== null
-                    ? "Page"
-                    : "File";
-
-              return (
-                <article
-                  className={`comment-card ${comment.resolvedAt ? "comment-card-resolved" : ""}`}
-                  key={comment.id}
+        {canViewComments ? (
+          <div className="editor-sidebar-section">
+            <p className="eyebrow">Comments</p>
+            {canComment ? (
+              <form className="comment-form" onSubmit={handleSubmitComment}>
+                <label className="comment-field">
+                  <span>Anchor</span>
+                  <select
+                    className="input"
+                    onChange={(event) =>
+                      setCommentTargetType(
+                        event.target.value as "file" | "node" | "page"
+                      )
+                    }
+                    value={commentTargetType}
+                  >
+                    {availableCommentTargetTypes.map((targetType) => (
+                      <option key={targetType} value={targetType}>
+                        {targetType === "node"
+                          ? "Selected node"
+                          : targetType === "page"
+                            ? "Current page"
+                            : "Whole file"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="comment-field">
+                  <span>Comment</span>
+                  <textarea
+                    className="input comment-textarea"
+                    onChange={(event) => setCommentDraft(event.target.value)}
+                    placeholder="Leave lightweight review context"
+                    rows={4}
+                    value={commentDraft}
+                  />
+                </label>
+                <button
+                  className="button button-secondary"
+                  disabled={isSubmittingComment || commentDraft.trim().length === 0}
+                  type="submit"
                 >
-                  <div className="comment-card-header">
-                    <div>
-                      <strong>{comment.author.displayName}</strong>
-                      <p className="muted">
-                        {new Date(comment.createdAt).toLocaleString()}
-                      </p>
-                    </div>
-                    <span className="presence-chip comment-target-chip">
-                      {targetLabel}
-                    </span>
-                  </div>
-                  <p>{comment.body}</p>
-                  <div className="comment-card-footer">
-                    <span>
-                      {comment.resolvedAt
-                        ? `Resolved ${new Date(comment.resolvedAt).toLocaleString()}`
-                        : "Open"}
-                    </span>
-                    {!comment.resolvedAt ? (
-                      <button
-                        className="button button-secondary button-icon"
-                        disabled={resolvingCommentId === comment.id}
-                        onClick={() => void handleResolveComment(comment.id)}
-                        type="button"
-                      >
-                        {resolvingCommentId === comment.id ? "..." : "Resolve"}
-                      </button>
-                    ) : null}
-                  </div>
-                </article>
-              );
-            })}
-            {sortedComments.length === 0 &&
-            commentLoadState.status !== "loading" ? (
-              <p className="muted">No comments on this file/page yet.</p>
+                  {isSubmittingComment ? "Saving..." : "Add comment"}
+                </button>
+              </form>
+            ) : (
+              <p className="muted">Comments are visible but read-only in this mode.</p>
+            )}
+            {commentLoadState.status === "error" ? (
+              <p className="muted">{commentLoadState.message}</p>
             ) : null}
+            <div className="comment-list">
+              {sortedComments.map((comment) => {
+                const nodeMissing =
+                  comment.nodeId !== null &&
+                  !sessionSnapshot.document.nodes[comment.nodeId];
+                const targetLabel =
+                  comment.nodeId !== null
+                    ? nodeMissing
+                      ? "Node (missing)"
+                      : "Node"
+                    : comment.pageId !== null
+                      ? "Page"
+                      : "File";
+
+                return (
+                  <article
+                    className={`comment-card ${comment.resolvedAt ? "comment-card-resolved" : ""}`}
+                    key={comment.id}
+                  >
+                    <div className="comment-card-header">
+                      <div>
+                        <strong>{comment.author.displayName}</strong>
+                        <p className="muted">
+                          {new Date(comment.createdAt).toLocaleString()}
+                        </p>
+                      </div>
+                      <span className="presence-chip comment-target-chip">
+                        {targetLabel}
+                      </span>
+                    </div>
+                    <p>{comment.body}</p>
+                    <div className="comment-card-footer">
+                      <span>
+                        {comment.resolvedAt
+                          ? `Resolved ${new Date(comment.resolvedAt).toLocaleString()}`
+                          : "Open"}
+                      </span>
+                      {!comment.resolvedAt && canComment ? (
+                        <button
+                          className="button button-secondary button-icon"
+                          disabled={resolvingCommentId === comment.id}
+                          onClick={() => void handleResolveComment(comment.id)}
+                          type="button"
+                        >
+                          {resolvingCommentId === comment.id ? "..." : "Resolve"}
+                        </button>
+                      ) : null}
+                    </div>
+                  </article>
+                );
+              })}
+              {sortedComments.length === 0 &&
+              commentLoadState.status !== "loading" ? (
+                <p className="muted">No comments on this file/page yet.</p>
+              ) : null}
+            </div>
           </div>
-        </div>
+        ) : null}
       </aside>
 
       <section className="panel editor-panel">
@@ -2015,84 +2312,88 @@ export function PageEditorScreen(props: {
             type="file"
           />
           <div className="toolbar-strip">
-            <button
-              className="button button-secondary"
-              onClick={() => createNode("frame")}
-              type="button"
-            >
-              Frame
-            </button>
-            <button
-              className="button button-secondary"
-              onClick={() => createNode("rectangle")}
-              type="button"
-            >
-              Rectangle
-            </button>
-            <button
-              className="button button-secondary"
-              onClick={() => createNode("ellipse")}
-              type="button"
-            >
-              Ellipse
-            </button>
-            <button
-              className="button button-secondary"
-              onClick={() => createNode("line")}
-              type="button"
-            >
-              Line
-            </button>
-            <button
-              className="button button-secondary"
-              onClick={() => createNode("text")}
-              type="button"
-            >
-              Text
-            </button>
-            <button
-              className="button button-secondary"
-              disabled={isUploadingAsset}
-              onClick={() => imageUploadInputRef.current?.click()}
-              type="button"
-            >
-              {isUploadingAsset ? "Uploading..." : "Image"}
-            </button>
-            <button
-              className="button button-secondary"
-              disabled={selectedIds.length < 2}
-              onClick={groupSelection}
-              type="button"
-            >
-              Group
-            </button>
-            <button
-              className="button button-secondary"
-              disabled={
-                sessionSnapshot.document.nodes[primarySelectionId ?? ""]
-                  ?.type !== "group"
-              }
-              onClick={ungroupSelection}
-              type="button"
-            >
-              Ungroup
-            </button>
-            <button
-              className="button button-secondary"
-              disabled={!sessionSnapshot.canUndo}
-              onClick={() => sessionRef.current?.undo()}
-              type="button"
-            >
-              Undo
-            </button>
-            <button
-              className="button button-secondary"
-              disabled={!sessionSnapshot.canRedo}
-              onClick={() => sessionRef.current?.redo()}
-              type="button"
-            >
-              Redo
-            </button>
+            {canMutate ? (
+              <>
+                <button
+                  className="button button-secondary"
+                  onClick={() => createNode("frame")}
+                  type="button"
+                >
+                  Frame
+                </button>
+                <button
+                  className="button button-secondary"
+                  onClick={() => createNode("rectangle")}
+                  type="button"
+                >
+                  Rectangle
+                </button>
+                <button
+                  className="button button-secondary"
+                  onClick={() => createNode("ellipse")}
+                  type="button"
+                >
+                  Ellipse
+                </button>
+                <button
+                  className="button button-secondary"
+                  onClick={() => createNode("line")}
+                  type="button"
+                >
+                  Line
+                </button>
+                <button
+                  className="button button-secondary"
+                  onClick={() => createNode("text")}
+                  type="button"
+                >
+                  Text
+                </button>
+                <button
+                  className="button button-secondary"
+                  disabled={isUploadingAsset}
+                  onClick={() => imageUploadInputRef.current?.click()}
+                  type="button"
+                >
+                  {isUploadingAsset ? "Uploading..." : "Image"}
+                </button>
+                <button
+                  className="button button-secondary"
+                  disabled={selectedIds.length < 2}
+                  onClick={groupSelection}
+                  type="button"
+                >
+                  Group
+                </button>
+                <button
+                  className="button button-secondary"
+                  disabled={
+                    sessionSnapshot.document.nodes[primarySelectionId ?? ""]
+                      ?.type !== "group"
+                  }
+                  onClick={ungroupSelection}
+                  type="button"
+                >
+                  Ungroup
+                </button>
+                <button
+                  className="button button-secondary"
+                  disabled={!sessionSnapshot.canUndo}
+                  onClick={() => sessionRef.current?.undo()}
+                  type="button"
+                >
+                  Undo
+                </button>
+                <button
+                  className="button button-secondary"
+                  disabled={!sessionSnapshot.canRedo}
+                  onClick={() => sessionRef.current?.redo()}
+                  type="button"
+                >
+                  Redo
+                </button>
+              </>
+            ) : null}
             <button
               className="button button-secondary"
               onClick={() =>
@@ -2128,6 +2429,7 @@ export function PageEditorScreen(props: {
         </div>
 
         <div className="editor-meta">
+          <span>Access: {props.access.mode}</span>
           <span>Collab: {collabStatus.state}</span>
           <span>
             Assets:{" "}
@@ -2280,6 +2582,102 @@ export function PageEditorScreen(props: {
           ) : null}
         </div>
       </section>
+
+      <aside className="panel editor-inspect-panel">
+        <div className="editor-sidebar-section">
+          <p className="eyebrow">Inspect</p>
+          {inspectDetails ? (
+            <div className="inspect-sections">
+              {inspectDetails.sections.map((section) => (
+                <section className="inspect-section" key={section.title}>
+                  <h3>{section.title}</h3>
+                  <dl className="inspect-grid">
+                    {section.fields.map((field) => (
+                      <div key={field.label}>
+                        <dt>{field.label}</dt>
+                        <dd>{field.value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </section>
+              ))}
+            </div>
+          ) : (
+            <p className="muted">
+              Select a supported node to inspect dimensions, spacing, color,
+              typography, and metadata.
+            </p>
+          )}
+        </div>
+
+        <div className="editor-sidebar-section">
+          <p className="eyebrow">Share</p>
+          {props.shareToken ? (
+            <p className="muted">
+              This session is running from a read-only share link. Document
+              changes are disabled in the UI and blocked server-side.
+            </p>
+          ) : canManageShareLinks ? (
+            <>
+              <button
+                className="button button-secondary"
+                disabled={isCreatingShareLink}
+                onClick={() => void handleCreateShareLink()}
+                type="button"
+              >
+                {isCreatingShareLink ? "Creating..." : "Create share link"}
+              </button>
+              {shareLinkLoadState.status === "error" ? (
+                <p className="muted">{shareLinkLoadState.message}</p>
+              ) : null}
+              <div className="share-link-list">
+                {shareLinkLoadState.shareLinks.map((shareLink) => (
+                  <article className="share-link-card" key={shareLink.id}>
+                    <div>
+                      <strong>{shareLink.revokedAt ? "Revoked link" : "Active link"}</strong>
+                      <p className="muted">
+                        Created {new Date(shareLink.createdAt).toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="share-link-actions">
+                      <button
+                        className="button button-secondary button-icon"
+                        disabled={!shareLink.shareUrl}
+                        onClick={() => void handleCopyShareLink(shareLink)}
+                        type="button"
+                      >
+                        {copiedShareLinkId === shareLink.id ? "Copied" : "Copy"}
+                      </button>
+                      <button
+                        className="button button-secondary button-icon"
+                        disabled={
+                          Boolean(shareLink.revokedAt) ||
+                          revokingShareLinkId === shareLink.id
+                        }
+                        onClick={() => void handleRevokeShareLink(shareLink.id)}
+                        type="button"
+                      >
+                        {revokingShareLinkId === shareLink.id ? "..." : "Revoke"}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+                {shareLinkLoadState.shareLinks.length === 0 &&
+                shareLinkLoadState.status !== "loading" ? (
+                  <p className="muted">
+                    No share links yet. Create one for lightweight review or
+                    handoff.
+                  </p>
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <p className="muted">
+              Share management is unavailable in read-only member access.
+            </p>
+          )}
+        </div>
+      </aside>
     </section>
   );
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Readable } from "node:stream";
 import {
+  createFileShareLink,
   createDatabasePool,
   createFileWithPages,
   createProject
@@ -10,6 +11,7 @@ import { type AuthContext, type AssetRecordDto } from "@openmirage/types";
 import Fastify from "fastify";
 import {
   buildAssetContentPath,
+  buildSharedAssetContentPath,
   detectRasterImageMimeType,
   parseMultipartUpload,
   readImageDimensions,
@@ -17,7 +19,9 @@ import {
   resolveAssetDeliveryMode,
   resolveAssetContentRequest,
   resolveCreateAssetRequest,
-  resolveListAssetsRequest
+  resolveListAssetsRequest,
+  resolveListSharedAssetsRequest,
+  resolveSharedAssetContentRequest
 } from "./assets.js";
 
 interface DatabaseClient {
@@ -126,23 +130,28 @@ async function insertWorkspace(
 async function insertMembership(
   client: DatabaseClient,
   workspaceId: string,
-  userId: string
+  userId: string,
+  role: "owner" | "editor" | "viewer" = "owner"
 ) {
   await client.query(
     `
       insert into memberships (workspace_id, user_id, role)
-      values ($1, $2, 'owner')
+      values ($1, $2, $3)
     `,
-    [workspaceId, userId]
+    [workspaceId, userId, role]
   );
 }
 
-function createAuthContext(userId: string, workspaceId: string): AuthContext {
+function createAuthContext(
+  userId: string,
+  workspaceId: string,
+  role: "owner" | "editor" | "viewer" = "owner"
+): AuthContext {
   return {
     memberships: [
       {
         id: "membership-id",
-        role: "owner",
+        role,
         workspaceId
       }
     ],
@@ -313,6 +322,11 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
       `asset-api-${Date.now()}@example.com`,
       "Asset User"
     );
+    const viewerUserId = await insertUser(
+      client,
+      `asset-api-viewer-${Date.now()}@example.com`,
+      "Viewer User"
+    );
     const otherUserId = await insertUser(
       client,
       `asset-api-other-${Date.now()}@example.com`,
@@ -330,6 +344,7 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
     );
 
     await insertMembership(client, workspaceId, userId);
+    await insertMembership(client, workspaceId, viewerUserId, "viewer");
     await insertMembership(client, otherWorkspaceId, otherUserId);
 
     const project = await createProject(
@@ -395,6 +410,25 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
       minioContext
     );
     assert.equal(forbiddenCreate.status, 403);
+
+    const viewerCreate = await resolveCreateAssetRequest(
+      createAuthContext(viewerUserId, workspaceId, "viewer"),
+      {
+        file: {
+          body: png,
+          filename: "hero.png",
+          mimeType: "image/png"
+        },
+        fileId,
+        projectId: project?.id as string,
+        scope: "file",
+        workspaceId
+      },
+      client,
+      storage,
+      minioContext
+    );
+    assert.equal(viewerCreate.status, 403);
 
     const invalidMime = await resolveCreateAssetRequest(
       createAuthContext(userId, workspaceId),
@@ -498,6 +532,15 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
       })}`
     );
     assert.equal(storage.objects.size, 1);
+
+    const sharedLink = await createFileShareLink(
+      userId,
+      workspaceId,
+      project?.id as string,
+      fileId,
+      client as Parameters<typeof createFileShareLink>[4]
+    );
+    assert.ok(sharedLink);
 
     const listed = await resolveListAssetsRequest(
       createAuthContext(userId, workspaceId),
@@ -620,6 +663,48 @@ test("asset request helpers enforce auth, validation, storage writes, and list r
       Buffer.from(content.body.body).toString("base64"),
       Buffer.from(png).toString("base64")
     );
+
+    const sharedList = await resolveListSharedAssetsRequest(
+      {
+        token: sharedLink?.token as string
+      },
+      client,
+      storage,
+      localContext
+    );
+    assert.equal(sharedList.status, 200);
+    if (sharedList.status !== 200 || !("assets" in sharedList.body)) {
+      throw new Error("expected shared asset list success");
+    }
+    assert.deepEqual(
+      sharedList.body.assets.map((asset) => ({
+        contentUrl: asset.contentUrl,
+        id: asset.id
+      })),
+      [
+        {
+          contentUrl: `https://app.test${buildSharedAssetContentPath(
+            sharedLink?.token as string,
+            createdAsset.id
+          )}`,
+          id: createdAsset.id
+        }
+      ]
+    );
+
+    const sharedContent = await resolveSharedAssetContentRequest(
+      {
+        assetId: createdAsset.id,
+        token: sharedLink?.token as string
+      },
+      client,
+      storage
+    );
+    assert.equal(sharedContent.status, 200);
+    if (sharedContent.status !== 200) {
+      throw new Error("expected shared asset content success");
+    }
+    assert.equal(sharedContent.body.contentType, "image/png");
 
     const storageFailure = new (class extends FakeStorage {
       override async put(): Promise<void> {

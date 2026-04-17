@@ -47,18 +47,18 @@ import {
 import { createStorage } from "@openmirage/storage";
 import {
   type AssetRecordDto,
-  type CreateFileInput,
-  type CreatePageInput,
-  type CreateCommentInput,
-  type CreateProjectInput,
   type AuthContext,
   type CommentListResponse,
+  type CreateCommentInput,
+  type CreateFileInput,
+  type CreatePageInput,
+  type CreateProjectInput,
   type ListAssetsResponse,
+  type HealthStatus,
+  type ReadyStatus,
   type RenameFileInput,
   type RenamePageInput,
   type RenameProjectInput,
-  type HealthStatus,
-  type ReadyStatus,
   type ServiceCheck,
   type StorageConfig
 } from "@openmirage/types";
@@ -69,14 +69,27 @@ import {
   resolveAssetDeliveryMode,
   resolveAssetContentRequest,
   resolveCreateAssetRequest,
-  resolveListAssetsRequest
+  resolveListAssetsRequest,
+  resolveListSharedAssetsRequest,
+  resolveSharedAssetContentRequest
 } from "./assets.js";
+import {
+  hasWorkspaceMembership as authHasWorkspaceMembership,
+  hasWritableWorkspaceAccess
+} from "./access.js";
 import {
   resolveCreateCommentRequest,
   resolveListCommentsRequest,
   resolveResolveCommentRequest
 } from "./comments.js";
 import { resolveCollabPageSession } from "./collab-session.js";
+import {
+  resolveCreateShareLinkRequest,
+  resolveListShareLinksRequest,
+  resolvePublicShareCollabSessionRequest,
+  resolvePublicShareLinkRequest,
+  resolveRevokeShareLinkRequest
+} from "./share-links.js";
 import {
   cleanupSmokeCollabFixture,
   createSmokeCollabFixture
@@ -117,8 +130,21 @@ interface PageParams extends FileParams {
   pageId: string;
 }
 
+interface ShareLinkParams extends FileParams {
+  shareLinkId: string;
+}
+
+interface PublicShareLinkParams {
+  token: string;
+}
+
+interface PublicSharePageParams extends PublicShareLinkParams {
+  pageId: string;
+}
+
 interface CollabPageSessionQuerystring {
   fileId?: string;
+  shareToken?: string;
   workspaceId?: string;
 }
 
@@ -220,9 +246,7 @@ function hasWorkspaceMembership(
     return true;
   }
 
-  return authContext.memberships.some(
-    (membership) => membership.workspaceId === workspaceId
-  );
+  return authHasWorkspaceMembership(authContext, workspaceId);
 }
 
 async function requireAuthContext(
@@ -251,6 +275,19 @@ function requireWorkspaceMembership(
   reply: FastifyReply
 ): boolean {
   if (hasWorkspaceMembership(authContext, workspaceId)) {
+    return true;
+  }
+
+  createAuthForbiddenReply(reply);
+  return false;
+}
+
+function requireWorkspaceWriteAccess(
+  authContext: AuthContext,
+  workspaceId: string,
+  reply: FastifyReply
+): boolean {
+  if (hasWritableWorkspaceAccess(authContext, workspaceId)) {
     return true;
   }
 
@@ -739,6 +776,7 @@ async function startApiServer(): Promise<void> {
   });
   app.get<{
     Params: PageParams;
+    Querystring: Pick<CollabPageSessionQuerystring, "shareToken">;
   }>(
     "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/pages/:pageId/collab-session",
     async (request, reply) => {
@@ -752,6 +790,9 @@ async function startApiServer(): Promise<void> {
         {
           fileId: request.params.fileId,
           pageId: request.params.pageId,
+          ...(request.query.shareToken
+            ? { shareToken: request.query.shareToken }
+            : {}),
           workspaceId: request.params.workspaceId
         },
         databasePool
@@ -775,6 +816,9 @@ async function startApiServer(): Promise<void> {
       {
         pageId: request.params.pageId,
         ...(request.query.fileId ? { fileId: request.query.fileId } : {}),
+        ...(request.query.shareToken
+          ? { shareToken: request.query.shareToken }
+          : {}),
         ...(request.query.workspaceId
           ? { workspaceId: request.query.workspaceId }
           : {})
@@ -785,6 +829,50 @@ async function startApiServer(): Promise<void> {
     reply.status(resolution.status);
     return resolution.body;
   });
+  app.get<{ Params: PublicShareLinkParams }>(
+    "/v1/share-links/:token",
+    async (request, reply) => {
+      const resolution = await resolvePublicShareLinkRequest(
+        {
+          token: request.params.token
+        },
+        databasePool
+      );
+
+      reply.status(resolution.status);
+      return resolution.body;
+    }
+  );
+  app.get<{ Params: PublicSharePageParams }>(
+    "/v1/share-links/:token/pages/:pageId",
+    async (request, reply) => {
+      const resolution = await resolvePublicShareLinkRequest(
+        {
+          pageId: request.params.pageId,
+          token: request.params.token
+        },
+        databasePool
+      );
+
+      reply.status(resolution.status);
+      return resolution.body;
+    }
+  );
+  app.get<{ Params: PublicSharePageParams }>(
+    "/v1/share-links/:token/pages/:pageId/collab-session",
+    async (request, reply) => {
+      const resolution = await resolvePublicShareCollabSessionRequest(
+        {
+          pageId: request.params.pageId,
+          token: request.params.token
+        },
+        databasePool
+      );
+
+      reply.status(resolution.status);
+      return resolution.body;
+    }
+  );
   app.post<{ Headers: SmokeSecretHeaders }>(
     "/internal/smoke/collab/bootstrap",
     async (request, reply) => {
@@ -885,7 +973,7 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(
+        !requireWorkspaceWriteAccess(
           authContext,
           request.params.workspaceId,
           reply
@@ -922,7 +1010,7 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(
+        !requireWorkspaceWriteAccess(
           authContext,
           request.params.workspaceId,
           reply
@@ -970,7 +1058,7 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(
+        !requireWorkspaceWriteAccess(
           authContext,
           request.params.workspaceId,
           reply
@@ -1018,7 +1106,7 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(
+        !requireWorkspaceWriteAccess(
           authContext,
           request.params.workspaceId,
           reply
@@ -1056,7 +1144,7 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(
+        !requireWorkspaceWriteAccess(
           authContext,
           request.params.workspaceId,
           reply
@@ -1121,7 +1209,7 @@ async function startApiServer(): Promise<void> {
       }
 
       if (
-        !requireWorkspaceMembership(
+        !requireWorkspaceWriteAccess(
           authContext,
           request.params.workspaceId,
           reply
@@ -1192,6 +1280,74 @@ async function startApiServer(): Promise<void> {
       }
 
       return result;
+    }
+  );
+  app.get<{ Params: FileParams }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/share-links",
+    async (request, reply) => {
+      const authContext = await readAuthContextFromRequest(
+        request,
+        databasePool,
+        sessionContract
+      );
+      const resolution = await resolveListShareLinksRequest(
+        authContext,
+        {
+          fileId: request.params.fileId,
+          projectId: request.params.projectId,
+          workspaceId: request.params.workspaceId
+        },
+        databasePool
+      );
+
+      reply.status(resolution.status);
+      return resolution.body;
+    }
+  );
+  app.post<{ Params: FileParams }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/share-links",
+    async (request, reply) => {
+      const authContext = await readAuthContextFromRequest(
+        request,
+        databasePool,
+        sessionContract
+      );
+      const resolution = await resolveCreateShareLinkRequest(
+        authContext,
+        {
+          fileId: request.params.fileId,
+          projectId: request.params.projectId,
+          workspaceId: request.params.workspaceId
+        },
+        databasePool,
+        env.appBaseUrl
+      );
+
+      reply.status(resolution.status);
+      return resolution.body;
+    }
+  );
+  app.post<{ Params: ShareLinkParams }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/share-links/:shareLinkId/revoke",
+    async (request, reply) => {
+      const authContext = await readAuthContextFromRequest(
+        request,
+        databasePool,
+        sessionContract
+      );
+      const resolution = await resolveRevokeShareLinkRequest(
+        authContext,
+        {
+          fileId: request.params.fileId,
+          projectId: request.params.projectId,
+          shareLinkId: request.params.shareLinkId,
+          workspaceId: request.params.workspaceId
+        },
+        databasePool
+      );
+
+      reply.status(resolution.status);
+      return resolution.body;
     }
   );
   app.get<{ Params: FileParams }>(
@@ -1537,6 +1693,50 @@ async function startApiServer(): Promise<void> {
 
         throw error;
       }
+    }
+  );
+  app.get<{ Params: PublicShareLinkParams }>(
+    "/v1/share-links/:token/assets",
+    async (request, reply) => {
+      const resolution = await resolveListSharedAssetsRequest(
+        {
+          token: request.params.token
+        },
+        databasePool,
+        storage,
+        {
+          assetDeliveryMode: resolveAssetDeliveryMode(env.storage.provider),
+          appBaseUrl: env.appBaseUrl
+        }
+      );
+
+      reply.status(resolution.status);
+      return resolution.body satisfies ListAssetsResponse | { error: string };
+    }
+  );
+  app.get<{
+    Params: PublicShareLinkParams & { assetId: string };
+  }>(
+    "/v1/share-links/:token/assets/:assetId/content",
+    async (request, reply) => {
+      const resolution = await resolveSharedAssetContentRequest(
+        {
+          assetId: request.params.assetId,
+          token: request.params.token
+        },
+        databasePool,
+        storage
+      );
+
+      if (resolution.status !== 200) {
+        reply.status(resolution.status);
+        return resolution.body;
+      }
+
+      reply.header("cache-control", resolution.body.cacheControl);
+      reply.header("content-type", resolution.body.contentType);
+      reply.status(200);
+      return reply.send(Buffer.from(resolution.body.body));
     }
   );
   app.get<{

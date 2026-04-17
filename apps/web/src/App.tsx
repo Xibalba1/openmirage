@@ -1,8 +1,10 @@
 import {
+  type AuthenticatedUser,
   type AuthContext,
   type CreateFileInput,
   type CreatePageInput,
   type CreateProjectInput,
+  type EditorAccessDto,
   type FileDto,
   type FileOpenResponse,
   type PageDto,
@@ -11,6 +13,8 @@ import {
   type RenamePageInput,
   type RenameProjectInput,
   type RuntimeUrls,
+  type SharedFileOpenResponse,
+  type WorkspaceDto,
   type WorkspaceDetailDto
 } from "@openmirage/types";
 import { type FormEvent, useEffect, useState } from "react";
@@ -50,6 +54,8 @@ type AppRoute =
       projectId: string;
       workspaceId: string;
     }
+  | { kind: "shared-file"; token: string }
+  | { kind: "shared-page"; pageId: string; token: string }
   | { kind: "unknown" };
 
 interface BrowserLocationState {
@@ -95,12 +101,23 @@ type ResourceData =
       workspace: WorkspaceDetailDto;
     }
   | {
+      access: EditorAccessDto;
       file: FileDto;
       kind: "file-open";
       pages: PageDto[];
       project: ProjectDto;
       selectedPageId: string | null;
       workspace: WorkspaceDetailDto;
+    }
+  | {
+      access: EditorAccessDto;
+      file: FileDto;
+      kind: "shared-file-open";
+      pages: PageDto[];
+      project: ProjectDto;
+      selectedPageId: string | null;
+      shareToken: string;
+      workspace: WorkspaceDto;
     };
 
 type FileOpenResource = Extract<ResourceData, { kind: "file-open" }>;
@@ -119,6 +136,25 @@ function parseRoute(pathname: string): AppRoute {
 
   if (pathname === "/auth") {
     return { kind: "auth" };
+  }
+
+  const sharedPageMatch = pathname.match(/^\/share\/([^/]+)\/pages\/([^/]+)$/);
+
+  if (sharedPageMatch) {
+    return {
+      kind: "shared-page",
+      pageId: decodeURIComponent(sharedPageMatch[2] ?? ""),
+      token: decodeURIComponent(sharedPageMatch[1] ?? "")
+    };
+  }
+
+  const sharedFileMatch = pathname.match(/^\/share\/([^/]+)$/);
+
+  if (sharedFileMatch) {
+    return {
+      kind: "shared-file",
+      token: decodeURIComponent(sharedFileMatch[1] ?? "")
+    };
   }
 
   if (pathname === "/app") {
@@ -192,13 +228,23 @@ function getRoutePath(route: AppRoute): string {
       return `/app/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}`;
     case "page":
       return `/app/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}/pages/${encodeURIComponent(route.pageId)}`;
+    case "shared-file":
+      return `/share/${encodeURIComponent(route.token)}`;
+    case "shared-page":
+      return `/share/${encodeURIComponent(route.token)}/pages/${encodeURIComponent(route.pageId)}`;
     case "unknown":
       return "/";
   }
 }
 
 function isProtectedRoute(route: AppRoute): boolean {
-  return !["root", "auth", "unknown"].includes(route.kind);
+  return ![
+    "root",
+    "auth",
+    "shared-file",
+    "shared-page",
+    "unknown"
+  ].includes(route.kind);
 }
 
 function getRedirectTarget(search: string): string {
@@ -257,6 +303,34 @@ async function fetchJson<T>(
 ): Promise<T> {
   const response = await fetch(createApiUrl(apiBaseUrl, path), {
     credentials: "include",
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...(init?.headers ?? {})
+    }
+  });
+
+  if (!response.ok) {
+    const failure =
+      response.status === 204
+        ? {}
+        : ((await response.json().catch(() => ({}))) as {
+            error?: string;
+          });
+    throw new Error(
+      failure.error ?? `Request failed with HTTP ${response.status}`
+    );
+  }
+
+  return (await response.json()) as T;
+}
+
+async function fetchPublicJson<T>(
+  apiBaseUrl: string,
+  path: string,
+  init?: RequestInit
+): Promise<T> {
+  const response = await fetch(createApiUrl(apiBaseUrl, path), {
     ...init,
     headers: {
       "content-type": "application/json",
@@ -340,6 +414,7 @@ async function fetchRouteResource(
       );
 
       return {
+        access: payload.access,
         file: payload.file,
         kind: "file-open",
         pages: payload.pages,
@@ -348,6 +423,32 @@ async function fetchRouteResource(
           route.kind === "page"
             ? route.pageId
             : (payload.defaultPageId ?? null),
+        workspace: payload.workspace
+      };
+    }
+    case "shared-file":
+    case "shared-page": {
+      const payload = await fetchPublicJson<SharedFileOpenResponse>(
+        apiBaseUrl,
+        route.kind === "shared-page"
+          ? `/v1/share-links/${encodeURIComponent(route.token)}/pages/${encodeURIComponent(route.pageId)}`
+          : `/v1/share-links/${encodeURIComponent(route.token)}`,
+        {
+          method: "GET"
+        }
+      );
+
+      return {
+        access: payload.access,
+        file: payload.file,
+        kind: "shared-file-open",
+        pages: payload.pages,
+        project: payload.project,
+        selectedPageId:
+          route.kind === "shared-page"
+            ? route.pageId
+            : (payload.defaultPageId ?? null),
+        shareToken: route.token,
         workspace: payload.workspace
       };
     }
@@ -513,6 +614,20 @@ export function App() {
 
     setSessionState({ status: "unauthenticated" });
     navigateTo("/auth", "replace");
+  }
+
+  const isSharedRoute =
+    route.kind === "shared-file" || route.kind === "shared-page";
+
+  if (isSharedRoute) {
+    return (
+      <SharedApp
+        apiBaseUrl={runtime.urls.apiBaseUrl}
+        onNavigate={(nextRoute) => navigateTo(getRoutePath(nextRoute))}
+        route={route}
+        runtimeUrls={runtime.urls}
+      />
+    );
   }
 
   if (sessionState.status === "loading") {
@@ -1025,17 +1140,27 @@ function AuthenticatedApp(props: {
 
       {editorData && editorPage && props.route.kind === "page" ? (
         <PageEditorScreen
+          access={editorData.access}
           collab={props.runtimeUrls}
           currentUser={props.auth.user}
           file={editorData.file}
           onCreatePage={handleCreatePage}
-          onNavigate={props.onNavigate}
+          onNavigatePage={(pageId) =>
+            props.onNavigate({
+              fileId: editorData.file.id,
+              kind: "page",
+              pageId,
+              projectId: editorData.project.id,
+              workspaceId: editorData.workspace.id
+            })
+          }
           onRenameFile={handleRenameFile}
           onRenamePage={handleRenamePage}
           page={editorPage}
           pages={editorData.pages}
           project={editorData.project}
           route={props.route}
+          shareToken={null}
           workspace={editorData.workspace}
         />
       ) : (
@@ -1108,6 +1233,133 @@ function AuthenticatedApp(props: {
           </section>
         </section>
       )}
+    </main>
+  );
+}
+
+function createSharedViewer(token: string): AuthenticatedUser {
+  return {
+    avatarUrl: null,
+    displayName: "Shared viewer",
+    email: `share-${token}@openmirage.local`,
+    id: `share-${token}`
+  };
+}
+
+function SharedApp(props: {
+  apiBaseUrl: string;
+  onNavigate: (route: AppRoute) => void;
+  route: Extract<AppRoute, { kind: "shared-file" | "shared-page" }>;
+  runtimeUrls: RuntimeUrls;
+}) {
+  const [resourceState, setResourceState] = useState<ResourceState>({
+    status: "loading"
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    setResourceState({ status: "loading" });
+
+    void fetchRouteResource(props.apiBaseUrl, props.route)
+      .then((value) => {
+        if (!cancelled) {
+          setResourceState({ status: "loaded", value });
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setResourceState({
+            status: "error",
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [props.apiBaseUrl, props.route]);
+
+  const editorData =
+    resourceState.status === "loaded" &&
+    resourceState.value.kind === "shared-file-open"
+      ? resourceState.value
+      : null;
+  const currentPageId =
+    props.route.kind === "shared-page" ? props.route.pageId : null;
+  const editorPage =
+    editorData && (currentPageId ?? editorData.selectedPageId)
+      ? (editorData.pages.find(
+          (page) => page.id === (currentPageId ?? editorData.selectedPageId)
+        ) ?? null)
+      : null;
+
+  if (editorData && editorPage) {
+    return (
+      <main className="screen app-screen app-screen-editor">
+        <header className="app-header">
+          <div>
+            <p className="eyebrow">OpenMirage</p>
+            <h1 className="app-title">Shared inspect view</h1>
+            <p className="muted">
+              Lightweight read-only handoff with inspect values and page
+              navigation.
+            </p>
+          </div>
+          <div className="header-actions">
+            <div className="identity-chip">
+              <strong>Read-only share link</strong>
+              <span>{editorData.file.name}</span>
+            </div>
+          </div>
+        </header>
+
+        <PageEditorScreen
+          access={editorData.access}
+          collab={props.runtimeUrls}
+          currentUser={createSharedViewer(editorData.shareToken)}
+          file={editorData.file}
+          onCreatePage={async () => undefined}
+          onNavigatePage={(pageId) =>
+            props.onNavigate({
+              kind: "shared-page",
+              pageId,
+              token: editorData.shareToken
+            })
+          }
+          onRenameFile={async () => undefined}
+          onRenamePage={async () => undefined}
+          page={editorPage}
+          pages={editorData.pages}
+          project={editorData.project}
+          route={{
+            fileId: editorData.file.id,
+            pageId: editorPage.id,
+            projectId: editorData.project.id,
+            workspaceId: editorData.workspace.id
+          }}
+          shareToken={editorData.shareToken}
+          workspace={editorData.workspace}
+        />
+      </main>
+    );
+  }
+
+  return (
+    <main className="screen screen-centered">
+      <section className="panel panel-compact">
+        <p className="eyebrow">Shared handoff</p>
+        <h1>
+          {resourceState.status === "error"
+            ? "Shared file unavailable"
+            : "Loading shared file"}
+        </h1>
+        <p className="muted">
+          {resourceState.status === "error"
+            ? resourceState.message
+            : "Resolving the shared file and page metadata."}
+        </p>
+      </section>
     </main>
   );
 }

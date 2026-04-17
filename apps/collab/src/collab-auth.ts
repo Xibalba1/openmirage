@@ -7,6 +7,7 @@ export interface CollabConnectionRequest {
   documentName?: string;
   fileId?: string;
   pageId?: string;
+  shareToken?: string;
   workspaceId?: string;
 }
 
@@ -39,6 +40,7 @@ export function readCollabConnectionRequest(
   const documentName = requestParameters.get("documentName") ?? undefined;
   const fileId = requestParameters.get("fileId") ?? undefined;
   const pageId = requestParameters.get("pageId") ?? undefined;
+  const shareToken = requestParameters.get("shareToken") ?? undefined;
   const workspaceId = requestParameters.get("workspaceId") ?? undefined;
   const request: CollabConnectionRequest = {};
 
@@ -52,6 +54,10 @@ export function readCollabConnectionRequest(
 
   if (pageId) {
     request.pageId = pageId;
+  }
+
+  if (shareToken) {
+    request.shareToken = shareToken;
   }
 
   if (workspaceId) {
@@ -76,6 +82,17 @@ export function buildAuthorizedCollabRequestUrl(input: {
   return url.toString();
 }
 
+export function buildSharedCollabRequestUrl(input: {
+  baseUrl: string;
+  pageId: string;
+  token: string;
+}): string {
+  return new URL(
+    `/v1/share-links/${encodeURIComponent(input.token)}/pages/${encodeURIComponent(input.pageId)}/collab-session`,
+    input.baseUrl
+  ).toString();
+}
+
 export function rewriteRequestUrlWithDocumentName(
   requestUrl: string,
   documentName: string,
@@ -94,7 +111,15 @@ export async function authorizeCollabConnection(
     fetchImpl?: FetchLike;
   }
 ): Promise<CollabAuthorizationResult> {
-  if (!request.pageId || !request.fileId || !request.workspaceId) {
+  if (!request.pageId) {
+    return {
+      ok: false,
+      reason: "missing-page-identity",
+      status: 400
+    };
+  }
+
+  if (!request.shareToken && (!request.fileId || !request.workspaceId)) {
     return {
       ok: false,
       reason: "missing-page-identity",
@@ -113,21 +138,25 @@ export async function authorizeCollabConnection(
   }
 
   const fetchImpl = options.fetchImpl ?? fetch;
+  const requestUrl = request.shareToken
+    ? buildSharedCollabRequestUrl({
+        baseUrl: options.apiBaseUrl,
+        pageId: request.pageId,
+        token: request.shareToken
+      })
+    : buildAuthorizedCollabRequestUrl({
+        baseUrl: options.apiBaseUrl,
+        fileId: request.fileId as string,
+        pageId: request.pageId,
+        workspaceId: request.workspaceId as string
+      });
 
   try {
-    const response = await fetchImpl(
-      buildAuthorizedCollabRequestUrl({
-        baseUrl: options.apiBaseUrl,
-        fileId: request.fileId,
-        pageId: request.pageId,
-        workspaceId: request.workspaceId
-      }),
-      {
-        headers: {
-          cookie: options.cookieHeader
-        }
+    const response = await fetchImpl(requestUrl, {
+      headers: {
+        cookie: options.cookieHeader
       }
-    );
+    });
 
     if (response.status === 401) {
       return {

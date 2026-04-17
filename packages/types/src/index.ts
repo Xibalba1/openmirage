@@ -29,6 +29,14 @@ export const membershipRoles = ["owner", "editor", "viewer"] as const;
 
 export type MembershipRole = (typeof membershipRoles)[number];
 
+export const editorAccessModes = ["writable", "read-only"] as const;
+
+export type EditorAccessMode = (typeof editorAccessModes)[number];
+
+export const editorAccessSources = ["membership", "share-link"] as const;
+
+export type EditorAccessSource = (typeof editorAccessSources)[number];
+
 export interface AuthenticatedUser {
   id: string;
   email: string;
@@ -112,6 +120,37 @@ export interface WorkspaceDetailDto extends WorkspaceDto {
   role: MembershipRole;
 }
 
+export interface EditorAccessDto {
+  canComment: boolean;
+  canManageShareLinks: boolean;
+  canMutate: boolean;
+  mode: EditorAccessMode;
+  role: MembershipRole | null;
+  source: EditorAccessSource;
+}
+
+export function canWriteMembershipRole(
+  role: MembershipRole | null | undefined
+): role is Exclude<MembershipRole, "viewer"> {
+  return role === "owner" || role === "editor";
+}
+
+export function createEditorAccess(input: {
+  role: MembershipRole | null;
+  source: EditorAccessSource;
+}): EditorAccessDto {
+  const canMutate = input.source === "membership" && canWriteMembershipRole(input.role);
+
+  return {
+    canComment: canMutate,
+    canManageShareLinks: canMutate,
+    canMutate,
+    mode: canMutate ? "writable" : "read-only",
+    role: input.role,
+    source: input.source
+  };
+}
+
 export interface ProjectListResponse {
   projects: ProjectDto[];
   workspace: WorkspaceDetailDto;
@@ -160,6 +199,7 @@ export interface RenamePageInput {
 }
 
 export interface FileOpenResponse {
+  access: EditorAccessDto;
   defaultPageId: string | null;
   file: FileDto;
   pages: PageDto[];
@@ -168,6 +208,7 @@ export interface FileOpenResponse {
 }
 
 export interface CollabPageSessionDto {
+  access: EditorAccessDto;
   documentName: string;
   fileId: string;
   pageId: string;
@@ -281,6 +322,38 @@ export interface ShareLinkDto {
   expiresAt: string | null;
   revokedAt: string | null;
   createdAt: string;
+}
+
+export interface ShareLinkRecordDto extends ShareLinkDto {
+  shareUrl: string | null;
+}
+
+export interface CreateShareLinkInput {
+  expiresAt?: string | null;
+}
+
+export interface ShareLinkListResponse {
+  shareLinks: ShareLinkRecordDto[];
+}
+
+export interface CreatedShareLinkResponse {
+  shareLink: ShareLinkRecordDto;
+  token: string;
+}
+
+export interface PublicShareLinkDto {
+  fileId: string;
+  id: string;
+}
+
+export interface SharedFileOpenResponse {
+  access: EditorAccessDto;
+  defaultPageId: string | null;
+  file: FileDto;
+  pages: PageDto[];
+  project: ProjectDto;
+  shareLink: PublicShareLinkDto;
+  workspace: WorkspaceDto;
 }
 
 export interface ExportJobDto {

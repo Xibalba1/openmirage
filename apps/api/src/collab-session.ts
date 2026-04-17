@@ -1,9 +1,14 @@
-import { getAuthorizedCollabPageSession } from "@openmirage/db";
+import {
+  getAuthorizedCollabPageSession,
+  getSharedCollabPageSession
+} from "@openmirage/db";
 import { type AuthContext, type CollabPageSessionDto } from "@openmirage/types";
+import { hasWorkspaceMembership } from "./access.js";
 
 export interface CollabPageSessionRequest {
   fileId?: string;
   pageId: string;
+  shareToken?: string;
   workspaceId?: string;
 }
 
@@ -23,6 +28,26 @@ export async function resolveCollabPageSession(
   request: CollabPageSessionRequest,
   databasePool: QueryableDatabase
 ): Promise<CollabPageSessionResolution> {
+  if (request.shareToken) {
+    const session = await getSharedCollabPageSession(
+      request.shareToken,
+      request.pageId,
+      databasePool as Parameters<typeof getSharedCollabPageSession>[2]
+    );
+
+    if (!session) {
+      return {
+        body: { error: "not_found" },
+        status: 404
+      };
+    }
+
+    return {
+      body: session,
+      status: 200
+    };
+  }
+
   if (!authContext) {
     return {
       body: { error: "unauthenticated" },
@@ -37,11 +62,7 @@ export async function resolveCollabPageSession(
     };
   }
 
-  const hasMembership = authContext.memberships.some(
-    (membership) => membership.workspaceId === request.workspaceId
-  );
-
-  if (!hasMembership) {
+  if (!hasWorkspaceMembership(authContext, request.workspaceId)) {
     return {
       body: { error: "forbidden" },
       status: 403

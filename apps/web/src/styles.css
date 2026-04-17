@@ -447,17 +447,22 @@ h3 {
 
 .editor-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  grid-template-columns:
+    minmax(280px, 340px)
+    minmax(0, 1fr)
+    minmax(280px, 340px);
   gap: 24px;
   align-items: start;
 }
 
 .editor-sidebar,
-.editor-panel {
+.editor-panel,
+.editor-inspect-panel {
   min-height: 0;
 }
 
-.editor-sidebar {
+.editor-sidebar,
+.editor-inspect-panel {
   display: grid;
   gap: 18px;
 }
@@ -726,6 +731,67 @@ h3 {
 
 .comment-target-chip {
   flex-shrink: 0;
+}
+
+.inspect-sections,
+.share-link-list {
+  display: grid;
+  gap: 12px;
+}
+
+.inspect-section {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.inspect-section h3 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.inspect-grid {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.inspect-grid div {
+  display: grid;
+  gap: 4px;
+}
+
+.inspect-grid dt {
+  color: rgba(247, 241, 231, 0.62);
+  font-size: 0.82rem;
+}
+
+.inspect-grid dd {
+  margin: 0;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.share-link-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.share-link-card p {
+  margin-bottom: 0;
+}
+
+.share-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 @media (max-width: 960px) {

@@ -80,23 +80,28 @@ async function insertWorkspace(
 async function insertMembership(
   client: DatabaseClient,
   workspaceId: string,
-  userId: string
+  userId: string,
+  role: "owner" | "editor" | "viewer" = "owner"
 ) {
   await client.query(
     `
       insert into memberships (workspace_id, user_id, role)
-      values ($1, $2, 'owner')
+      values ($1, $2, $3)
     `,
-    [workspaceId, userId]
+    [workspaceId, userId, role]
   );
 }
 
-function createAuthContext(userId: string, workspaceId: string): AuthContext {
+function createAuthContext(
+  userId: string,
+  workspaceId: string,
+  role: "owner" | "editor" | "viewer" = "owner"
+): AuthContext {
   return {
     memberships: [
       {
         id: "membership-id",
-        role: "owner",
+        role,
         workspaceId
       }
     ],
@@ -120,6 +125,11 @@ test("comment request helpers enforce auth, target validation, and resolve flow"
       `comment-api-${Date.now()}@example.com`,
       "Comment User"
     );
+    const viewerUserId = await insertUser(
+      client,
+      `comment-api-viewer-${Date.now()}@example.com`,
+      "Viewer User"
+    );
     const otherUserId = await insertUser(
       client,
       `comment-api-other-${Date.now()}@example.com`,
@@ -137,6 +147,7 @@ test("comment request helpers enforce auth, target validation, and resolve flow"
     );
 
     await insertMembership(client, workspaceId, userId);
+    await insertMembership(client, workspaceId, viewerUserId, "viewer");
     await insertMembership(client, otherWorkspaceId, otherUserId);
 
     const project = await createProject(
@@ -228,6 +239,38 @@ test("comment request helpers enforce auth, target validation, and resolve flow"
     }
     const createdComment = created.body as CommentDto;
 
+    const viewerList = await resolveListCommentsRequest(
+      createAuthContext(viewerUserId, workspaceId, "viewer"),
+      {
+        fileId,
+        includeResolved: "false",
+        pageId,
+        projectId: project?.id as string,
+        workspaceId
+      },
+      client
+    );
+    assert.equal(viewerList.status, 200);
+
+    const viewerCreate = await resolveCreateCommentRequest(
+      createAuthContext(viewerUserId, workspaceId, "viewer"),
+      {
+        body: {
+          body: "Blocked",
+          target: {
+            fileId,
+            pageId,
+            type: "page"
+          }
+        },
+        fileId,
+        projectId: project?.id as string,
+        workspaceId
+      },
+      client
+    );
+    assert.equal(viewerCreate.status, 403);
+
     const fileScoped = await resolveCreateCommentRequest(
       createAuthContext(userId, workspaceId),
       {
@@ -303,6 +346,18 @@ test("comment request helpers enforce auth, target validation, and resolve flow"
       throw new Error("expected resolve success");
     }
     assert.ok((resolved.body as CommentDto).resolvedAt);
+
+    const viewerResolve = await resolveResolveCommentRequest(
+      createAuthContext(viewerUserId, workspaceId, "viewer"),
+      {
+        commentId: createdComment.id,
+        fileId,
+        projectId: project?.id as string,
+        workspaceId
+      },
+      client
+    );
+    assert.equal(viewerResolve.status, 403);
 
     const missingResolve = await resolveResolveCommentRequest(
       createAuthContext(userId, workspaceId),
