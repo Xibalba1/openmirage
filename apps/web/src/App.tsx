@@ -19,6 +19,7 @@ import {
 } from "@openmirage/types";
 import { type FormEvent, useEffect, useState } from "react";
 import { PageEditorScreen } from "./editor/PageEditorScreen";
+import { buildJsonRequestHeaders } from "./http";
 import { readRuntimeWebEnv } from "./runtime-env";
 
 const pendingRedirectStorageKey = "openmirage.pendingRedirect";
@@ -304,10 +305,7 @@ async function fetchJson<T>(
   const response = await fetch(createApiUrl(apiBaseUrl, path), {
     credentials: "include",
     ...init,
-    headers: {
-      "content-type": "application/json",
-      ...(init?.headers ?? {})
-    }
+    headers: buildJsonRequestHeaders(init)
   });
 
   if (!response.ok) {
@@ -332,10 +330,7 @@ async function fetchPublicJson<T>(
 ): Promise<T> {
   const response = await fetch(createApiUrl(apiBaseUrl, path), {
     ...init,
-    headers: {
-      "content-type": "application/json",
-      ...(init?.headers ?? {})
-    }
+    headers: buildJsonRequestHeaders(init)
   });
 
   if (!response.ok) {
