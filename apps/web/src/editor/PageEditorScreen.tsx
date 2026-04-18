@@ -29,6 +29,7 @@ import {
   useRef,
   useState
 } from "react";
+import { buildJsonRequestHeaders } from "../http";
 import {
   applyEditorCommand,
   getNodeAbsolutePosition,
@@ -162,10 +163,7 @@ async function fetchEditorJson<T>(
   const response = await fetch(createApiUrl(apiBaseUrl, path), {
     credentials,
     ...init,
-    headers: {
-      "content-type": "application/json",
-      ...(init?.headers ?? {})
-    }
+    headers: buildJsonRequestHeaders(init)
   });
 
   if (!response.ok) {
