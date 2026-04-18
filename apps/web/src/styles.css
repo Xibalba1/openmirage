@@ -47,6 +47,37 @@ a {
   padding: 28px;
 }
 
+.build-stamp {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 1000;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(8, 20, 26, 0.82);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 18px 44px rgba(3, 8, 10, 0.26);
+  color: rgba(247, 241, 231, 0.84);
+  pointer-events: none;
+}
+
+.build-stamp-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(240, 178, 106, 0.9);
+}
+
+.build-stamp code {
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
 .screen-centered {
   display: grid;
   place-items: center;
@@ -797,6 +828,12 @@ h3 {
 @media (max-width: 960px) {
   .screen {
     padding: 18px;
+  }
+
+  .build-stamp {
+    right: 12px;
+    bottom: 12px;
+    max-width: calc(100vw - 24px);
   }
 
   .auth-layout,

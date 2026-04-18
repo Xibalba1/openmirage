@@ -33,7 +33,9 @@ jobs:
         id: images
         run: |
           registry_owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          app_version="$(printf '%s' "${GITHUB_SHA}" | cut -c1-7)"
           {
+            echo "app_version=${app_version}"
             echo "api=ghcr.io/${registry_owner}/openmirage-api:${GITHUB_SHA}"
             echo "api_tools=ghcr.io/${registry_owner}/openmirage-api-tools:${GITHUB_SHA}"
             echo "web=ghcr.io/${registry_owner}/openmirage-web:${GITHUB_SHA}"
@@ -130,6 +132,7 @@ jobs:
           export OPENMIRAGE_WEB_IMAGE="${{ steps.images.outputs.web }}"
           export OPENMIRAGE_COLLAB_IMAGE="${{ steps.images.outputs.collab }}"
           export OPENMIRAGE_WORKER_IMAGE="${{ steps.images.outputs.worker }}"
+          export APP_VERSION="${{ steps.images.outputs.app_version }}"
 
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
           trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT

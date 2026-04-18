@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Image tag to deploy or redeploy. Defaults to `main`, the latest published main image set."
+        description: "Image tag to deploy or redeploy. Defaults to the current workflow commit SHA."
         required: false
         type: string
 
@@ -59,10 +59,16 @@ jobs:
           registry_owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           image_tag="$(printf '%s' "${{ inputs.image_tag }}" | xargs)"
           if [ -z "$image_tag" ]; then
-            image_tag="main"
+            image_tag="${GITHUB_SHA}"
+          fi
+          if printf '%s' "$image_tag" | grep -Eq '^[0-9a-f]{7,40}$'; then
+            app_version="$(printf '%s' "$image_tag" | cut -c1-7)"
+          else
+            app_version="$image_tag"
           fi
           {
             echo "tag=${image_tag}"
+            echo "app_version=${app_version}"
             echo "api=ghcr.io/${registry_owner}/openmirage-api:${image_tag}"
             echo "api_tools=ghcr.io/${registry_owner}/openmirage-api-tools:${image_tag}"
             echo "web=ghcr.io/${registry_owner}/openmirage-web:${image_tag}"
@@ -159,6 +165,7 @@ jobs:
           export OPENMIRAGE_WEB_IMAGE="${{ steps.images.outputs.web }}"
           export OPENMIRAGE_COLLAB_IMAGE="${{ steps.images.outputs.collab }}"
           export OPENMIRAGE_WORKER_IMAGE="${{ steps.images.outputs.worker }}"
+          export APP_VERSION="${{ steps.images.outputs.app_version }}"
 
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
           trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT

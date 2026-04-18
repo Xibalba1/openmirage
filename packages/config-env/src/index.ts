@@ -61,6 +61,7 @@ export interface WorkerEnv extends BaseServiceEnv {
 export interface WebEnv {
   service: "web";
   environment: RuntimeEnvironment;
+  appVersion: string;
   port: number;
   urls: RuntimeUrls;
 }
@@ -397,6 +398,7 @@ export function readWebEnv(source: EnvSource): WebEnv {
   return {
     service: "web",
     environment,
+    appVersion: readAppVersion(source),
     port: readNumber(source, "WEB_PORT", 3000),
     urls: {
       apiBaseUrl: readRequiredString(

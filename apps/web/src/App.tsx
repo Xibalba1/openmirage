@@ -17,7 +17,7 @@ import {
   type WorkspaceDto,
   type WorkspaceDetailDto
 } from "@openmirage/types";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { PageEditorScreen } from "./editor/PageEditorScreen";
 import { buildJsonRequestHeaders } from "./http";
 import { readRuntimeWebEnv } from "./runtime-env";
@@ -122,6 +122,24 @@ type ResourceData =
     };
 
 type FileOpenResource = Extract<ResourceData, { kind: "file-open" }>;
+
+function BuildStamp(props: { appVersion: string }) {
+  return (
+    <aside className="build-stamp" aria-label="Deployed build version">
+      <span className="build-stamp-label">Build</span>
+      <code>{props.appVersion}</code>
+    </aside>
+  );
+}
+
+function renderWithBuildStamp(appVersion: string, content: ReactNode) {
+  return (
+    <>
+      {content}
+      <BuildStamp appVersion={appVersion} />
+    </>
+  );
+}
 
 function readBrowserLocation(): BrowserLocationState {
   return {
@@ -615,7 +633,8 @@ export function App() {
     route.kind === "shared-file" || route.kind === "shared-page";
 
   if (isSharedRoute) {
-    return (
+    return renderWithBuildStamp(
+      runtime.appVersion,
       <SharedApp
         apiBaseUrl={runtime.urls.apiBaseUrl}
         onNavigate={(nextRoute) => navigateTo(getRoutePath(nextRoute))}
@@ -626,7 +645,8 @@ export function App() {
   }
 
   if (sessionState.status === "loading") {
-    return (
+    return renderWithBuildStamp(
+      runtime.appVersion,
       <main className="screen screen-centered">
         <section className="panel panel-compact">
           <p className="eyebrow">OpenMirage</p>
@@ -640,7 +660,8 @@ export function App() {
   }
 
   if (sessionState.status === "error") {
-    return (
+    return renderWithBuildStamp(
+      runtime.appVersion,
       <main className="screen screen-centered">
         <section className="panel panel-compact">
           <p className="eyebrow">OpenMirage</p>
@@ -659,7 +680,8 @@ export function App() {
   }
 
   if (sessionState.status === "unauthenticated") {
-    return (
+    return renderWithBuildStamp(
+      runtime.appVersion,
       <AuthScreen
         apiBaseUrl={runtime.urls.apiBaseUrl}
         authPath={runtime.urls.authPath}
@@ -671,7 +693,8 @@ export function App() {
     );
   }
 
-  return (
+  return renderWithBuildStamp(
+    runtime.appVersion,
     <AuthenticatedApp
       apiBaseUrl={runtime.urls.apiBaseUrl}
       auth={sessionState.auth}

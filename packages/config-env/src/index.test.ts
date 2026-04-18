@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { readApiEnv, readStorageConfig } from "./index.js";
+import { readApiEnv, readStorageConfig, readWebEnv } from "./index.js";
 
 test("readStorageConfig returns local storage config when provider is local", () => {
   const config = readStorageConfig({
@@ -88,4 +88,13 @@ test("readApiEnv rejects invalid same-site settings", () => {
       }),
     /SESSION_COOKIE_SAME_SITE/
   );
+});
+
+test("readWebEnv includes runtime app version", () => {
+  const env = readWebEnv({
+    APP_VERSION: "abc1234",
+    OPENMIRAGE_ENV: "staging"
+  });
+
+  assert.equal(env.appVersion, "abc1234");
 });
