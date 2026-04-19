@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.json && vite build",
     "lint": "eslint . --max-warnings=0",
-    "test": "node --test --import tsx ./src/**/*.test.ts",
+    "test": "vitest run --config vitest.config.ts && node --test --import tsx ./src/**/*.test.ts",
+    "test:e2e": "playwright test --config playwright.config.ts",
+    "test:e2e:install": "playwright install chromium",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "docker:build": "docker build -f Dockerfile -t openmirage-web:local ../.."
   },
@@ -21,6 +23,8 @@
     "yjs": "^13.6.27"
   },
   "devDependencies": {
+    "@openmirage/db": "workspace:*",
+    "@openmirage/config-test": "workspace:*",
     "@vitejs/plugin-react": "^4.4.1"
   }
 }

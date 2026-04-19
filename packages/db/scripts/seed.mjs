@@ -12,6 +12,7 @@ console.log(
       magicLinkToken: summary.magicLinkToken,
       membership: summary.membership,
       page: summary.page,
+      pages: summary.pages,
       project: summary.project,
       session: summary.session,
       user: summary.user,

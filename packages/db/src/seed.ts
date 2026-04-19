@@ -8,9 +8,13 @@ const DEFAULT_USER_EMAIL = "dev@openmirage.local";
 const DEFAULT_USER_NAME = "OpenMirage Dev";
 const DEFAULT_WORKSPACE_NAME = "OpenMirage Dev";
 const DEFAULT_WORKSPACE_SLUG = "openmirage-dev";
-const DEFAULT_PROJECT_NAME = "Platform Bootstrap";
-const DEFAULT_FILE_NAME = "Getting Started";
-const DEFAULT_PAGE_NAME = "Page 1";
+const DEFAULT_PROJECT_NAME = "MVP Acceptance";
+const DEFAULT_FILE_NAME = "Acceptance Playground";
+const DEFAULT_PAGES = [
+  { name: "Overview", orderIndex: 0 },
+  { name: "Collab Notes", orderIndex: 1 },
+  { name: "Export Ready", orderIndex: 2 }
+] as const;
 
 interface SeedResultRecord {
   created: boolean;
@@ -33,6 +37,7 @@ export interface DevelopmentBootstrapSummary {
   membership: SeedResultRecord;
   project: SeedResultRecord;
   file: SeedResultRecord;
+  pages: SeedResultRecord[];
   page: SeedResultRecord;
   session: SeedResultRecord & {
     token: string | null;
@@ -73,8 +78,10 @@ export async function seedDevelopmentBootstrap(
       workspace.id,
       user.id
     );
-    const page = await findOrCreatePage(client, file.id);
-    await ensurePageCollabDocument(client, page.id);
+    const pages = await findOrCreatePages(client, file.id);
+    for (const page of pages) {
+      await ensurePageCollabDocument(client, page.id, page.orderIndex);
+    }
     const session = await findOrCreateSession(client, user.id);
     const magicLinkToken = await findOrCreateMagicLinkToken(client, user.id);
     const summary = {
@@ -83,7 +90,8 @@ export async function seedDevelopmentBootstrap(
       membership,
       project,
       file,
-      page,
+      pages,
+      page: pages[0] as SeedResultRecord,
       session,
       magicLinkToken
     };
@@ -293,47 +301,64 @@ async function findOrCreateFile(
   };
 }
 
-async function findOrCreatePage(
+async function findOrCreatePages(
   client: PoolClient,
   fileId: string
-): Promise<SeedResultRecord> {
-  const existing = await client.query<{ id: string }>(
-    `
-      select id
-      from pages
-      where file_id = $1
-        and order_index = 0
-      limit 1
-    `,
-    [fileId]
-  );
+): Promise<Array<SeedResultRecord & { orderIndex: number }>> {
+  const pages: Array<SeedResultRecord & { orderIndex: number }> = [];
 
-  if (existing.rowCount) {
-    const row = requireRow(existing.rows, "existing page");
+  for (const definition of DEFAULT_PAGES) {
+    const existing = await client.query<{ id: string }>(
+      `
+        select id
+        from pages
+        where file_id = $1
+          and order_index = $2
+        limit 1
+      `,
+      [fileId, definition.orderIndex]
+    );
 
-    return {
-      created: false,
-      id: row.id
-    };
+    if (existing.rowCount) {
+      pages.push({
+        created: false,
+        id: requireRow(existing.rows, "existing page").id,
+        orderIndex: definition.orderIndex
+      });
+      continue;
+    }
+
+    const inserted = await client.query<{ id: string }>(
+      `
+        insert into pages (file_id, name, order_index, width, height, background)
+        values ($1, $2, $3, 1440, 1024, '#ffffff')
+        returning id
+      `,
+      [fileId, definition.name, definition.orderIndex]
+    );
+
+    pages.push({
+      created: true,
+      id: requireRow(inserted.rows, "inserted page").id,
+      orderIndex: definition.orderIndex
+    });
   }
 
-  const inserted = await client.query<{ id: string }>(
-    `
-      insert into pages (file_id, name, order_index, width, height, background)
-      values ($1, $2, 0, 1440, 1024, '#ffffff')
-      returning id
-    `,
-    [fileId, DEFAULT_PAGE_NAME]
-  );
-
-  return {
-    created: true,
-    id: requireRow(inserted.rows, "inserted page").id
-  };
+  return pages;
 }
 
-function buildBootstrapPageDocument(pageId: string): PageDocumentDto {
+function buildBootstrapPageDocument(
+  pageId: string,
+  pageIndex: number
+): PageDocumentDto {
   const timestamp = new Date().toISOString();
+  const titles = [
+    "Sprint 10 Acceptance Overview",
+    "Realtime Collaboration Checks",
+    "Export and Handoff"
+  ];
+  const cardColors = ["#f5a24a", "#5fabc0", "#84cc16"];
+  const ellipseColors = ["#5fabc0", "#f97316", "#14b8a6"];
 
   return {
     nodes: {
@@ -366,7 +391,7 @@ function buildBootstrapPageDocument(pageId: string): PageDocumentDto {
         zIndex: 0
       },
       "title-text": {
-        content: "OpenMirage Sprint 4",
+        content: titles[pageIndex] ?? titles[0]!,
         createdAt: timestamp,
         height: 48,
         id: "title-text",
@@ -396,7 +421,7 @@ function buildBootstrapPageDocument(pageId: string): PageDocumentDto {
         cornerRadius: 24,
         createdAt: timestamp,
         fill: {
-          color: { alpha: 1, hex: "#f5a24a" }
+          color: { alpha: 1, hex: cardColors[pageIndex] ?? cardColors[0]! }
         },
         height: 220,
         id: "hero-card",
@@ -438,7 +463,10 @@ function buildBootstrapPageDocument(pageId: string): PageDocumentDto {
       "group-ellipse": {
         createdAt: timestamp,
         fill: {
-          color: { alpha: 1, hex: "#5fabc0" }
+          color: {
+            alpha: 1,
+            hex: ellipseColors[pageIndex] ?? ellipseColors[0]!
+          }
         },
         height: 180,
         id: "group-ellipse",
@@ -510,7 +538,8 @@ function buildBootstrapPageDocument(pageId: string): PageDocumentDto {
 
 async function ensurePageCollabDocument(
   client: PoolClient,
-  pageId: string
+  pageId: string,
+  pageIndex: number
 ): Promise<void> {
   const existing = await client.query<{ has_state: boolean }>(
     `
@@ -533,7 +562,7 @@ async function ensurePageCollabDocument(
 
   const document = new Y.Doc();
   const pageMap = document.getMap<unknown>("page");
-  const pageDocument = buildBootstrapPageDocument(pageId);
+  const pageDocument = buildBootstrapPageDocument(pageId, pageIndex);
   pageMap.set("rootNodeIds", pageDocument.rootNodeIds);
   pageMap.set("nodes", pageDocument.nodes);
 

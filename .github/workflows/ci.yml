@@ -19,6 +19,23 @@ env:
 jobs:
   static-validation:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgres://openmirage:openmirage@127.0.0.1:5432/openmirage
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: openmirage
+          POSTGRES_USER: openmirage
+          POSTGRES_PASSWORD: openmirage
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U openmirage -d openmirage"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Check out repo
@@ -38,6 +55,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Wait for Postgres
+        run: |
+          for attempt in $(seq 1 30); do
+            if nc -z 127.0.0.1 5432; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Postgres did not become reachable on 127.0.0.1:5432" >&2
+          exit 1
+
       - name: Run lint
         run: pnpm lint
 
@@ -46,6 +74,36 @@ jobs:
 
       - name: Run tests
         run: pnpm test
+
+      - name: Run build
+        run: pnpm build
+
+  browser-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browser runtime
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run browser smoke
+        run: pnpm test:browser
 
   docker-build-validation:
     runs-on: ubuntu-latest
@@ -143,6 +201,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:
       - static-validation
+      - browser-smoke
       - docker-build-validation
       - migration-safety
     runs-on: ubuntu-latest

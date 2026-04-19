@@ -235,6 +235,11 @@ Use this procedure:
    - `freshVpsVerifiedAt`
    - `freshVpsTarget`
    - the workflow run URL used for the rehearsal
+   - `publicOriginVerified=true`
+   - `fullMvpSmokeVerified=true`
+   - `twoUserCollaborationVerified=true`
+   - `remainingItemsNonBlocking=true`
+   - `remainingItemsReference`
    - whether any undocumented shell history, manual repo changes, or ad hoc deploy steps were needed
 
 If any undocumented step is required, stop and update this runbook before treating the rehearsal as proof.

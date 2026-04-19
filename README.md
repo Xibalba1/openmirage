@@ -1,26 +1,33 @@
 # OpenMirage
 
-OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository currently implements the runtime service scaffolding slice plus the initial Postgres metadata, auth/session, storage, and observability baselines: bootable `web`, `api`, `collab`, and `worker` shells with shared env, health, logging, metrics, migrations, development bootstrap contracts, magic-link auth, server-managed sessions, and pluggable blob storage.
+OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository now implements the Epic 2 MVP slice across `web`, `api`, `collab`, and `worker`: authenticated workspace/project/file/page flows, browser-owned editor interactions, page-scoped realtime collaboration, comments, share links, asset upload and delivery, export jobs, structured observability, and single-VPS deployment/runbook support.
 
 ## Current Slice
 
-This slice establishes the initial runtime contract for the platform services while keeping the product itself empty.
+This slice establishes the MVP product boundary defined in [`plan/mvp/1-thesis-and-mvp-boundary.md`](/Users/ik/repos/openmirage/plan/mvp/1-thesis-and-mvp-boundary.md:1), [`plan/mvp/2-domain-model.md`](/Users/ik/repos/openmirage/plan/mvp/2-domain-model.md:1), and [`plan/mvp/3-architecture-overview.md`](/Users/ik/repos/openmirage/plan/mvp/3-architecture-overview.md:1).
 
 Included now:
 
-- independently bootable `web`, `api`, `collab`, and `worker` dev services
+- independently bootable `web`, `api`, `collab`, and `worker` services
 - shared env parsing and validation in `@openmirage/config-env`
 - structured service logging, metrics, and error-reporting bootstrap in `@openmirage/observability`
 - Postgres migration and reset workflow in `@openmirage/db`
 - relational metadata schema for workspaces, files, pages, auth artifacts, comments, assets, share links, and export jobs
-- deterministic development bootstrap data for one workspace and one test user flow
+- deterministic development bootstrap data for one workspace, one seeded user, one MVP-ready project/file, and multiple pages
 - magic-link auth request and consume flow with Postgres-backed sessions
-- protected session validation and workspace membership lookup endpoints
-- collab websocket authorization delegated to the API/session layer
+- protected session validation, refresh, revoke, and workspace membership lookup endpoints
+- workspace, project, file, and page metadata APIs with membership enforcement
+- browser-routed authenticated app shell with workspace/project/file/page flows
+- canvas-based editor for frames, shapes, text, images, page navigation, and inspect data
+- page-scoped comments persisted outside collaborative document state
+- read-only share links enforced in the UI and API
+- asset upload, metadata, and content resolution through the storage abstraction
+- page-scoped collab persistence and websocket authorization delegated to the API/session layer
+- export job creation, worker processing, and artifact download routes
 - API health and readiness endpoints
 - collab health endpoint plus websocket mount path
 - worker heartbeat and HTTP status surface
-- a React/Vite landing shell that probes API and collab reachability
+- a React/Vite application shell with sign-in, editor, inspect, sharing, comments, and export UI
 - Prometheus-compatible `/metrics` endpoints for `api`, `collab`, and `worker`
 - env-gated forced test error routes and Sentry integration for backend services
 - a provider-backed storage abstraction with `minio`, generic `s3-compatible`, and `local` adapters
@@ -28,16 +35,15 @@ Included now:
 - a full local Docker Compose stack for Caddy, web, api, collab, worker, PostgreSQL, and MinIO
 - Compose-managed migration and development bootstrap jobs
 - Caddy as the single local browser entrypoint with websocket proxying for collab
-- API storage smoke endpoints for upload, list, and delete verification through the abstraction
+- API and browser smoke verification commands for local MVP acceptance
 - CI image validation and a protected staging deploy workflow that reuses the same checked-in artifacts
-- a step 13 acceptance runbook and external evidence contract for staging and backup/restore closure
+- a Sprint 10 acceptance runbook and external evidence contract for staging and backup/restore closure
 
 Not included yet:
 
-- editor, canvas, files/pages/projects, comments, or other product routes
-- SMTP-backed magic-link delivery or polished authenticated product flows
-- collab document persistence or page authorization
-- worker jobs, exports, or cleanup processing
+- SMTP-backed production email delivery polish
+- advanced prototyping, plugins, branching UI, enterprise admin, or Figma-parity workflows
+- heavyweight centralized observability infrastructure
 - offsite backup replication or PITR
 
 ## Requirements
@@ -49,15 +55,15 @@ If `pnpm` is not installed globally, use `corepack enable` and `corepack pnpm`.
 
 ## Workspace Layout
 
-- `apps/web`: browser frontend shell placeholder
-- `apps/api`: HTTP API service placeholder
-- `apps/collab`: realtime collaboration service placeholder
-- `apps/worker`: background worker placeholder
-- `packages/types`: shared service and domain contract placeholders
-- `packages/auth`: auth and session helper placeholders
+- `apps/web`: browser client, authenticated app shell, editor, and Playwright/Vitest app tests
+- `apps/api`: Fastify API service plus route-level integration tests
+- `apps/collab`: realtime page-scoped collaboration service
+- `apps/worker`: background export and derived-artifact worker
+- `packages/types`: shared service and domain contracts
+- `packages/auth`: auth and session helpers
 - `packages/db`: Postgres metadata schema, migrations, and development bootstrap helpers
-- `packages/storage`: blob storage abstraction placeholders
-- `packages/observability`: logging and health helper placeholders
+- `packages/storage`: blob storage abstraction
+- `packages/observability`: logging, metrics, health, and error-reporting helpers
 - `packages/config-*`: shared TypeScript, ESLint, Prettier, env, and test baselines
 
 ## Canonical Commands
@@ -71,11 +77,12 @@ docker compose up --build --wait
 
 Before modifying code or trying to boot the stack on a new machine, identify prerequisites you cannot satisfy from inside the repo, check them, and stop immediately if any fail. If the prerequisite check fails, do not proceed; use the printed remediation steps, fix the failing prerequisite, and rerun the check before you continue.
 
-For this proxy/runtime slice, treat the following as mandatory prerequisites before code changes or infrastructure verification:
+For this MVP slice, treat the following as mandatory prerequisites before code changes or infrastructure verification:
 
 - local software and access: `pnpm`, Docker, Docker Compose, access to the Docker daemon
 - required local ports for the selected mode
 - current Compose stack can start its baseline dependencies
+- browser automation runtime for the Playwright smoke path
 - for staging-shaped runs: the public Caddy hostname, HTTPS app origin, and secure websocket origin are set in env before boot
 
 If a prerequisite fails, stop immediately. Output the failing prerequisite and provide step-by-step remediation before proceeding.
@@ -94,6 +101,7 @@ pnpm lint
 pnpm format
 pnpm format:check
 pnpm test
+pnpm test:browser
 pnpm typecheck
 pnpm docker:build
 pnpm verify:platform:prereqs
@@ -499,7 +507,7 @@ This command:
 - verifies Postgres and MinIO on their published operator ports
 - tears down the Compose stack when finished
 
-This remains the base local smoke verifier used by the phase-closing acceptance command.
+This remains the base local infra verifier used by the phase-closing acceptance command.
 
 ## Platform Acceptance
 
@@ -512,9 +520,10 @@ pnpm verify:platform:acceptance
 This command:
 
 - prints the mandatory prerequisite policy before doing any work
-- audits the current step 9 and step 13 acceptance assets
+- audits the current Sprint 10 acceptance assets
 - runs the prerequisite gate
-- runs the full local Caddy-routed smoke path with the diagnostics error route enabled
+- runs the full local Caddy-routed infra smoke path with the diagnostics error route enabled
+- runs the full local MVP browser smoke path
 - checks for operator-managed staging and backup/restore evidence
 - emits one final `pass`, `fail`, or `blocked` decision
 
@@ -529,14 +538,23 @@ The operator runbook lives in [ops/platform-acceptance.md](/Users/ik/repos/openm
 
 The staging evidence file must include explicit proof for the remaining operator-only closure items:
 
-- fresh-VPS rehearsal proof:
-  - `freshVpsPreparedFromRunbook=true`
-  - `freshVpsVerifiedAt`
-  - `freshVpsTarget`
-- error-reporting proof:
-  - `errorReportingSinkVerified=true`
-  - `errorReportingVerifiedAt`
-  - `errorReportingReference`
+- `publicOriginVerified=true`
+- `fullMvpSmokeVerified=true`
+- `fullMvpSmokeVerifiedAt`
+- `twoUserCollaborationVerified=true`
+- `twoUserCollaborationVerifiedAt`
+- `secureCookiesVerified=true`
+- `secureCookiesVerifiedAt`
+- `observabilityVerified=true`
+- `observabilityVerifiedAt`
+- `freshVpsPreparedFromRunbook=true`
+- `freshVpsVerifiedAt`
+- `freshVpsTarget`
+- `errorReportingSinkVerified=true`
+- `errorReportingVerifiedAt`
+- `errorReportingReference`
+- `remainingItemsNonBlocking=true`
+- `remainingItemsReference`
 
 Without those fields, `pnpm verify:platform:acceptance` will report staging acceptance as `blocked` even if the existing deploy and smoke checks already passed.
 
