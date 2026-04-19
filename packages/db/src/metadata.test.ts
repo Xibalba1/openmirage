@@ -1248,10 +1248,34 @@ test("export jobs and thumbnail helpers stay scoped, transition correctly, and e
       },
       client
     );
+    const refreshedPageThumbnail = await createDerivedAssetRecord(
+      {
+        byteSize: 640,
+        fileId,
+        filename: "page-thumb-1-refreshed.png",
+        height: 144,
+        kind: "thumbnail",
+        mimeType: "image/png",
+        storageKey: `workspaces/${workspaceId}/thumbnails/pages/${coverPageId}-1.png`,
+        uploadedByUserId: ownerUserId,
+        width: 216,
+        workspaceId
+      },
+      client
+    );
+
+    assert.equal(refreshedPageThumbnail.id, firstPageThumbnail.id);
+    assert.equal(refreshedPageThumbnail.filename, "page-thumb-1-refreshed.png");
+    assert.equal(refreshedPageThumbnail.byteSize, 640);
+    assert.equal(refreshedPageThumbnail.deletedAt, null);
 
     assert.equal(
       await replacePageThumbnailAsset(coverPageId, firstPageThumbnail.id, client),
       null
+    );
+    assert.equal(
+      await replacePageThumbnailAsset(coverPageId, refreshedPageThumbnail.id, client),
+      firstPageThumbnail.id
     );
     assert.equal(
       await replacePageThumbnailAsset(coverPageId, secondPageThumbnail.id, client),
