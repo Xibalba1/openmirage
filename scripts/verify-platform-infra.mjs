@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const caddyBaseUrl = process.env.CADDY_BASE_URL ?? "http://127.0.0.1";
 const expectedCookieName =
@@ -88,6 +88,69 @@ async function requestJson(url, init) {
   };
 }
 
+async function requestBinary(url, init) {
+  const response = await fetch(url, init);
+  const body = new Uint8Array(await response.arrayBuffer());
+
+  if (!response.ok) {
+    fail(
+      `${init?.method ?? "GET"} ${url} returned ${response.status}: ${Buffer.from(body).toString("utf8")}`
+    );
+  }
+
+  return {
+    body,
+    headers: response.headers
+  };
+}
+
+async function waitForWorkerExportMetricsToSettle(baseUrl, timeoutMs = 15_000) {
+  const startedAt = Date.now();
+  let lastMetricsBody = "";
+  let lastStatusBody = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const [workerMetricsResponse, workerStatusResponse] = await Promise.all([
+        fetch(`${baseUrl}/worker/metrics`),
+        fetch(`${baseUrl}/worker/status`)
+      ]);
+
+      if (workerMetricsResponse.ok && workerStatusResponse.ok) {
+        lastMetricsBody = await workerMetricsResponse.text();
+        lastStatusBody = await workerStatusResponse.json();
+
+        const metricsReady =
+          lastMetricsBody.includes('job_type="export"') &&
+          lastMetricsBody.includes('job_type="thumbnail"') &&
+          lastMetricsBody.includes('job_state="succeeded"') &&
+          /openmirage_worker_jobs_in_progress\{service="worker",job_type="export"\} 0/.test(
+            lastMetricsBody
+          ) &&
+          /openmirage_worker_jobs_in_progress\{service="worker",job_type="thumbnail"\} 0/.test(
+            lastMetricsBody
+          );
+        const statusReady =
+          lastStatusBody?.activeJobs?.export === 0 &&
+          lastStatusBody?.activeJobs?.thumbnail === 0;
+
+        if (metricsReady && statusReady) {
+          return {
+            workerMetricsBody: lastMetricsBody,
+            workerStatus: lastStatusBody
+          };
+        }
+      }
+    } catch {}
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  fail(
+    `worker metrics/status did not settle after export verification: metrics=${JSON.stringify(lastMetricsBody)} status=${JSON.stringify(lastStatusBody)}`
+  );
+}
+
 async function createAuthenticatedCollabFixture(baseUrl) {
   const fixtureResponse = await requestJson(
     `${baseUrl}/internal/smoke/collab/bootstrap`,
@@ -131,6 +194,292 @@ async function cleanupAuthenticatedCollabFixture(baseUrl, fixture) {
       workspaceId: fixture.workspaceId
     })
   });
+}
+
+function buildExportRoute(baseUrl, fixture, suffix = "") {
+  return `${baseUrl}/v1/workspaces/${encodeURIComponent(fixture.workspaceId)}/projects/${encodeURIComponent(fixture.projectId)}/files/${encodeURIComponent(fixture.fileId)}/export-jobs${suffix}`;
+}
+
+async function spawnAuthenticatedCollabHold(baseUrl, fixture) {
+  const child = spawn(
+    "node",
+    [
+      "./apps/collab/scripts/verify-page-collab.mjs",
+      "--mode",
+      "hold-authenticated",
+      "--base-url",
+      baseUrl,
+      "--document-name",
+      fixture.documentName,
+      "--file-id",
+      fixture.fileId,
+      "--page-id",
+      fixture.pageId,
+      "--workspace-id",
+      fixture.workspaceId,
+      "--session-cookie",
+      fixture.sessionCookie,
+      "--hold-ms",
+      "30000",
+      "--timeout",
+      "10000"
+    ],
+    {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"]
+    }
+  );
+
+  let stdout = "";
+  let stderr = "";
+  const exitPromise = new Promise((resolve) => {
+    child.on("exit", (code, signal) => {
+      resolve({ code, signal });
+    });
+  });
+  const readyPromise = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(
+        new Error(
+          `timed out waiting for authenticated collab hold: ${(stderr || stdout).trim() || "no output"}`
+        )
+      );
+    }, 10_000);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+
+      if (stdout.includes("authenticated collab hold ready")) {
+        clearTimeout(timer);
+        resolve(undefined);
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("exit", (code, signal) => {
+      clearTimeout(timer);
+      if (!stdout.includes("authenticated collab hold ready")) {
+        reject(
+          new Error(
+            `authenticated collab hold exited before ready (code=${String(code)} signal=${String(signal)}): ${(stderr || stdout).trim() || "no output"}`
+          )
+        );
+      }
+    });
+  });
+
+  await readyPromise;
+
+  return {
+    child,
+    async stop() {
+      if (child.exitCode === null) {
+        child.kill("SIGTERM");
+      }
+
+      const result = await exitPromise;
+      if (result.code !== 0) {
+        fail(
+          `authenticated collab hold exited unsuccessfully (code=${String(result.code)} signal=${String(result.signal)}): ${(stderr || stdout).trim() || "no output"}`
+        );
+      }
+    }
+  };
+}
+
+async function verifyReadyEndpointsWhileExporting(collabHold) {
+  if (collabHold.child.exitCode !== null) {
+    fail("authenticated collab hold exited while export verification was running");
+  }
+
+  const [apiReady, collabHealth, workerReady] = await Promise.all([
+    fetch(`${caddyBaseUrl}/readyz`),
+    fetch(`${caddyBaseUrl}/collab/healthz`),
+    fetch(`${caddyBaseUrl}/worker/readyz`)
+  ]);
+  const apiBody = await apiReady.json();
+  const collabBody = await collabHealth.json();
+  const workerBody = await workerReady.json();
+
+  if (!apiReady.ok || !apiBody.ready) {
+    fail("api /readyz became unhealthy while export verification was running");
+  }
+
+  if (!collabHealth.ok || !collabBody.ok) {
+    fail("collab /healthz became unhealthy while export verification was running");
+  }
+
+  if (!workerReady.ok || !workerBody.ready) {
+    fail("worker /readyz became unhealthy while export verification was running");
+  }
+}
+
+async function waitForTerminalExportJob(fixture, jobId, collabHold, timeoutMs = 30_000) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    await verifyReadyEndpointsWhileExporting(collabHold);
+    const status = await requestJson(
+      buildExportRoute(caddyBaseUrl, fixture, `/${encodeURIComponent(jobId)}`),
+      {
+        headers: {
+          cookie: fixture.sessionCookie
+        }
+      }
+    );
+    const job = status.body;
+
+    if (
+      job?.status === "succeeded" ||
+      job?.status === "failed" ||
+      job?.status === "cancelled"
+    ) {
+      return job;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  fail(`timed out waiting for export job ${jobId} to complete`);
+}
+
+async function verifyExportJobs(baseUrl, fixture) {
+  const collabHold = await spawnAuthenticatedCollabHold(baseUrl, fixture);
+  let foreignFixture = null;
+
+  try {
+    const unauthenticatedCreate = await fetch(buildExportRoute(baseUrl, fixture), {
+      body: JSON.stringify({
+        format: "png",
+        pageId: fixture.pageId
+      }),
+      headers: {
+        "content-type": "application/json"
+      },
+      method: "POST"
+    });
+
+    if (unauthenticatedCreate.status !== 401) {
+      fail(`unauthenticated export creation returned ${unauthenticatedCreate.status} instead of 401`);
+    }
+
+    foreignFixture = await createAuthenticatedCollabFixture(baseUrl);
+    const forbiddenCreate = await fetch(buildExportRoute(baseUrl, fixture), {
+      body: JSON.stringify({
+        format: "png",
+        pageId: fixture.pageId
+      }),
+      headers: {
+        "content-type": "application/json",
+        cookie: foreignFixture.sessionCookie
+      },
+      method: "POST"
+    });
+
+    if (forbiddenCreate.status !== 403) {
+      fail(`cross-workspace export creation returned ${forbiddenCreate.status} instead of 403`);
+    }
+
+    const pngCreate = await requestJson(buildExportRoute(baseUrl, fixture), {
+      body: JSON.stringify({
+        format: "png",
+        pageId: fixture.pageId
+      }),
+      headers: {
+        "content-type": "application/json",
+        cookie: fixture.sessionCookie
+      },
+      method: "POST"
+    });
+    const pngJob = pngCreate.body;
+
+    if (pngJob?.status !== "queued") {
+      fail("page png export did not start in queued state");
+    }
+
+    const completedPngJob = await waitForTerminalExportJob(
+      fixture,
+      pngJob.id,
+      collabHold
+    );
+
+    if (completedPngJob.status !== "succeeded") {
+      fail(`page png export did not succeed: ${completedPngJob.errorMessage ?? completedPngJob.status}`);
+    }
+
+    const pngDownload = await requestBinary(
+      `${buildExportRoute(baseUrl, fixture, `/${encodeURIComponent(pngJob.id)}/download`)}`,
+      {
+        headers: {
+          cookie: fixture.sessionCookie
+        }
+      }
+    );
+    const pngContentType = pngDownload.headers.get("content-type") ?? "";
+
+    if (!pngContentType.startsWith("image/png")) {
+      fail(`page png export returned unexpected content-type ${pngContentType}`);
+    }
+
+    if (pngDownload.body.byteLength === 0) {
+      fail("page png export download was empty");
+    }
+
+    const pdfCreate = await requestJson(buildExportRoute(baseUrl, fixture), {
+      body: JSON.stringify({
+        format: "pdf"
+      }),
+      headers: {
+        "content-type": "application/json",
+        cookie: fixture.sessionCookie
+      },
+      method: "POST"
+    });
+    const pdfJob = pdfCreate.body;
+
+    if (pdfJob?.status !== "queued") {
+      fail("file pdf export did not start in queued state");
+    }
+
+    const completedPdfJob = await waitForTerminalExportJob(
+      fixture,
+      pdfJob.id,
+      collabHold
+    );
+
+    if (completedPdfJob.status !== "succeeded") {
+      fail(`file pdf export did not succeed: ${completedPdfJob.errorMessage ?? completedPdfJob.status}`);
+    }
+
+    const pdfDownload = await requestBinary(
+      `${buildExportRoute(baseUrl, fixture, `/${encodeURIComponent(pdfJob.id)}/download`)}`,
+      {
+        headers: {
+          cookie: fixture.sessionCookie
+        }
+      }
+    );
+    const pdfContentType = pdfDownload.headers.get("content-type") ?? "";
+
+    if (!pdfContentType.startsWith("application/pdf")) {
+      fail(`file pdf export returned unexpected content-type ${pdfContentType}`);
+    }
+
+    if (pdfDownload.body.byteLength === 0) {
+      fail("file pdf export download was empty");
+    }
+
+    await waitForWorkerExportMetricsToSettle(baseUrl);
+  } finally {
+    await collabHold.stop();
+    await cleanupAuthenticatedCollabFixture(baseUrl, foreignFixture);
+  }
 }
 
 function cleanup() {
@@ -520,6 +869,14 @@ async function main() {
 
   log("verifying auth flow and websocket upgrade through Caddy");
   await verifyAuthAndWebsocket();
+
+  log("verifying async export jobs, downloads, and collab responsiveness");
+  const exportFixture = await createAuthenticatedCollabFixture(caddyBaseUrl);
+  try {
+    await verifyExportJobs(caddyBaseUrl, exportFixture);
+  } finally {
+    await cleanupAuthenticatedCollabFixture(caddyBaseUrl, exportFixture);
+  }
 
   log("verifying metrics through Caddy");
   await verifyMetrics();

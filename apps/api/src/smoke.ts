@@ -9,8 +9,10 @@ import {
   createFileWithPages,
   createProject,
   deriveDisplayName,
+  seedPageDocument,
   upsertUserByEmail
 } from "@openmirage/db";
+import { type PageDocumentDto } from "@openmirage/types";
 
 interface DatabaseClient {
   query<T>(sql: string, values?: unknown[]): Promise<{ rows: T[] }>;
@@ -108,6 +110,102 @@ function createSmokeIdentity() {
   };
 }
 
+function createSmokePageDocument(pageId: string): PageDocumentDto {
+  return {
+    nodes: {
+      "frame-1": {
+        background: {
+          color: { alpha: 1, hex: "#ffffff" }
+        },
+        childIds: ["rect-1", "text-1"],
+        clipsContent: false,
+        cornerRadius: 24,
+        createdAt: "2026-04-18T00:00:00.000Z",
+        height: 360,
+        id: "frame-1",
+        locked: false,
+        name: "Smoke Frame",
+        opacity: 1,
+        pageId,
+        parentId: null,
+        rotation: 0,
+        stroke: {
+          color: { alpha: 1, hex: "#d0d7de" },
+          width: 2
+        },
+        type: "frame",
+        updatedAt: "2026-04-18T00:00:00.000Z",
+        visible: true,
+        width: 520,
+        x: 64,
+        y: 72,
+        zIndex: 0
+      },
+      "rect-1": {
+        cornerRadius: 20,
+        createdAt: "2026-04-18T00:00:00.000Z",
+        fill: {
+          color: { alpha: 1, hex: "#f5a24a" }
+        },
+        height: 180,
+        id: "rect-1",
+        locked: false,
+        name: "Smoke Rectangle",
+        opacity: 1,
+        pageId,
+        parentId: "frame-1",
+        rotation: 0,
+        shadow: null,
+        stroke: null,
+        type: "rectangle",
+        updatedAt: "2026-04-18T00:00:00.000Z",
+        visible: true,
+        width: 220,
+        x: 28,
+        y: 36,
+        zIndex: 0
+      },
+      "text-1": {
+        content: "Smoke export fixture",
+        createdAt: "2026-04-18T00:00:00.000Z",
+        height: 72,
+        id: "text-1",
+        locked: false,
+        name: "Smoke Title",
+        opacity: 1,
+        pageId,
+        parentId: "frame-1",
+        rotation: 0,
+        typography: {
+          color: { alpha: 1, hex: "#121212" },
+          fontFamily: "IBM Plex Sans",
+          fontSize: 28,
+          fontWeight: 600,
+          lineHeight: 1.2,
+          textAlign: "left"
+        },
+        type: "text",
+        updatedAt: "2026-04-18T00:00:00.000Z",
+        visible: true,
+        width: 240,
+        x: 274,
+        y: 96,
+        zIndex: 1
+      }
+    },
+    pageId,
+    rootNodeIds: ["frame-1"]
+  };
+}
+
+async function seedSmokeCollabDocument(
+  pageId: string,
+  poolOrClient: DatabaseTransactionClient
+) {
+  const pageDocument = createSmokePageDocument(pageId);
+  await seedPageDocument(pageId, pageDocument, poolOrClient);
+}
+
 export function assertSmokeTestSharedSecret(
   configuredSecret: string | undefined,
   providedSecret: string | undefined
@@ -178,6 +276,8 @@ export async function createSmokeCollabFixture(
     if (!file?.file.id || !file.defaultPageId) {
       throw new Error("failed to create smoke file");
     }
+
+    await seedSmokeCollabDocument(file.defaultPageId, client);
 
     const sessionToken = generateOpaqueToken();
     const insertedSession = await client.query<SmokeFixtureRow>(

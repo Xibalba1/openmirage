@@ -1,10 +1,12 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
+  type CreateExportJobInput,
   type AssetDto,
   type CollabPageSessionDto,
   type CommentDto,
   type CreateAssetInput,
   type CreatedShareLinkResponse,
+  type ExportJobDto,
   type CreateCommentInput,
   type CreateFilePageInput,
   createEditorAccess,
@@ -54,6 +56,7 @@ interface FileRow {
   id: string;
   name: string;
   project_id: string;
+  thumbnail_asset_id: string | null;
   updated_at: Date;
   workspace_id: string;
 }
@@ -66,6 +69,7 @@ interface PageRow {
   id: string;
   name: string;
   order_index: number;
+  thumbnail_asset_id: string | null;
   updated_at: Date;
   width: number | null;
 }
@@ -146,6 +150,45 @@ interface CommentRow {
   page_id: string | null;
   resolved_at: Date | null;
   updated_at: Date;
+}
+
+interface ExportJobRow {
+  completed_at: Date | null;
+  created_at: Date;
+  error_message: string | null;
+  file_id: string;
+  format: "jpeg" | "pdf" | "png" | "svg";
+  id: string;
+  output_asset_id: string | null;
+  page_id: string | null;
+  requested_by_user_id: string;
+  started_at: Date | null;
+  status: "cancelled" | "failed" | "queued" | "running" | "succeeded";
+  updated_at: Date;
+}
+
+interface ClaimedExportJobRow extends ExportJobRow {
+  file_created_at: Date;
+  file_created_by_user_id: string;
+  file_deleted_at: Date | null;
+  file_description: string | null;
+  file_name: string;
+  file_project_id: string;
+  file_thumbnail_asset_id: string | null;
+  file_updated_at: Date;
+  file_workspace_id: string;
+}
+
+interface PageThumbnailCandidateRow extends PageRow {
+  file_created_at: Date;
+  file_created_by_user_id: string;
+  file_deleted_at: Date | null;
+  file_description: string | null;
+  file_name: string;
+  file_project_id: string;
+  file_thumbnail_asset_id: string | null;
+  file_updated_at: Date;
+  file_workspace_id: string;
 }
 
 function mapWorkspace(row: WorkspaceRow): WorkspaceDetailDto {
@@ -240,6 +283,23 @@ function mapComment(row: CommentRow): CommentDto {
   };
 }
 
+function mapExportJob(row: ExportJobRow): ExportJobDto {
+  return {
+    completedAt: row.completed_at?.toISOString() ?? null,
+    createdAt: row.created_at.toISOString(),
+    errorMessage: row.error_message,
+    fileId: row.file_id,
+    format: row.format,
+    id: row.id,
+    outputAssetId: row.output_asset_id,
+    pageId: row.page_id,
+    requestedByUserId: row.requested_by_user_id,
+    startedAt: row.started_at?.toISOString() ?? null,
+    status: row.status,
+    updatedAt: row.updated_at.toISOString()
+  };
+}
+
 function mapShareLink(row: ShareLinkRow): ShareLinkDto {
   return {
     createdAt: row.created_at.toISOString(),
@@ -258,6 +318,34 @@ function mapShareLinkRecord(
   return {
     ...mapShareLink(row),
     shareUrl
+  };
+}
+
+function mapClaimedFileRow(row: ClaimedExportJobRow): FileDto {
+  return {
+    createdAt: row.file_created_at.toISOString(),
+    createdByUserId: row.file_created_by_user_id,
+    deletedAt: row.file_deleted_at?.toISOString() ?? null,
+    description: row.file_description,
+    id: row.file_id,
+    name: row.file_name,
+    projectId: row.file_project_id,
+    updatedAt: row.file_updated_at.toISOString(),
+    workspaceId: row.file_workspace_id
+  };
+}
+
+function mapFileFromPageThumbnailRow(row: PageThumbnailCandidateRow): FileDto {
+  return {
+    createdAt: row.file_created_at.toISOString(),
+    createdByUserId: row.file_created_by_user_id,
+    deletedAt: row.file_deleted_at?.toISOString() ?? null,
+    description: row.file_description,
+    id: row.file_id,
+    name: row.file_name,
+    projectId: row.file_project_id,
+    updatedAt: row.file_updated_at.toISOString(),
+    workspaceId: row.file_workspace_id
   };
 }
 
@@ -442,6 +530,66 @@ async function getPageRow(
   );
 
   return result.rows[0] ?? null;
+}
+
+export async function getFileById(
+  fileId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<FileDto | null> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<FileRow>(
+    `
+      select
+        files.created_at,
+        files.created_by_user_id,
+        files.deleted_at,
+        files.description,
+        files.id,
+        files.name,
+        files.project_id,
+        files.thumbnail_asset_id,
+        files.updated_at,
+        files.workspace_id
+      from files
+      where files.id = $1
+        and files.deleted_at is null
+      limit 1
+    `,
+    [fileId]
+  );
+
+  return result.rows[0] ? mapFile(result.rows[0]) : null;
+}
+
+export async function getPageById(
+  pageId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<PageDto | null> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<PageRow>(
+    `
+      select
+        pages.background,
+        pages.created_at,
+        pages.file_id,
+        pages.height,
+        pages.id,
+        pages.name,
+        pages.order_index,
+        pages.thumbnail_asset_id,
+        pages.updated_at,
+        pages.width
+      from pages
+      inner join files
+        on files.id = pages.file_id
+      where pages.id = $1
+        and files.deleted_at is null
+      limit 1
+    `,
+    [pageId]
+  );
+
+  return result.rows[0] ? mapPage(result.rows[0]) : null;
 }
 
 export async function listAuthorizedWorkspaces(
@@ -1146,6 +1294,636 @@ export async function getAuthorizedAsset(
   return result.rows[0] ? mapAsset(result.rows[0]) : null;
 }
 
+export async function listRenderableAssetsForFile(
+  fileId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<AssetDto[]> {
+  const file = await getFileById(fileId, poolOrClient);
+
+  if (!file) {
+    return [];
+  }
+
+  const db = requireClient(poolOrClient);
+  const result = await db.query<AssetRow>(
+    `
+      select
+        byte_size,
+        created_at,
+        deleted_at,
+        file_id,
+        filename,
+        height,
+        id,
+        kind,
+        mime_type,
+        storage_key,
+        updated_at,
+        uploaded_by_user_id,
+        width,
+        workspace_id
+      from assets
+      where workspace_id = $1
+        and deleted_at is null
+        and (file_id = $2 or file_id is null)
+      order by created_at desc, id desc
+    `,
+    [file.workspaceId, fileId]
+  );
+
+  return result.rows.map(mapAsset);
+}
+
+export async function createExportJob(
+  userId: string,
+  workspaceId: string,
+  projectId: string,
+  fileId: string,
+  input: CreateExportJobInput,
+  poolOrClient?: Pool | PoolClient
+): Promise<ExportJobDto | null> {
+  const db = requireClient(poolOrClient);
+  const workspace = await getAuthorizedWorkspaceRow(userId, workspaceId, db);
+  const file = await getFileRow(userId, workspaceId, projectId, fileId, db);
+
+  if (!workspace || !file) {
+    return null;
+  }
+
+  if (input.pageId) {
+    const page = await getPageRow(
+      userId,
+      workspaceId,
+      projectId,
+      fileId,
+      input.pageId,
+      db
+    );
+
+    if (!page) {
+      return null;
+    }
+  }
+
+  const result = await db.query<ExportJobRow>(
+    `
+      insert into export_jobs (
+        file_id,
+        page_id,
+        requested_by_user_id,
+        format,
+        status
+      )
+      values ($1, $2, $3, $4, 'queued')
+      returning
+        completed_at,
+        created_at,
+        error_message,
+        file_id,
+        format,
+        id,
+        output_asset_id,
+        page_id,
+        requested_by_user_id,
+        started_at,
+        status,
+        updated_at
+    `,
+    [fileId, input.pageId ?? null, userId, input.format]
+  );
+
+  return result.rows[0] ? mapExportJob(result.rows[0]) : null;
+}
+
+export async function getAuthorizedExportJob(
+  userId: string,
+  workspaceId: string,
+  projectId: string,
+  fileId: string,
+  jobId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<ExportJobDto | null> {
+  const file = await getFileRow(
+    userId,
+    workspaceId,
+    projectId,
+    fileId,
+    poolOrClient
+  );
+
+  if (!file) {
+    return null;
+  }
+
+  const db = requireClient(poolOrClient);
+  const result = await db.query<ExportJobRow>(
+    `
+      select
+        completed_at,
+        created_at,
+        error_message,
+        file_id,
+        format,
+        id,
+        output_asset_id,
+        page_id,
+        requested_by_user_id,
+        started_at,
+        status,
+        updated_at
+      from export_jobs
+      where id = $1
+        and file_id = $2
+      limit 1
+    `,
+    [jobId, fileId]
+  );
+
+  return result.rows[0] ? mapExportJob(result.rows[0]) : null;
+}
+
+export async function claimNextQueuedExportJob(
+  poolOrClient?: Pool | PoolClient
+): Promise<{
+  file: FileDto;
+  job: ExportJobDto;
+  projectId: string;
+  workspaceId: string;
+} | null> {
+  return withTransaction(poolOrClient, async (client) => {
+    const result = await client.query<ClaimedExportJobRow>(
+      `
+        with next_job as (
+          select export_jobs.id, export_jobs.file_id
+          from export_jobs
+          inner join files
+            on files.id = export_jobs.file_id
+          where export_jobs.status = 'queued'
+            and files.deleted_at is null
+          order by export_jobs.created_at asc, export_jobs.id asc
+          for update skip locked
+          limit 1
+        )
+        update export_jobs as job
+        set status = 'running',
+            started_at = coalesce(job.started_at, now()),
+            completed_at = null,
+            error_message = null,
+            updated_at = now()
+        from next_job, files
+        where job.id = next_job.id
+          and files.id = next_job.file_id
+        returning
+          job.completed_at,
+          job.created_at,
+          job.error_message,
+          job.file_id,
+          job.format,
+          job.id,
+          job.output_asset_id,
+          job.page_id,
+          job.requested_by_user_id,
+          job.started_at,
+          job.status,
+          job.updated_at,
+          files.created_at as file_created_at,
+          files.created_by_user_id as file_created_by_user_id,
+          files.deleted_at as file_deleted_at,
+          files.description as file_description,
+          files.name as file_name,
+          files.project_id as file_project_id,
+          files.thumbnail_asset_id as file_thumbnail_asset_id,
+          files.updated_at as file_updated_at,
+          files.workspace_id as file_workspace_id
+      `
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      file: mapClaimedFileRow(row),
+      job: mapExportJob(row),
+      projectId: row.file_project_id,
+      workspaceId: row.file_workspace_id
+    };
+  });
+}
+
+export async function markExportJobSucceeded(
+  jobId: string,
+  outputAssetId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<ExportJobDto | null> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<ExportJobRow>(
+    `
+      update export_jobs
+      set status = 'succeeded',
+          output_asset_id = $2,
+          error_message = null,
+          completed_at = now(),
+          updated_at = now()
+      where id = $1
+      returning
+        completed_at,
+        created_at,
+        error_message,
+        file_id,
+        format,
+        id,
+        output_asset_id,
+        page_id,
+        requested_by_user_id,
+        started_at,
+        status,
+        updated_at
+    `,
+    [jobId, outputAssetId]
+  );
+
+  return result.rows[0] ? mapExportJob(result.rows[0]) : null;
+}
+
+export async function markExportJobFailed(
+  jobId: string,
+  errorMessage: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<ExportJobDto | null> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<ExportJobRow>(
+    `
+      update export_jobs
+      set status = 'failed',
+          error_message = left($2, 2048),
+          completed_at = now(),
+          updated_at = now()
+      where id = $1
+      returning
+        completed_at,
+        created_at,
+        error_message,
+        file_id,
+        format,
+        id,
+        output_asset_id,
+        page_id,
+        requested_by_user_id,
+        started_at,
+        status,
+        updated_at
+    `,
+    [jobId, errorMessage]
+  );
+
+  return result.rows[0] ? mapExportJob(result.rows[0]) : null;
+}
+
+export async function failStaleRunningExportJobs(
+  startedBefore: Date,
+  poolOrClient?: Pool | PoolClient
+): Promise<number> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<{ id: string }>(
+    `
+      update export_jobs
+      set status = 'failed',
+          error_message = 'worker job timed out',
+          completed_at = now(),
+          updated_at = now()
+      where status = 'running'
+        and started_at is not null
+        and started_at <= $1
+      returning id
+    `,
+    [startedBefore]
+  );
+
+  return result.rows.length;
+}
+
+export async function createDerivedAssetRecord(input: {
+  byteSize: number;
+  fileId: string;
+  filename: string;
+  height?: number | null;
+  kind: AssetDto["kind"];
+  mimeType: string;
+  storageKey: string;
+  uploadedByUserId: string;
+  width?: number | null;
+  workspaceId: string;
+}, poolOrClient?: Pool | PoolClient): Promise<AssetDto> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<AssetRow>(
+    `
+      insert into assets (
+        workspace_id,
+        file_id,
+        uploaded_by_user_id,
+        kind,
+        filename,
+        mime_type,
+        byte_size,
+        storage_key,
+        width,
+        height
+      )
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      returning
+        byte_size,
+        created_at,
+        deleted_at,
+        file_id,
+        filename,
+        height,
+        id,
+        kind,
+        mime_type,
+        storage_key,
+        updated_at,
+        uploaded_by_user_id,
+        width,
+        workspace_id
+    `,
+    [
+      input.workspaceId,
+      input.fileId,
+      input.uploadedByUserId,
+      input.kind,
+      input.filename,
+      input.mimeType,
+      input.byteSize,
+      input.storageKey,
+      input.width ?? null,
+      input.height ?? null
+    ]
+  );
+
+  return mapAsset(result.rows[0] as AssetRow);
+}
+
+export async function replacePageThumbnailAsset(
+  pageId: string,
+  thumbnailAssetId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<string | null> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<{ previous_asset_id: string | null }>(
+    `
+      with previous as (
+        select thumbnail_asset_id as previous_asset_id
+        from pages
+        where id = $1
+      )
+      update pages
+      set thumbnail_asset_id = $2,
+          updated_at = now()
+      where id = $1
+      returning (select previous_asset_id from previous) as previous_asset_id
+    `,
+    [pageId, thumbnailAssetId]
+  );
+
+  return result.rows[0]?.previous_asset_id ?? null;
+}
+
+export async function replaceFileThumbnailAsset(
+  fileId: string,
+  thumbnailAssetId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<string | null> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<{ previous_asset_id: string | null }>(
+    `
+      with previous as (
+        select thumbnail_asset_id as previous_asset_id
+        from files
+        where id = $1
+      )
+      update files
+      set thumbnail_asset_id = $2,
+          updated_at = now()
+      where id = $1
+      returning (select previous_asset_id from previous) as previous_asset_id
+    `,
+    [fileId, thumbnailAssetId]
+  );
+
+  return result.rows[0]?.previous_asset_id ?? null;
+}
+
+export async function markAssetDeleted(
+  assetId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<AssetDto | null> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<AssetRow>(
+    `
+      update assets
+      set deleted_at = coalesce(deleted_at, now()),
+          updated_at = now()
+      where id = $1
+      returning
+        byte_size,
+        created_at,
+        deleted_at,
+        file_id,
+        filename,
+        height,
+        id,
+        kind,
+        mime_type,
+        storage_key,
+        updated_at,
+        uploaded_by_user_id,
+        width,
+        workspace_id
+    `,
+    [assetId]
+  );
+
+  return result.rows[0] ? mapAsset(result.rows[0]) : null;
+}
+
+export async function listDeletedThumbnailAssetsForCleanup(
+  deletedBefore: Date,
+  limit: number,
+  poolOrClient?: Pool | PoolClient
+): Promise<AssetDto[]> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<AssetRow>(
+    `
+      select
+        assets.byte_size,
+        assets.created_at,
+        assets.deleted_at,
+        assets.file_id,
+        assets.filename,
+        assets.height,
+        assets.id,
+        assets.kind,
+        assets.mime_type,
+        assets.storage_key,
+        assets.updated_at,
+        assets.uploaded_by_user_id,
+        assets.width,
+        assets.workspace_id
+      from assets
+      where assets.kind = 'thumbnail'
+        and assets.deleted_at is not null
+        and assets.deleted_at <= $1
+        and not exists (
+          select 1
+          from files
+          where files.thumbnail_asset_id = assets.id
+        )
+        and not exists (
+          select 1
+          from pages
+          where pages.thumbnail_asset_id = assets.id
+        )
+      order by assets.deleted_at asc, assets.id asc
+      limit $2
+    `,
+    [deletedBefore, limit]
+  );
+
+  return result.rows.map(mapAsset);
+}
+
+export async function hardDeleteAssetRecord(
+  assetId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<boolean> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<{ id: string }>(
+    `
+      delete from assets
+      where id = $1
+      returning id
+    `,
+    [assetId]
+  );
+
+  return Boolean(result.rows[0]);
+}
+
+export async function findNextPageMissingThumbnail(
+  poolOrClient?: Pool | PoolClient
+): Promise<{
+  file: FileDto;
+  page: PageDto;
+  projectId: string;
+  workspaceId: string;
+} | null> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<PageThumbnailCandidateRow>(
+    `
+      select
+        pages.background,
+        pages.created_at,
+        pages.file_id,
+        pages.height,
+        pages.id,
+        pages.name,
+        pages.order_index,
+        pages.thumbnail_asset_id,
+        pages.updated_at,
+        pages.width,
+        files.created_at as file_created_at,
+        files.created_by_user_id as file_created_by_user_id,
+        files.deleted_at as file_deleted_at,
+        files.description as file_description,
+        files.name as file_name,
+        files.project_id as file_project_id,
+        files.thumbnail_asset_id as file_thumbnail_asset_id,
+        files.updated_at as file_updated_at,
+        files.workspace_id as file_workspace_id
+      from pages
+      inner join files
+        on files.id = pages.file_id
+      where pages.thumbnail_asset_id is null
+        and files.deleted_at is null
+      order by pages.updated_at desc, pages.created_at desc, pages.id asc
+      limit 1
+    `
+  );
+  const row = result.rows[0];
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    file: mapFileFromPageThumbnailRow(row),
+    page: mapPage(row),
+    projectId: row.file_project_id,
+    workspaceId: row.file_workspace_id
+  };
+}
+
+export async function findNextFileMissingThumbnail(
+  poolOrClient?: Pool | PoolClient
+): Promise<{
+  coverPage: PageDto;
+  file: FileDto;
+  projectId: string;
+  workspaceId: string;
+} | null> {
+  const db = requireClient(poolOrClient);
+  const result = await db.query<PageThumbnailCandidateRow>(
+    `
+      select
+        pages.background,
+        pages.created_at,
+        pages.file_id,
+        pages.height,
+        pages.id,
+        pages.name,
+        pages.order_index,
+        pages.thumbnail_asset_id,
+        pages.updated_at,
+        pages.width,
+        files.created_at as file_created_at,
+        files.created_by_user_id as file_created_by_user_id,
+        files.deleted_at as file_deleted_at,
+        files.description as file_description,
+        files.name as file_name,
+        files.project_id as file_project_id,
+        files.thumbnail_asset_id as file_thumbnail_asset_id,
+        files.updated_at as file_updated_at,
+        files.workspace_id as file_workspace_id
+      from files
+      inner join pages
+        on pages.file_id = files.id
+      where files.thumbnail_asset_id is null
+        and files.deleted_at is null
+        and pages.order_index = (
+          select min(first_page.order_index)
+          from pages as first_page
+          where first_page.file_id = files.id
+        )
+      order by files.updated_at desc, files.created_at desc, files.id asc
+      limit 1
+    `
+  );
+  const row = result.rows[0];
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    coverPage: mapPage(row),
+    file: mapFileFromPageThumbnailRow(row),
+    projectId: row.file_project_id,
+    workspaceId: row.file_workspace_id
+  };
+}
+
 export async function listComments(
   userId: string,
   workspaceId: string,
@@ -1456,7 +2234,7 @@ async function getShareLinkAccessRow(
   return result.rows[0] ?? null;
 }
 
-async function listPagesForFile(
+export async function listPagesForFileId(
   fileId: string,
   poolOrClient?: Pool | PoolClient
 ): Promise<PageDto[]> {
@@ -1621,7 +2399,7 @@ export async function getSharedFileOpenDetails(
     return null;
   }
 
-  const pages = await listPagesForFile(row.file_id, poolOrClient);
+  const pages = await listPagesForFileId(row.file_id, poolOrClient);
 
   return {
     access: createEditorAccess({
