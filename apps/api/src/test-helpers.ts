@@ -52,6 +52,7 @@ export async function withApiTestApp(
   });
 
   let callbackError: unknown;
+  let cleanupError: unknown;
 
   try {
     await callback({
@@ -63,8 +64,6 @@ export async function withApiTestApp(
     callbackError = error;
     throw error;
   } finally {
-    let cleanupError: unknown;
-
     try {
       await client.query("rollback");
     } catch (error) {
@@ -93,10 +92,14 @@ export async function withApiTestApp(
       force: true,
       recursive: true
     });
+  }
 
-    if (callbackError === undefined && cleanupError !== undefined) {
-      throw cleanupError;
-    }
+  if (callbackError !== undefined) {
+    throw callbackError;
+  }
+
+  if (cleanupError !== undefined) {
+    throw cleanupError;
   }
 
   return true;
