@@ -52,6 +52,11 @@ async function main() {
   log("running prerequisite verification");
   run("node", ["./scripts/verify-platform-prereqs.mjs"]);
 
+  log("building host-side workspace packages required by the browser smoke");
+  run("pnpm", ["build"], {
+    maxBuffer: 1024 * 1024 * 20
+  });
+
   log("starting full docker compose stack");
   run("docker", ["compose", "up", "--build", "-d", "--wait"], {
     maxBuffer: 1024 * 1024 * 20

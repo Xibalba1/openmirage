@@ -66,6 +66,9 @@ jobs:
           echo "Postgres did not become reachable on 127.0.0.1:5432" >&2
           exit 1
 
+      - name: Apply migrations
+        run: pnpm db:migrate:up
+
       - name: Run lint
         run: pnpm lint
 
