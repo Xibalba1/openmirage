@@ -29,6 +29,11 @@ const assetAudit = [
     classification: "reuse as-is"
   },
   {
+    label: "local MVP browser smoke verifier",
+    path: "scripts/verify-mvp-browser-smoke.mjs",
+    classification: "new canonical acceptance step"
+  },
+  {
     label: "repo operator guidance",
     path: "README.md",
     classification: "reuse with doc updates"
@@ -145,10 +150,15 @@ function validateExternalEvidence() {
     "gitSha",
     "publicBaseUrl",
     "verifiedAt",
+    "fullMvpSmokeVerifiedAt",
+    "twoUserCollaborationVerifiedAt",
+    "secureCookiesVerifiedAt",
+    "observabilityVerifiedAt",
     "freshVpsVerifiedAt",
     "freshVpsTarget",
     "errorReportingVerifiedAt",
-    "errorReportingReference"
+    "errorReportingReference",
+    "remainingItemsReference"
   ];
   const backupFields = [
     "artifactLocation",
@@ -167,11 +177,15 @@ function validateExternalEvidence() {
 
   const stagingBooleans = [
     ["sameArtifactsAsCi", staging.sameArtifactsAsCi],
+    ["publicOriginVerified", staging.publicOriginVerified],
     ["websocketUpgradeVerified", staging.websocketUpgradeVerified],
     ["secureCookiesVerified", staging.secureCookiesVerified],
     ["observabilityVerified", staging.observabilityVerified],
+    ["fullMvpSmokeVerified", staging.fullMvpSmokeVerified],
+    ["twoUserCollaborationVerified", staging.twoUserCollaborationVerified],
     ["freshVpsPreparedFromRunbook", staging.freshVpsPreparedFromRunbook],
-    ["errorReportingSinkVerified", staging.errorReportingSinkVerified]
+    ["errorReportingSinkVerified", staging.errorReportingSinkVerified],
+    ["remainingItemsNonBlocking", staging.remainingItemsNonBlocking]
   ].filter(([, value]) => !validateBoolean(value));
   const backupBooleans = [
     ["postRestoreSmokeVerified", backupRestore.postRestoreSmokeVerified]
@@ -182,7 +196,12 @@ function validateExternalEvidence() {
       ? {
           name: "staging acceptance",
           status: "pass",
-          detail: `workflow ${staging.workflowRunUrl} verified ${staging.publicBaseUrl} at ${staging.verifiedAt}; fresh VPS proof recorded for ${staging.freshVpsTarget} at ${staging.freshVpsVerifiedAt}; error reporting verified at ${staging.errorReportingVerifiedAt}`
+          detail:
+            `workflow ${staging.workflowRunUrl} verified ${staging.publicBaseUrl} at ${staging.verifiedAt}; ` +
+            `full MVP smoke recorded at ${staging.fullMvpSmokeVerifiedAt}; ` +
+            `two-user collaboration recorded at ${staging.twoUserCollaborationVerifiedAt}; ` +
+            `fresh VPS proof recorded for ${staging.freshVpsTarget} at ${staging.freshVpsVerifiedAt}; ` +
+            `error reporting verified at ${staging.errorReportingVerifiedAt}`
         }
       : {
           name: "staging acceptance",
@@ -265,8 +284,8 @@ async function main() {
   });
 
   if (prereqs.ok) {
-    log("running local acceptance flow");
-    const localAcceptance = run(
+    log("running local infra acceptance flow");
+    const localInfraAcceptance = run(
       "node",
       ["./scripts/verify-platform-infra.mjs"],
       {
@@ -280,15 +299,47 @@ async function main() {
     );
 
     results.push({
-      name: "local acceptance",
-      status: localAcceptance.ok ? "pass" : "fail",
-      detail: localAcceptance.ok
+      name: "local infra acceptance",
+      status: localInfraAcceptance.ok ? "pass" : "fail",
+      detail: localInfraAcceptance.ok
         ? "Caddy-routed local boot, auth, storage, collab, worker, metrics, logs, and diagnostics error route verified"
-        : localAcceptance.output || "local acceptance verification failed"
+        : localInfraAcceptance.output ||
+          "local infra acceptance verification failed"
     });
+
+    if (localInfraAcceptance.ok) {
+      log("running local MVP browser smoke");
+      const localBrowserAcceptance = run(
+        "node",
+        ["./scripts/verify-mvp-browser-smoke.mjs"],
+        {
+          maxBuffer: 1024 * 1024 * 20
+        }
+      );
+
+      results.push({
+        name: "local MVP browser smoke",
+        status: localBrowserAcceptance.ok ? "pass" : "fail",
+        detail: localBrowserAcceptance.ok
+          ? "sign-in, file/page authoring, collaboration, comments, inspect, sharing, asset upload, and export flows verified through the browser"
+          : localBrowserAcceptance.output ||
+            "local MVP browser smoke verification failed"
+      });
+    } else {
+      results.push({
+        name: "local MVP browser smoke",
+        status: "blocked",
+        detail: "skipped because the local infra acceptance flow failed"
+      });
+    }
   } else {
     results.push({
-      name: "local acceptance",
+      name: "local infra acceptance",
+      status: "blocked",
+      detail: "skipped because the prerequisite gate failed"
+    });
+    results.push({
+      name: "local MVP browser smoke",
       status: "blocked",
       detail: "skipped because the prerequisite gate failed"
     });

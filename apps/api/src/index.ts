@@ -65,6 +65,7 @@ import {
   type StorageConfig
 } from "@openmirage/types";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import { pathToFileURL } from "node:url";
 import {
   parseMultipartUpload,
   registerRawMultipartParser,
@@ -174,6 +175,17 @@ interface SmokeCleanupBody {
   workspaceId?: string;
 }
 
+type ApiDatabase = NonNullable<
+  Parameters<typeof getAuthContextForSessionToken>[1]
+>;
+
+interface CreateApiAppOptions {
+  databasePool?: ApiDatabase;
+  envSource?: Parameters<typeof readApiEnv>[0];
+  registerProcessHandlers?: boolean;
+  storage?: ReturnType<typeof createStorage>;
+}
+
 function createAuthUnauthorizedReply(reply: FastifyReply) {
   reply.status(401);
   return {
@@ -207,6 +219,16 @@ function createSessionContractFromEnv() {
   });
 }
 
+function createSessionContractForApiEnv(env: ReturnType<typeof readApiEnv>) {
+  return createSessionContract({
+    sessionCookieMaxAgeSeconds: env.authSessionTtlDays * 24 * 60 * 60,
+    sessionCookieName: env.sessionCookieName,
+    sessionCookiePath: env.sessionCookiePath,
+    sessionCookieSameSite: env.sessionCookieSameSite,
+    sessionCookieSecure: env.sessionCookieSecure
+  });
+}
+
 function getAuthRedirectTarget(
   env: ReturnType<typeof readApiEnv>,
   redirectTo: string | undefined
@@ -231,7 +253,7 @@ function getAuthRedirectTarget(
 
 async function readAuthContextFromRequest(
   request: FastifyRequest,
-  databasePool: ReturnType<typeof createDatabasePool>,
+  databasePool: ApiDatabase,
   sessionContract = createSessionContractFromEnv()
 ): Promise<AuthContext | null> {
   const token = readSessionTokenFromCookie(
@@ -260,7 +282,7 @@ function hasWorkspaceMembership(
 async function requireAuthContext(
   request: FastifyRequest,
   reply: FastifyReply,
-  databasePool: ReturnType<typeof createDatabasePool>,
+  databasePool: ApiDatabase,
   sessionContract = createSessionContractFromEnv()
 ): Promise<AuthContext | null> {
   const authContext = await readAuthContextFromRequest(
@@ -430,15 +452,22 @@ async function buildReadyStatus(): Promise<ReadyStatus> {
   };
 }
 
-async function startApiServer(): Promise<void> {
-  const env = readApiEnv();
-  const sessionContract = createSessionContract({
-    sessionCookieMaxAgeSeconds: env.authSessionTtlDays * 24 * 60 * 60,
-    sessionCookieName: env.sessionCookieName,
-    sessionCookiePath: env.sessionCookiePath,
-    sessionCookieSameSite: env.sessionCookieSameSite,
-    sessionCookieSecure: env.sessionCookieSecure
-  });
+function canCloseDatabase(
+  databasePool: ApiDatabase
+): databasePool is ApiDatabase & { end(): Promise<void> } {
+  return typeof (databasePool as { end?: unknown }).end === "function";
+}
+
+function isDirectExecution(moduleUrl: string): boolean {
+  const entry = process.argv[1];
+  return typeof entry === "string" && pathToFileURL(entry).href === moduleUrl;
+}
+
+export async function createApiApp(
+  options: CreateApiAppOptions = {}
+) {
+  const env = readApiEnv(options.envSource);
+  const sessionContract = createSessionContractForApiEnv(env);
   const logger = createServiceLogger({
     service: "api",
     environment: env.environment,
@@ -461,7 +490,9 @@ async function startApiServer(): Promise<void> {
     type: "gauge"
   });
 
-  registerProcessErrorHandlers(logger, reporter);
+  if (options.registerProcessHandlers ?? true) {
+    registerProcessErrorHandlers(logger, reporter);
+  }
   registerServiceInfoMetrics(
     registry,
     "api",
@@ -472,8 +503,8 @@ async function startApiServer(): Promise<void> {
   serviceReady.set({ service: "api" }, 0);
 
   const requestStartedAt = new WeakMap<object, bigint>();
-  const storage = createStorage(env.storage);
-  const databasePool = createDatabasePool(env.databaseUrl);
+  const storage = options.storage ?? createStorage(env.storage);
+  const databasePool = options.databasePool ?? createDatabasePool(env.databaseUrl);
 
   const app = Fastify({
     disableRequestLogging: true,
@@ -1944,39 +1975,58 @@ async function startApiServer(): Promise<void> {
     });
   }
 
-  try {
-    app.addHook("onClose", async () => {
+  app.addHook("onClose", async () => {
+    if (canCloseDatabase(databasePool)) {
       await databasePool.end();
-    });
-
-    try {
-      await storage.ensureBucket();
-    } catch (error) {
-      logger.warn("storage bootstrap failed during startup", {
-        error: error instanceof Error ? error.message : String(error)
-      });
     }
+  });
 
-    await app.listen({
-      host: env.host,
-      port: env.port
+  try {
+    await storage.ensureBucket();
+  } catch (error) {
+    logger.warn("storage bootstrap failed during startup", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  return {
+    app,
+    databasePool,
+    env,
+    logger,
+    reporter,
+    sessionContract,
+    storage
+  };
+}
+
+async function startApiServer(): Promise<void> {
+  const runtime = await createApiApp();
+
+  try {
+    await runtime.app.listen({
+      host: runtime.env.host,
+      port: runtime.env.port
     });
 
-    logger.info("api server listening", {
-      authPath: env.authPath,
-      host: env.host,
-      port: env.port,
-      storageBucket: env.storage.bucket,
-      storageProvider: env.storage.provider
+    runtime.logger.info("api server listening", {
+      authPath: runtime.env.authPath,
+      host: runtime.env.host,
+      port: runtime.env.port,
+      storageBucket: runtime.env.storage.bucket,
+      storageProvider: runtime.env.storage.provider
     });
   } catch (error) {
-    logger.error("api server failed to start", createErrorLogFields(error));
-    reporter.captureException(error, {
+    runtime.logger.error("api server failed to start", createErrorLogFields(error));
+    runtime.reporter.captureException(error, {
       event: "startup"
     });
-    await reporter.flush();
+    await runtime.app.close().catch(() => undefined);
+    await runtime.reporter.flush();
     process.exitCode = 1;
   }
 }
 
-void startApiServer();
+if (isDirectExecution(import.meta.url)) {
+  void startApiServer();
+}

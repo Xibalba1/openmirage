@@ -136,6 +136,9 @@ async function runBrowser(input: {
   writeMode: "pdf" | "screenshot";
 }): Promise<void> {
   const directory = await fs.mkdtemp(join(tmpdir(), "openmirage-export-"));
+  const profileDirectory = await fs.mkdtemp(
+    join(tmpdir(), "openmirage-browser-profile-")
+  );
   const htmlPath = join(directory, "index.html");
 
   try {
@@ -149,6 +152,7 @@ async function runBrowser(input: {
       "--allow-file-access-from-files",
       "--disable-web-security",
       "--no-sandbox",
+      `--user-data-dir=${profileDirectory}`,
       `--window-size=${Math.max(1, Math.ceil(input.windowWidth))},${Math.max(
         1,
         Math.ceil(input.windowHeight)
@@ -200,6 +204,7 @@ async function runBrowser(input: {
     });
   } finally {
     await fs.rm(directory, { force: true, recursive: true });
+    await fs.rm(profileDirectory, { force: true, recursive: true });
   }
 }
 

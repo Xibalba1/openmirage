@@ -18,6 +18,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "turbo run test",
+    "test:browser": "node ./scripts/verify-mvp-browser-smoke.mjs",
     "typecheck": "turbo run typecheck",
     "docker:build": "turbo run docker:build",
     "verify:platform:prereqs": "node ./scripts/verify-platform-prereqs.mjs",
@@ -39,16 +40,23 @@
     "@openmirage/config-eslint": "workspace:*",
     "@openmirage/config-prettier": "workspace:*",
     "@openmirage/config-typescript": "workspace:*",
+    "@playwright/test": "^1.59.1",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^22.10.2",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
-    "@types/node": "^22.10.2",
     "eslint": "^9.25.1",
     "globals": "^16.0.0",
+    "jsdom": "^26.1.0",
     "prettier": "^3.5.3",
     "tsx": "^4.19.3",
     "turbo": "^2.3.3",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.30.1",
-    "vite": "^6.3.5"
+    "vite": "^6.3.5",
+    "vitest": "^4.1.4"
   }
 }

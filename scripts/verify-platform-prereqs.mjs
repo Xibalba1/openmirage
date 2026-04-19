@@ -300,6 +300,37 @@ function verifyDockerStack() {
   );
 }
 
+function verifyBrowserAutomationRuntime() {
+  verifyCommand(
+    "pnpm",
+    ["exec", "playwright", "--version"],
+    "playwright cli available",
+    [
+      "Install workspace dependencies with `pnpm install`.",
+      "Confirm `pnpm exec playwright --version` succeeds.",
+      "Re-run the prerequisite verification command."
+    ]
+  );
+
+  runChecked(
+    "node",
+    [
+      "--input-type=module",
+      "-e",
+      "import { chromium } from '@playwright/test'; const browser = await chromium.launch({ headless: true }); await browser.close();"
+    ],
+    {
+      name: "playwright chromium runtime",
+      reason: "playwright chromium launch failed",
+      correctiveSteps: [
+        "Install the local browser runtime with `pnpm --filter @openmirage/web test:e2e:install` or `pnpm exec playwright install chromium`.",
+        "If the install already ran, inspect the failing browser launch message for missing OS dependencies or a bad browser cache.",
+        "Re-run the prerequisite verification command."
+      ]
+    }
+  );
+}
+
 printStep("verifying pnpm availability");
 verifyCommand("pnpm", ["--version"], "pnpm available", [
   "Install pnpm 9.15.0 or newer.",
@@ -339,5 +370,8 @@ verifyPortsAvailable(runningServices, deploymentMode.stagingLike);
 
 printStep("verifying docker compose postgres/minio prerequisites");
 verifyDockerStack();
+
+printStep("verifying browser automation runtime");
+verifyBrowserAutomationRuntime();
 
 printStep("all prerequisite checks passed");

@@ -2663,7 +2663,9 @@ export function PageEditorScreen(props: {
 
         <div className="editor-canvas-shell" ref={canvasShellRef}>
           <canvas
+            aria-label="Editor canvas"
             className="editor-canvas"
+            data-testid="editor-canvas"
             onDoubleClick={handleCanvasDoubleClick}
             onPointerCancel={() => setActiveInteraction(null)}
             onPointerDown={handlePointerDown}
@@ -2686,6 +2688,8 @@ export function PageEditorScreen(props: {
               return (
                 <div
                   className="remote-selection-overlay"
+                  data-participant-name={entry.displayName}
+                  data-testid="remote-selection"
                   key={`${entry.displayName}-${record.node.id}`}
                   style={{
                     borderColor: entry.color,
@@ -2718,6 +2722,8 @@ export function PageEditorScreen(props: {
             return (
               <div
                 className="remote-cursor"
+                data-participant-name={entry.payload.participant.displayName}
+                data-testid="remote-cursor"
                 key={`cursor-${entry.clientId}`}
                 style={{
                   left: `${screenPoint.x}px`,
@@ -2911,7 +2917,12 @@ export function PageEditorScreen(props: {
               ) : null}
               <div className="share-link-list">
                 {shareLinkLoadState.shareLinks.map((shareLink) => (
-                  <article className="share-link-card" key={shareLink.id}>
+                  <article
+                    className="share-link-card"
+                    data-share-url={shareLink.shareUrl ?? ""}
+                    data-testid="share-link-card"
+                    key={shareLink.id}
+                  >
                     <div>
                       <strong>{shareLink.revokedAt ? "Revoked link" : "Active link"}</strong>
                       <p className="muted">
