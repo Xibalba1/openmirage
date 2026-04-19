@@ -365,8 +365,15 @@ export interface ExportJobDto {
   status: ExportJobStatus;
   outputAssetId: string | null;
   errorMessage: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CreateExportJobInput {
+  format: "pdf" | "png";
+  pageId?: string | null;
 }
 
 export const sceneGraphNodeTypes = [
@@ -728,3 +735,26 @@ export interface WebRuntimeSnapshot {
   environment: RuntimeEnvironment;
   urls: RuntimeUrls;
 }
+
+export {
+  DEFAULT_PAGE_BACKGROUND,
+  DEFAULT_PAGE_HEIGHT,
+  DEFAULT_PAGE_WIDTH,
+  createPaintRecords,
+  flattenSceneInPaintOrder,
+  getAbsoluteNodeBounds,
+  getNodePaintRecord,
+  getNodePath,
+  getPaintOrderNodeIds,
+  getScopedPaintRecords,
+  hydratePageDocument,
+  isNodeWithinScope,
+  type FlattenedSceneNode,
+  type HydratedPageScene,
+  type NodeBounds,
+  type PaintRecord
+} from "./scene.js";
+export {
+  serializeSceneToSvg,
+  type ExportImageSourceMap
+} from "./svg-export.js";

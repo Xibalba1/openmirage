@@ -1,40 +1,28 @@
 import {
+  DEFAULT_PAGE_BACKGROUND,
+  DEFAULT_PAGE_HEIGHT,
+  DEFAULT_PAGE_WIDTH,
   type EditorCommand,
+  type FlattenedSceneNode,
+  type HydratedPageScene,
+  type NodeBounds,
   type PageDocumentDto,
-  type PageDto,
+  type PaintRecord,
   type PresenceParticipant,
-  type PresencePayload,
-  type SceneGraphNode
+  type PresencePayload
 } from "@openmirage/types";
 
-export const DEFAULT_PAGE_WIDTH = 1440;
-export const DEFAULT_PAGE_HEIGHT = 1024;
-export const DEFAULT_PAGE_BACKGROUND = "#ffffff";
-
-export interface HydratedPageScene {
-  background: string;
-  document: PageDocumentDto;
-  height: number;
-  nodesById: Record<string, SceneGraphNode>;
-  page: PageDto;
-  rootNodeIds: string[];
-  width: number;
-}
-
-export interface FlattenedSceneNode {
-  absoluteX: number;
-  absoluteX2: number | null;
-  absoluteY: number;
-  absoluteY2: number | null;
-  bounds: NodeBounds;
-  node: SceneGraphNode;
-}
-
-export interface PaintRecord extends FlattenedSceneNode {
-  isContainer: boolean;
-  painted: boolean;
-  selectable: boolean;
-}
+export {
+  DEFAULT_PAGE_BACKGROUND,
+  DEFAULT_PAGE_HEIGHT,
+  DEFAULT_PAGE_WIDTH
+};
+export type {
+  FlattenedSceneNode,
+  HydratedPageScene,
+  NodeBounds,
+  PaintRecord
+};
 
 export interface ViewportState {
   panX: number;
@@ -43,13 +31,6 @@ export interface ViewportState {
 }
 
 export interface Point {
-  x: number;
-  y: number;
-}
-
-export interface NodeBounds {
-  height: number;
-  width: number;
   x: number;
   y: number;
 }

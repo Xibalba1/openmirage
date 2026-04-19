@@ -50,9 +50,11 @@ import {
   type AuthContext,
   type CommentListResponse,
   type CreateCommentInput,
+  type CreateExportJobInput,
   type CreateFileInput,
   type CreatePageInput,
   type CreateProjectInput,
+  type ExportJobDto,
   type ListAssetsResponse,
   type HealthStatus,
   type ReadyStatus,
@@ -84,6 +86,11 @@ import {
 } from "./comments.js";
 import { buildApiErrorResponse } from "./errors.js";
 import { resolveCollabPageSession } from "./collab-session.js";
+import {
+  resolveCreateExportJobRequest,
+  resolveExportJobDownloadRequest,
+  resolveGetExportJobRequest
+} from "./exports.js";
 import {
   resolveCreateShareLinkRequest,
   resolveListShareLinksRequest,
@@ -1260,6 +1267,88 @@ async function startApiServer(): Promise<void> {
       }
 
       return result;
+    }
+  );
+  app.post<{ Body: CreateExportJobInput; Params: FileParams }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/export-jobs",
+    async (request, reply) => {
+      const authContext = await readAuthContextFromRequest(
+        request,
+        databasePool,
+        sessionContract
+      );
+      const resolution = await resolveCreateExportJobRequest(
+        authContext,
+        {
+          fileId: request.params.fileId,
+          format: request.body?.format,
+          pageId: request.body?.pageId,
+          projectId: request.params.projectId,
+          workspaceId: request.params.workspaceId
+        },
+        databasePool
+      );
+
+      reply.status(resolution.status);
+      return resolution.body satisfies ExportJobDto | { error: string };
+    }
+  );
+  app.get<{ Params: FileParams & { jobId: string } }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/export-jobs/:jobId",
+    async (request, reply) => {
+      const authContext = await readAuthContextFromRequest(
+        request,
+        databasePool,
+        sessionContract
+      );
+      const resolution = await resolveGetExportJobRequest(
+        authContext,
+        {
+          fileId: request.params.fileId,
+          jobId: request.params.jobId,
+          projectId: request.params.projectId,
+          workspaceId: request.params.workspaceId
+        },
+        databasePool
+      );
+
+      reply.status(resolution.status);
+      return resolution.body satisfies ExportJobDto | { error: string };
+    }
+  );
+  app.get<{ Params: FileParams & { jobId: string } }>(
+    "/v1/workspaces/:workspaceId/projects/:projectId/files/:fileId/export-jobs/:jobId/download",
+    async (request, reply) => {
+      const authContext = await readAuthContextFromRequest(
+        request,
+        databasePool,
+        sessionContract
+      );
+      const resolution = await resolveExportJobDownloadRequest(
+        authContext,
+        {
+          fileId: request.params.fileId,
+          jobId: request.params.jobId,
+          projectId: request.params.projectId,
+          workspaceId: request.params.workspaceId
+        },
+        databasePool,
+        storage
+      );
+
+      if (resolution.status !== 200) {
+        reply.status(resolution.status);
+        return resolution.body;
+      }
+
+      reply.header("cache-control", resolution.body.cacheControl);
+      reply.header(
+        "content-disposition",
+        resolution.body.contentDisposition
+      );
+      reply.header("content-type", resolution.body.contentType);
+      reply.status(200);
+      return reply.send(Buffer.from(resolution.body.body));
     }
   );
   app.get<{ Params: FileParams }>(

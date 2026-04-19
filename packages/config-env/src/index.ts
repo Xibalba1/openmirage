@@ -52,10 +52,18 @@ export interface CollabEnv extends BaseServiceEnv {
 
 export interface WorkerEnv extends BaseServiceEnv {
   service: "worker";
-  port: number;
+  browserExecutablePath?: string | undefined;
+  browserLaunchTimeoutMs: number;
+  cleanupIntervalMs: number;
+  cleanupRetentionMs: number;
   databaseUrl: string;
+  exportConcurrency: number;
+  exportPollIntervalMs: number;
   storage: StorageConfig;
   heartbeatIntervalMs: number;
+  jobTimeoutMs: number;
+  port: number;
+  thumbnailPollIntervalMs: number;
 }
 
 export interface WebEnv {
@@ -377,17 +385,53 @@ export function readWorkerEnv(source: EnvSource = process.env): WorkerEnv {
   return {
     ...readBaseServiceEnv("worker", source),
     service: "worker",
+    browserExecutablePath: source.WORKER_BROWSER_EXECUTABLE,
+    browserLaunchTimeoutMs: readPositiveInteger(
+      source,
+      "WORKER_BROWSER_LAUNCH_TIMEOUT_MS",
+      15_000
+    ),
+    cleanupIntervalMs: readPositiveInteger(
+      source,
+      "WORKER_CLEANUP_INTERVAL_MS",
+      60_000
+    ),
+    cleanupRetentionMs: readPositiveInteger(
+      source,
+      "WORKER_CLEANUP_RETENTION_MS",
+      60 * 60 * 1000
+    ),
     port: readNumber(source, "WORKER_PORT", 4200),
     databaseUrl: readRequiredString(
       source,
       "DATABASE_URL",
       "postgres://openmirage:openmirage@localhost:5432/openmirage"
     ),
+    exportConcurrency: readPositiveInteger(
+      source,
+      "WORKER_EXPORT_CONCURRENCY",
+      1
+    ),
+    exportPollIntervalMs: readPositiveInteger(
+      source,
+      "WORKER_EXPORT_POLL_INTERVAL_MS",
+      2_000
+    ),
     storage: readStorageConfig(source),
     heartbeatIntervalMs: readNumber(
       source,
       "WORKER_HEARTBEAT_INTERVAL_MS",
       5000
+    ),
+    jobTimeoutMs: readPositiveInteger(
+      source,
+      "WORKER_JOB_TIMEOUT_MS",
+      120_000
+    ),
+    thumbnailPollIntervalMs: readPositiveInteger(
+      source,
+      "WORKER_THUMBNAIL_POLL_INTERVAL_MS",
+      30_000
     )
   };
 }

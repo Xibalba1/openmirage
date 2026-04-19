@@ -5,7 +5,9 @@ import {
   type CommentListResponse,
   type CreatedShareLinkResponse,
   type CreateCommentInput,
+  type CreateExportJobInput,
   type EditorAccessDto,
+  type ExportJobDto,
   type FileDto,
   type GroupNode,
   type GroupNodesCommand,
@@ -71,6 +73,14 @@ import {
 } from "./viewport";
 import { getMissingAssetRefreshKey } from "./asset-resolution";
 import { deriveInspectDetails } from "./inspect";
+import {
+  canCreateExportJobs,
+  describeExportJobState,
+  isExportActionDisabled,
+  isTerminalExportJobStatus,
+  shouldPollExportJob,
+  type ExportJobState
+} from "./export-jobs";
 import {
   type ActiveInteraction,
   type ActiveTextEdit,
@@ -302,6 +312,46 @@ async function revokeFileShareLink(
     {
       method: "POST"
     }
+  );
+}
+
+async function createExportJob(
+  apiBaseUrl: string,
+  route: Pick<AppPageRoute, "fileId" | "projectId" | "workspaceId">,
+  input: CreateExportJobInput
+): Promise<ExportJobDto> {
+  return fetchEditorJson<ExportJobDto>(
+    apiBaseUrl,
+    `/v1/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}/export-jobs`,
+    {
+      body: JSON.stringify(input),
+      method: "POST"
+    }
+  );
+}
+
+async function fetchExportJob(
+  apiBaseUrl: string,
+  route: Pick<AppPageRoute, "fileId" | "projectId" | "workspaceId">,
+  jobId: string
+): Promise<ExportJobDto> {
+  return fetchEditorJson<ExportJobDto>(
+    apiBaseUrl,
+    `/v1/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}/export-jobs/${encodeURIComponent(jobId)}`,
+    {
+      method: "GET"
+    }
+  );
+}
+
+function buildExportJobDownloadUrl(
+  apiBaseUrl: string,
+  route: Pick<AppPageRoute, "fileId" | "projectId" | "workspaceId">,
+  jobId: string
+): string {
+  return createApiUrl(
+    apiBaseUrl,
+    `/v1/workspaces/${encodeURIComponent(route.workspaceId)}/projects/${encodeURIComponent(route.projectId)}/files/${encodeURIComponent(route.fileId)}/export-jobs/${encodeURIComponent(jobId)}/download`
   );
 }
 
@@ -628,10 +678,15 @@ export function PageEditorScreen(props: {
   const [revokingShareLinkId, setRevokingShareLinkId] = useState<string | null>(
     null
   );
+  const [exportJobState, setExportJobState] = useState<ExportJobState>({
+    job: null,
+    status: "idle"
+  });
   const canMutate = props.access.canMutate;
   const canViewComments = !props.shareToken;
   const canComment = props.access.canComment && canViewComments;
   const canManageShareLinks = props.access.canManageShareLinks && !props.shareToken;
+  const canCreateExports = canCreateExportJobs(props.shareToken);
 
   if (!imageLoadManagerRef.current) {
     imageLoadManagerRef.current = createImageLoadManager({
@@ -672,6 +727,10 @@ export function PageEditorScreen(props: {
       status: "loading"
     });
     setImageResources({});
+    setExportJobState({
+      job: null,
+      status: "idle"
+    });
 
     const session = createEditorSession(
       {
@@ -1158,6 +1217,79 @@ export function PageEditorScreen(props: {
   ]);
 
   useEffect(() => {
+    if (canCreateExports) {
+      return;
+    }
+
+    setExportJobState({
+      job: null,
+      status: "idle"
+    });
+  }, [canCreateExports]);
+
+  useEffect(() => {
+    if (!shouldPollExportJob(exportJobState)) {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      if (!exportJobState.job) {
+        return;
+      }
+
+      try {
+        const nextJob = await fetchExportJob(
+          props.collab.apiBaseUrl,
+          props.route,
+          exportJobState.job.id
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        if (nextJob.status === "succeeded") {
+          setExportJobState({
+            job: nextJob,
+            status: "succeeded"
+          });
+          return;
+        }
+
+        if (nextJob.status === "failed" || nextJob.status === "cancelled") {
+          setExportJobState({
+            job: nextJob,
+            message: nextJob.errorMessage ?? `Export ${nextJob.status}.`,
+            status: "failed"
+          });
+          return;
+        }
+
+        setExportJobState({
+          job: nextJob,
+          status: "polling"
+        });
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        setExportJobState((current) => ({
+          job: current.job,
+          message: error instanceof Error ? error.message : String(error),
+          status: "failed"
+        }));
+      }
+    }, exportJobState.status === "submitting" ? 250 : 1200);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [exportJobState, props.collab.apiBaseUrl, props.route]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
 
     if (!canvas) {
@@ -1488,6 +1620,51 @@ export function PageEditorScreen(props: {
     } finally {
       setRevokingShareLinkId(null);
     }
+  }
+
+  async function handleCreateExportJob(input: CreateExportJobInput) {
+    if (!canCreateExports) {
+      return;
+    }
+
+    setExportJobState((current) => ({
+      job: current.job,
+      status: "submitting"
+    }));
+
+    try {
+      const job = await createExportJob(props.collab.apiBaseUrl, props.route, input);
+      setExportJobState(
+        isTerminalExportJobStatus(job.status)
+          ? job.status === "succeeded"
+            ? {
+                job,
+                status: "succeeded"
+              }
+            : {
+                job,
+                message: job.errorMessage ?? `Export ${job.status}.`,
+                status: "failed"
+              }
+          : {
+              job,
+              status: "polling"
+            }
+      );
+    } catch (error) {
+      setExportJobState({
+        job: null,
+        message: error instanceof Error ? error.message : String(error),
+        status: "failed"
+      });
+    }
+  }
+
+  function handleDismissExportJob() {
+    setExportJobState({
+      job: null,
+      status: "idle"
+    });
   }
 
   function insertImageAsset(asset: AssetRecordDto) {
@@ -2616,6 +2793,98 @@ export function PageEditorScreen(props: {
             <p className="muted">
               Select a supported node to inspect dimensions, spacing, color,
               typography, and metadata.
+            </p>
+          )}
+        </div>
+
+        <div className="editor-sidebar-section">
+          <p className="eyebrow">Export</p>
+          {canCreateExports ? (
+            <>
+              <div className="share-link-actions">
+                <button
+                  className="button button-secondary"
+                  disabled={isExportActionDisabled(exportJobState)}
+                  onClick={() =>
+                    void handleCreateExportJob({
+                      format: "png",
+                      pageId: props.page.id
+                    })
+                  }
+                  type="button"
+                >
+                  Export page PNG
+                </button>
+                <button
+                  className="button button-secondary"
+                  disabled={isExportActionDisabled(exportJobState)}
+                  onClick={() =>
+                    void handleCreateExportJob({
+                      format: "pdf",
+                      pageId: null
+                    })
+                  }
+                  type="button"
+                >
+                  Export file PDF
+                </button>
+              </div>
+              {exportJobState.job ? (
+                <article className="share-link-card">
+                  <div>
+                    <strong>
+                      {exportJobState.job.format === "pdf"
+                        ? "File PDF export"
+                        : "Page PNG export"}
+                    </strong>
+                    <p className="muted">
+                      Requested{" "}
+                      {new Date(exportJobState.job.createdAt).toLocaleString()}
+                    </p>
+                    {describeExportJobState(exportJobState) ? (
+                      <p className="muted">
+                        Status: {describeExportJobState(exportJobState)}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="share-link-actions">
+                    {exportJobState.status === "succeeded" ? (
+                      <a
+                        className="button button-secondary button-icon"
+                        href={buildExportJobDownloadUrl(
+                          props.collab.apiBaseUrl,
+                          props.route,
+                          exportJobState.job.id
+                        )}
+                      >
+                        Download
+                      </a>
+                    ) : null}
+                    {exportJobState.status === "failed" ||
+                    exportJobState.status === "succeeded" ? (
+                      <button
+                        className="button button-secondary button-icon"
+                        onClick={handleDismissExportJob}
+                        type="button"
+                      >
+                        Dismiss
+                      </button>
+                    ) : null}
+                  </div>
+                </article>
+              ) : describeExportJobState(exportJobState) ? (
+                <p className="muted">{describeExportJobState(exportJobState)}</p>
+              ) : (
+                <p className="muted">
+                  Export the current page as a PNG or the whole file as a PDF.
+                  Jobs run in the background so editing and collaboration stay
+                  responsive.
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="muted">
+              Export creation is unavailable from read-only share-link access.
             </p>
           )}
         </div>

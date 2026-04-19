@@ -77,6 +77,16 @@ test("smoke collab fixture bootstrap creates and cleanup removes its resources",
     );
     assert.equal(user.rows.length, 1);
 
+    const collabUpdate = await client.query<{ page_id: string }>(
+      `
+        select page_id
+        from collab_page_updates
+        where page_id = $1
+      `,
+      [fixture.pageId]
+    );
+    assert.equal(collabUpdate.rows.length, 1);
+
     await cleanupSmokeCollabFixture(
       "smoke-secret",
       "smoke-secret",

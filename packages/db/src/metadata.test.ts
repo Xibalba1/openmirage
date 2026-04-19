@@ -5,20 +5,34 @@ import {
   createAsset,
   createComment,
   createDatabasePool,
+  createDerivedAssetRecord,
+  createExportJob,
   createFileWithPages,
   createFileShareLink,
   createPage,
+  claimNextQueuedExportJob,
+  failStaleRunningExportJobs,
+  findNextFileMissingThumbnail,
+  findNextPageMissingThumbnail,
   getFileOpenDetails,
   getAuthorizedCollabPageSession,
+  getAuthorizedExportJob,
   getAuthorizedAsset,
   getSharedCollabPageSession,
   getSharedFileOpenDetails,
+  hardDeleteAssetRecord,
   listAuthorizedWorkspaces,
+  listDeletedThumbnailAssetsForCleanup,
   listFileShareLinks,
   listSharedAssets,
   listAssets,
+  markAssetDeleted,
+  markExportJobFailed,
+  markExportJobSucceeded,
   listComments,
   listWorkspaceProjects,
+  replaceFileThumbnailAsset,
+  replacePageThumbnailAsset,
   resolveComment,
   revokeFileShareLink,
   renameProject
@@ -1021,6 +1035,253 @@ test("getAuthorizedAsset returns only visible file or workspace scoped assets", 
     assert.equal(hiddenFileAsset, null);
     assert.equal(visibleWorkspaceAsset?.id, workspaceAsset?.id);
     assert.equal(blockedWorkspaceAsset, null);
+  });
+
+  if (!ran) {
+    t.skip("database unavailable");
+  }
+});
+
+test("export jobs and thumbnail helpers stay scoped, transition correctly, and expose cleanup candidates", async (t) => {
+  const ran = await withDatabaseTransaction(async (client) => {
+    const ownerUserId = await insertUser(
+      client,
+      `export-owner-${Date.now()}@example.com`,
+      "Export Owner"
+    );
+    const otherUserId = await insertUser(
+      client,
+      `export-other-${Date.now()}@example.com`,
+      "Export Other"
+    );
+    const workspaceId = await insertWorkspace(
+      client,
+      "Export Workspace",
+      `export-${Date.now()}`
+    );
+    const otherWorkspaceId = await insertWorkspace(
+      client,
+      "Export Other Workspace",
+      `export-other-${Date.now()}`
+    );
+
+    await insertMembership(client, workspaceId, ownerUserId, "owner");
+    await insertMembership(client, otherWorkspaceId, otherUserId, "owner");
+
+    const projectId = await insertProject(client, workspaceId, "Export Project");
+    const file = await createFileWithPages(
+      ownerUserId,
+      workspaceId,
+      projectId,
+      "Export File",
+      [{ name: "Cover" }, { name: "Specs" }],
+      client
+    );
+
+    const fileId = file?.file.id as string;
+    const coverPageId = file?.pages[0]?.id as string;
+    const specsPageId = file?.pages[1]?.id as string;
+
+    const blockedCreate = await createExportJob(
+      otherUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      {
+        format: "png",
+        pageId: coverPageId
+      },
+      client
+    );
+    assert.equal(blockedCreate, null);
+
+    const pngJob = await createExportJob(
+      ownerUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      {
+        format: "png",
+        pageId: coverPageId
+      },
+      client
+    );
+    const pdfJob = await createExportJob(
+      ownerUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      {
+        format: "pdf",
+        pageId: null
+      },
+      client
+    );
+
+    assert.equal(pngJob?.status, "queued");
+    assert.equal(pdfJob?.status, "queued");
+
+    const hiddenJob = await getAuthorizedExportJob(
+      otherUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      pngJob?.id as string,
+      client
+    );
+    assert.equal(hiddenJob, null);
+
+    const claimedPngJob = await claimNextQueuedExportJob(client);
+    assert.equal(claimedPngJob?.job.id, pngJob?.id);
+    assert.equal(claimedPngJob?.job.status, "running");
+    assert.ok(claimedPngJob?.job.startedAt);
+
+    const exportAsset = await createDerivedAssetRecord(
+      {
+        byteSize: 4096,
+        fileId,
+        filename: "cover-export.png",
+        height: 800,
+        kind: "export",
+        mimeType: "image/png",
+        storageKey: `workspaces/${workspaceId}/exports/${pngJob?.id}.png`,
+        uploadedByUserId: ownerUserId,
+        width: 1200,
+        workspaceId
+      },
+      client
+    );
+    const succeededJob = await markExportJobSucceeded(
+      pngJob?.id as string,
+      exportAsset.id,
+      client
+    );
+    assert.equal(succeededJob?.status, "succeeded");
+    assert.equal(succeededJob?.outputAssetId, exportAsset.id);
+    assert.ok(succeededJob?.completedAt);
+
+    const claimedPdfJob = await claimNextQueuedExportJob(client);
+    assert.equal(claimedPdfJob?.job.id, pdfJob?.id);
+    assert.equal(claimedPdfJob?.job.status, "running");
+
+    const failedJob = await markExportJobFailed(
+      pdfJob?.id as string,
+      "renderer exploded",
+      client
+    );
+    assert.equal(failedJob?.status, "failed");
+    assert.equal(failedJob?.errorMessage, "renderer exploded");
+
+    const staleJob = await createExportJob(
+      ownerUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      {
+        format: "png",
+        pageId: specsPageId
+      },
+      client
+    );
+    assert.ok(staleJob);
+    const claimedStaleJob = await claimNextQueuedExportJob(client);
+    assert.equal(claimedStaleJob?.job.id, staleJob?.id);
+    const timedOutCount = await failStaleRunningExportJobs(
+      new Date(Date.now() + 1000),
+      client
+    );
+    assert.equal(timedOutCount, 1);
+
+    const timedOutJob = await getAuthorizedExportJob(
+      ownerUserId,
+      workspaceId,
+      projectId,
+      fileId,
+      staleJob?.id as string,
+      client
+    );
+    assert.equal(timedOutJob?.status, "failed");
+    assert.equal(timedOutJob?.errorMessage, "worker job timed out");
+
+    const firstPageThumbnail = await createDerivedAssetRecord(
+      {
+        byteSize: 512,
+        fileId,
+        filename: "page-thumb-1.png",
+        height: 128,
+        kind: "thumbnail",
+        mimeType: "image/png",
+        storageKey: `workspaces/${workspaceId}/thumbnails/pages/${coverPageId}-1.png`,
+        uploadedByUserId: ownerUserId,
+        width: 192,
+        workspaceId
+      },
+      client
+    );
+    const secondPageThumbnail = await createDerivedAssetRecord(
+      {
+        byteSize: 768,
+        fileId,
+        filename: "page-thumb-2.png",
+        height: 128,
+        kind: "thumbnail",
+        mimeType: "image/png",
+        storageKey: `workspaces/${workspaceId}/thumbnails/pages/${coverPageId}-2.png`,
+        uploadedByUserId: ownerUserId,
+        width: 192,
+        workspaceId
+      },
+      client
+    );
+    const fileThumbnail = await createDerivedAssetRecord(
+      {
+        byteSize: 1024,
+        fileId,
+        filename: "file-thumb.png",
+        height: 128,
+        kind: "thumbnail",
+        mimeType: "image/png",
+        storageKey: `workspaces/${workspaceId}/thumbnails/files/${fileId}.png`,
+        uploadedByUserId: ownerUserId,
+        width: 192,
+        workspaceId
+      },
+      client
+    );
+
+    assert.equal(
+      await replacePageThumbnailAsset(coverPageId, firstPageThumbnail.id, client),
+      null
+    );
+    assert.equal(
+      await replacePageThumbnailAsset(coverPageId, secondPageThumbnail.id, client),
+      firstPageThumbnail.id
+    );
+    assert.equal(
+      await replaceFileThumbnailAsset(fileId, fileThumbnail.id, client),
+      null
+    );
+
+    const deletedThumbnail = await markAssetDeleted(firstPageThumbnail.id, client);
+    assert.equal(deletedThumbnail?.id, firstPageThumbnail.id);
+
+    const cleanupCandidates = await listDeletedThumbnailAssetsForCleanup(
+      new Date(Date.now() + 1000),
+      10,
+      client
+    );
+    assert.deepEqual(
+      cleanupCandidates.map((asset) => asset.id),
+      [firstPageThumbnail.id]
+    );
+    assert.equal(await hardDeleteAssetRecord(firstPageThumbnail.id, client), true);
+
+    const nextPageThumbnail = await findNextPageMissingThumbnail(client);
+    assert.equal(nextPageThumbnail?.page.id, specsPageId);
+    assert.equal(nextPageThumbnail?.file.id, fileId);
+
+    const nextFileThumbnail = await findNextFileMissingThumbnail(client);
+    assert.equal(nextFileThumbnail, null);
   });
 
   if (!ran) {

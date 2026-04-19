@@ -90,11 +90,14 @@ function runAuthenticatedProbe(options) {
   const documentName = requireOption(options, "document-name");
   const sessionCookie = requireOption(options, "session-cookie");
   const timeoutMs = Number(options.timeout ?? 5_000);
+  const holdOpen = options.mode === "hold-authenticated";
+  const holdMs = Number(options["hold-ms"] ?? 15_000);
   const doc = new Y.Doc();
   const collabUrl = buildCollabUrl(options);
   let authenticated = false;
   let synced = false;
   let finished = false;
+  let holdTimer = null;
 
   const ws = new WebSocket(collabUrl, {
     headers: {
@@ -119,6 +122,9 @@ function runAuthenticatedProbe(options) {
 
     finished = true;
     clearTimeout(timer);
+    if (holdTimer) {
+      clearTimeout(holdTimer);
+    }
 
     if (message) {
       if (code === 0) {
@@ -182,7 +188,18 @@ function runAuthenticatedProbe(options) {
       encoding.writeVarUint(encoder, MESSAGE_SYNC);
       syncProtocol.readSyncMessage(decoder, encoder, doc, "remote");
       synced = true;
-      ws.close();
+
+      if (!holdOpen) {
+        ws.close();
+        return;
+      }
+
+      clearTimeout(timer);
+      console.log("authenticated collab hold ready");
+      holdTimer = setTimeout(() => {
+        ws.close();
+        finish(0, "authenticated collab hold ok");
+      }, holdMs);
     }
   });
 
@@ -191,6 +208,10 @@ function runAuthenticatedProbe(options) {
   });
 
   ws.on("close", () => {
+    if (holdOpen && authenticated && synced && finished) {
+      return;
+    }
+
     if (authenticated && synced) {
       finish(0, "authenticated collab sync ok");
       return;
@@ -200,6 +221,17 @@ function runAuthenticatedProbe(options) {
       1,
       `websocket closed before sync completed (authenticated=${String(authenticated)} synced=${String(synced)})`
     );
+  });
+
+  process.on("SIGTERM", () => {
+    if (!holdOpen || finished) {
+      process.exit(0);
+    }
+
+    ws.close();
+    finish(authenticated && synced ? 0 : 1, authenticated && synced
+      ? "authenticated collab hold interrupted after sync"
+      : "authenticated collab hold interrupted before sync");
   });
 }
 
@@ -260,6 +292,8 @@ const options = parseArgs(process.argv.slice(2));
 const mode = options.mode ?? "authenticated";
 
 if (mode === "authenticated") {
+  runAuthenticatedProbe(options);
+} else if (mode === "hold-authenticated") {
   runAuthenticatedProbe(options);
 } else if (mode === "unauthorized") {
   runUnauthorizedProbe(options);
