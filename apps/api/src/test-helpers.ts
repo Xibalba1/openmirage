@@ -51,21 +51,52 @@ export async function withApiTestApp(
     registerProcessHandlers: false
   });
 
+  let callbackError: unknown;
+
   try {
     await callback({
       app: runtime.app,
       client,
       storageRoot
     });
+  } catch (error) {
+    callbackError = error;
+    throw error;
   } finally {
-    await runtime.app.close();
-    await client.query("rollback");
-    client.release();
-    await pool.end();
+    let cleanupError: unknown;
+
+    try {
+      await client.query("rollback");
+    } catch (error) {
+      cleanupError = error;
+    }
+
+    try {
+      client.release();
+    } catch (error) {
+      cleanupError ??= error;
+    }
+
+    try {
+      await runtime.app.close();
+    } catch (error) {
+      cleanupError ??= error;
+    }
+
+    try {
+      await pool.end();
+    } catch (error) {
+      cleanupError ??= error;
+    }
+
     rmSync(storageRoot, {
       force: true,
       recursive: true
     });
+
+    if (callbackError === undefined && cleanupError !== undefined) {
+      throw cleanupError;
+    }
   }
 
   return true;

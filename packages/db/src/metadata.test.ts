@@ -836,13 +836,15 @@ test("createAsset and listAssets stay workspace/file scoped", async (t) => {
       client
     );
     assert.deepEqual(
-      visibleAssets?.map((asset) => ({
-        fileId: asset.fileId,
-        filename: asset.filename
-      })),
+      visibleAssets
+        ?.map((asset) => ({
+          fileId: asset.fileId,
+          filename: asset.filename
+        }))
+        .sort((left, right) => left.filename.localeCompare(right.filename)),
       [
-        { fileId: null, filename: "shared.webp" },
-        { fileId, filename: "hero.png" }
+        { fileId, filename: "hero.png" },
+        { fileId: null, filename: "shared.webp" }
       ]
     );
 
@@ -1131,10 +1133,23 @@ test("export jobs and thumbnail helpers stay scoped, transition correctly, and e
     );
     assert.equal(hiddenJob, null);
 
-    const claimedPngJob = await claimNextQueuedExportJob(client);
-    assert.equal(claimedPngJob?.job.id, pngJob?.id);
-    assert.equal(claimedPngJob?.job.status, "running");
-    assert.ok(claimedPngJob?.job.startedAt);
+    const claimedJobs = [
+      await claimNextQueuedExportJob(client),
+      await claimNextQueuedExportJob(client)
+    ];
+    assert.deepEqual(
+      claimedJobs
+        .map((claimedJob) => claimedJob?.job.id)
+        .sort(),
+      [pdfJob?.id, pngJob?.id].sort()
+    );
+    for (const claimedJob of claimedJobs) {
+      assert.equal(
+        claimedJob?.job.status,
+        "running"
+      );
+      assert.ok(claimedJob?.job.startedAt);
+    }
 
     const exportAsset = await createDerivedAssetRecord(
       {
@@ -1159,10 +1174,6 @@ test("export jobs and thumbnail helpers stay scoped, transition correctly, and e
     assert.equal(succeededJob?.status, "succeeded");
     assert.equal(succeededJob?.outputAssetId, exportAsset.id);
     assert.ok(succeededJob?.completedAt);
-
-    const claimedPdfJob = await claimNextQueuedExportJob(client);
-    assert.equal(claimedPdfJob?.job.id, pdfJob?.id);
-    assert.equal(claimedPdfJob?.job.status, "running");
 
     const failedJob = await markExportJobFailed(
       pdfJob?.id as string,

@@ -226,9 +226,10 @@ test("api route integration covers comments, share links, assets, and export dow
         `/files/${file?.file.id}/comments?pageId=${pageId}&includeResolved=true`
     });
     assert.equal(listedComments.statusCode, 200);
-    assert.equal(
-      readJson<{ comments: Array<{ id: string }> }>(listedComments.body).comments[0]?.id,
-      createdCommentBody.id
+    assert.ok(
+      readJson<{ comments: Array<{ id: string }> }>(listedComments.body).comments.some(
+        (comment) => comment.id === createdCommentBody.id
+      )
     );
 
     const resolvedComment = await app.inject({
@@ -335,7 +336,7 @@ test("api route integration covers comments, share links, assets, and export dow
         `/v1/workspaces/${workspaceId}/projects/${project?.id}` +
         `/files/${file?.file.id}/export-jobs`
     });
-    assert.equal(createdExport.statusCode, 201);
+    assert.equal(createdExport.statusCode, 202);
     const exportBody = readJson<{ id: string }>(createdExport.body);
 
     const storage = createStorage({

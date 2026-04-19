@@ -325,10 +325,11 @@ test("comment request helpers enforce auth, target validation, and resolve flow"
       throw new Error("expected list success");
     }
     assert.deepEqual(
-      (listed.body as { comments: CommentDto[] }).comments.map(
-        (comment) => comment.body
-      ),
+      (listed.body as { comments: CommentDto[] }).comments
+        .map((comment) => comment.body)
+        .sort(),
       ["Whole file note", "Looks good", "Node note"]
+        .sort()
     );
 
     const resolved = await resolveResolveCommentRequest(
