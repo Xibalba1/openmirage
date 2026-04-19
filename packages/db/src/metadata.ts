@@ -1632,6 +1632,19 @@ export async function createDerivedAssetRecord(input: {
         height
       )
       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      on conflict (storage_key)
+      do update set
+        workspace_id = excluded.workspace_id,
+        file_id = excluded.file_id,
+        uploaded_by_user_id = excluded.uploaded_by_user_id,
+        kind = excluded.kind,
+        filename = excluded.filename,
+        mime_type = excluded.mime_type,
+        byte_size = excluded.byte_size,
+        width = excluded.width,
+        height = excluded.height,
+        deleted_at = null,
+        updated_at = now()
       returning
         byte_size,
         created_at,

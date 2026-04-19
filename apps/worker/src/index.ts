@@ -313,7 +313,7 @@ async function reconcilePageThumbnail(input: {
     asset.id
   );
 
-  if (previousAssetId) {
+  if (previousAssetId && previousAssetId !== asset.id) {
     await markAssetDeleted(previousAssetId);
   }
 }
@@ -347,13 +347,66 @@ async function reconcileFileThumbnail(input: {
     asset.id
   );
 
-  if (previousAssetId) {
+  if (previousAssetId && previousAssetId !== asset.id) {
     await markAssetDeleted(previousAssetId);
+  }
+}
+
+async function refreshExportThumbnails(input: {
+  browserPath: string;
+  file: {
+    createdByUserId: string;
+    id: string;
+    name: string;
+    workspaceId: string;
+  };
+  logFailure: (error: unknown, context: Record<string, string>) => void;
+  page: PageDto;
+  pages: PageDto[];
+  persistence: PgCollabPersistence;
+  storage: StorageAdapter;
+  timeoutMs: number;
+}): Promise<void> {
+  try {
+    await reconcilePageThumbnail({
+      browserPath: input.browserPath,
+      candidate: {
+        file: input.file,
+        page: input.page
+      },
+      persistence: input.persistence,
+      storage: input.storage,
+      timeoutMs: input.timeoutMs
+    });
+  } catch (error) {
+    input.logFailure(error, {
+      thumbnailScope: "page",
+      pageId: input.page.id
+    });
+  }
+
+  try {
+    await reconcileFileThumbnail({
+      browserPath: input.browserPath,
+      candidate: {
+        coverPage: input.pages[0] ?? input.page,
+        file: input.file
+      },
+      persistence: input.persistence,
+      storage: input.storage,
+      timeoutMs: input.timeoutMs
+    });
+  } catch (error) {
+    input.logFailure(error, {
+      thumbnailScope: "file",
+      pageId: (input.pages[0] ?? input.page).id
+    });
   }
 }
 
 async function processExportJob(input: {
   browserPath: string;
+  logThumbnailFailure: (error: unknown, context: Record<string, string>) => void;
   persistence: PgCollabPersistence;
   storage: StorageAdapter;
   timeoutMs: number;
@@ -417,22 +470,19 @@ async function processExportJob(input: {
       });
 
       await markExportJobSucceeded(claimed.job.id, outputAsset.id);
-      await reconcilePageThumbnail({
+      await refreshExportThumbnails({
         browserPath: input.browserPath,
-        candidate: {
-          file: claimed.file,
-          page
+        file: claimed.file,
+        logFailure(error, context) {
+          input.logThumbnailFailure(error, {
+            exportFormat: claimed.job.format,
+            fileId: claimed.file.id,
+            jobId: claimed.job.id,
+            ...context
+          });
         },
-        persistence: input.persistence,
-        storage: input.storage,
-        timeoutMs: input.timeoutMs
-      });
-      await reconcileFileThumbnail({
-        browserPath: input.browserPath,
-        candidate: {
-          coverPage: pages[0] ?? page,
-          file: claimed.file
-        },
+        page,
+        pages,
         persistence: input.persistence,
         storage: input.storage,
         timeoutMs: input.timeoutMs
@@ -491,22 +541,19 @@ async function processExportJob(input: {
       });
 
       await markExportJobSucceeded(claimed.job.id, outputAsset.id);
-      await reconcilePageThumbnail({
+      await refreshExportThumbnails({
         browserPath: input.browserPath,
-        candidate: {
-          file: claimed.file,
-          page: pages[0] as PageDto
+        file: claimed.file,
+        logFailure(error, context) {
+          input.logThumbnailFailure(error, {
+            exportFormat: claimed.job.format,
+            fileId: claimed.file.id,
+            jobId: claimed.job.id,
+            ...context
+          });
         },
-        persistence: input.persistence,
-        storage: input.storage,
-        timeoutMs: input.timeoutMs
-      });
-      await reconcileFileThumbnail({
-        browserPath: input.browserPath,
-        candidate: {
-          coverPage: pages[0] as PageDto,
-          file: claimed.file
-        },
+        page: pages[0] as PageDto,
+        pages,
         persistence: input.persistence,
         storage: input.storage,
         timeoutMs: input.timeoutMs
@@ -824,6 +871,19 @@ async function startWorker(): Promise<void> {
         recordJobState("export", "running");
         const processed = await processExportJob({
           browserPath,
+          logThumbnailFailure(error, context) {
+            logger.error(
+              "worker export thumbnail refresh failed",
+              createErrorLogFields(error, context)
+            );
+            reporter.captureException(
+              error instanceof Error ? error : new Error(String(error)),
+              {
+                event: "worker_export_thumbnail_refresh",
+                ...context
+              }
+            );
+          },
           persistence,
           storage,
           timeoutMs: env.browserLaunchTimeoutMs
