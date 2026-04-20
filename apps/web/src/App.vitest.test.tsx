@@ -37,25 +37,157 @@ function setRuntimeEnv() {
   };
 }
 
-const authenticatedSession = {
-  memberships: [
+const workspaceOne = {
+  id: "workspace-1",
+  name: "OpenMirage Dev",
+  role: "owner",
+  slug: "openmirage-dev"
+};
+
+const workspaceTwo = {
+  id: "workspace-2",
+  name: "Client Workspace",
+  role: "editor",
+  slug: "client-workspace"
+};
+
+const projectsByWorkspace = {
+  "workspace-1": [
     {
-      id: "membership-1",
-      role: "owner",
+      createdAt: "2026-04-18T00:00:00.000Z",
+      id: "project-1",
+      name: "Sprint 10 Project",
+      updatedAt: "2026-04-18T00:00:00.000Z",
       workspaceId: "workspace-1"
     }
   ],
-  session: {
-    expiresAt: "2026-05-01T00:00:00.000Z",
-    id: "session-1"
-  },
-  user: {
-    avatarUrl: null,
-    displayName: "OpenMirage Dev",
-    email: "dev@openmirage.local",
-    id: "user-1"
-  }
-};
+  "workspace-2": [
+    {
+      createdAt: "2026-04-18T00:00:00.000Z",
+      id: "project-2",
+      name: "Client Project",
+      updatedAt: "2026-04-18T01:00:00.000Z",
+      workspaceId: "workspace-2"
+    }
+  ]
+} satisfies Record<string, Array<Record<string, string>>>;
+
+function createAuthenticatedSession(
+  workspaceIds: string[] = ["workspace-1", "workspace-2"]
+) {
+  return {
+    memberships: workspaceIds.map((workspaceId, index) => ({
+      id: `membership-${index + 1}`,
+      role: workspaceId === "workspace-1" ? "owner" : "editor",
+      workspaceId
+    })),
+    session: {
+      expiresAt: "2026-05-01T00:00:00.000Z",
+      id: "session-1"
+    },
+    user: {
+      avatarUrl: null,
+      displayName: "OpenMirage Dev",
+      email: "dev@openmirage.local",
+      id: "user-1"
+    }
+  };
+}
+
+function createWorkspaceProjectsResponse(workspaceId: "workspace-1" | "workspace-2") {
+  return createJsonResponse({
+    projects: projectsByWorkspace[workspaceId],
+    workspace: workspaceId === "workspace-1" ? workspaceOne : workspaceTwo
+  });
+}
+
+function createAuthenticatedFetchMock() {
+  return vi.fn<typeof fetch>().mockImplementation((input) => {
+    const url = String(input);
+
+    if (url.includes("/auth/me")) {
+      return Promise.resolve(createJsonResponse(createAuthenticatedSession()));
+    }
+
+    if (url.endsWith("/v1/workspaces")) {
+      return Promise.resolve(
+        createJsonResponse({
+          workspaces: [workspaceOne, workspaceTwo]
+        })
+      );
+    }
+
+    if (url.includes("/v1/workspaces/workspace-2/projects/project-2/files")) {
+      return Promise.resolve(
+        createJsonResponse({
+          files: [
+            {
+              createdAt: "2026-04-18T00:00:00.000Z",
+              createdByUserId: "user-1",
+              id: "file-2",
+              name: "Client File",
+              projectId: "project-2",
+              updatedAt: "2026-04-18T00:00:00.000Z",
+              workspaceId: "workspace-2"
+            }
+          ],
+          project: projectsByWorkspace["workspace-2"][0],
+          workspace: workspaceTwo
+        })
+      );
+    }
+
+    if (url.includes("/v1/workspaces/workspace-1/projects/project-1/files")) {
+      return Promise.resolve(
+        createJsonResponse({
+          files: [
+            {
+              createdAt: "2026-04-18T00:00:00.000Z",
+              createdByUserId: "user-1",
+              id: "file-1",
+              name: "Sprint 10 File",
+              projectId: "project-1",
+              updatedAt: "2026-04-18T00:00:00.000Z",
+              workspaceId: "workspace-1"
+            }
+          ],
+          project: projectsByWorkspace["workspace-1"][0],
+          workspace: workspaceOne
+        })
+      );
+    }
+
+    if (url.includes("/v1/workspaces/workspace-1/projects")) {
+      return Promise.resolve(createWorkspaceProjectsResponse("workspace-1"));
+    }
+
+    if (url.includes("/v1/workspaces/workspace-2/projects")) {
+      return Promise.resolve(createWorkspaceProjectsResponse("workspace-2"));
+    }
+
+    return Promise.resolve(new Response(null, { status: 404 }));
+  });
+}
+
+function createEmptyWorkspaceFetchMock() {
+  return vi.fn<typeof fetch>().mockImplementation((input) => {
+    const url = String(input);
+
+    if (url.includes("/auth/me")) {
+      return Promise.resolve(createJsonResponse(createAuthenticatedSession([])));
+    }
+
+    if (url.endsWith("/v1/workspaces")) {
+      return Promise.resolve(
+        createJsonResponse({
+          workspaces: []
+        })
+      );
+    }
+
+    return Promise.resolve(new Response(null, { status: 404 }));
+  });
+}
 
 beforeEach(() => {
   setRuntimeEnv();
@@ -84,7 +216,7 @@ describe("App auth and routing flows", () => {
     await screen.findByRole("heading", {
       name: "Sign in to your workspace"
     });
-    expect(window.location.pathname).toBe("/auth");
+    await waitFor(() => expect(window.location.pathname).toBe("/auth"));
     expect(window.location.search).toContain("redirectTo=%2Fapp");
 
     fireEvent.change(screen.getByLabelText("Email"), {
@@ -100,6 +232,267 @@ describe("App auth and routing flows", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("loads the authenticated /app launchpad without auto-opening a canvas", async () => {
+    window.history.replaceState(null, "", "/app");
+
+    vi.stubGlobal("fetch", createAuthenticatedFetchMock());
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Workspace launchpad" });
+    await screen.findByRole("heading", { name: "OpenMirage Dev" });
+    expect(screen.getByText("Sprint 10 Project")).toBeInTheDocument();
+    expect(screen.queryByTestId("mock-page-editor")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("openmirage.activeWorkspaceId")).toBe(
+      "workspace-1"
+    );
+  });
+
+  it("restores the last active workspace and updates browser-local memory when switching workspaces", async () => {
+    window.history.replaceState(null, "", "/app");
+    window.localStorage.setItem("openmirage.activeWorkspaceId", "workspace-2");
+    const fetchMock = createAuthenticatedFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Workspace launchpad" });
+    await screen.findByRole("heading", { name: "Client Workspace" });
+    expect(screen.getByText("Client Project")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /OpenMirage Dev/i }));
+
+    await screen.findByRole("heading", { name: "OpenMirage Dev" });
+    await waitFor(() =>
+      expect(screen.getByText("Sprint 10 Project")).toBeInTheDocument()
+    );
+    expect(window.localStorage.getItem("openmirage.activeWorkspaceId")).toBe(
+      "workspace-1"
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/v1/workspaces/workspace-2/projects"),
+      expect.any(Object)
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/v1/workspaces/workspace-1/projects"),
+      expect.any(Object)
+    );
+  });
+
+  it("falls back to the first accessible workspace when stored memory is stale", async () => {
+    window.history.replaceState(null, "", "/app");
+    window.localStorage.setItem(
+      "openmirage.activeWorkspaceId",
+      "workspace-missing"
+    );
+
+    vi.stubGlobal("fetch", createAuthenticatedFetchMock());
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "OpenMirage Dev" });
+    expect(window.localStorage.getItem("openmirage.activeWorkspaceId")).toBe(
+      "workspace-1"
+    );
+  });
+
+  it("clears stale browser-local memory when no workspaces are available", async () => {
+    window.history.replaceState(null, "", "/app");
+    window.localStorage.setItem("openmirage.activeWorkspaceId", "workspace-1");
+
+    vi.stubGlobal("fetch", createEmptyWorkspaceFetchMock());
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "No workspaces yet" });
+    expect(window.localStorage.getItem("openmirage.activeWorkspaceId")).toBeNull();
+  });
+
+  it("retries launchpad loading after a workspace request failure", async () => {
+    window.history.replaceState(null, "", "/app");
+    let projectLoadAttempts = 0;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation((input) => {
+        const url = String(input);
+
+        if (url.includes("/auth/me")) {
+          return Promise.resolve(createJsonResponse(createAuthenticatedSession()));
+        }
+
+        if (url.endsWith("/v1/workspaces")) {
+          return Promise.resolve(
+            createJsonResponse({
+              workspaces: [workspaceOne, workspaceTwo]
+            })
+          );
+        }
+
+        if (url.includes("/v1/workspaces/workspace-1/projects")) {
+          projectLoadAttempts += 1;
+
+          return Promise.resolve(
+            projectLoadAttempts === 1
+              ? createJsonResponse({ error: "Workspace load failed" }, 500)
+              : createWorkspaceProjectsResponse("workspace-1")
+          );
+        }
+
+        if (url.includes("/v1/workspaces/workspace-2/projects")) {
+          return Promise.resolve(createWorkspaceProjectsResponse("workspace-2"));
+        }
+
+        return Promise.resolve(new Response(null, { status: 404 }));
+      })
+    );
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Metadata load failed" });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText("Sprint 10 Project");
+  });
+
+  it("creates a project from the launchpad and keeps the active workspace in browser-local state", async () => {
+    window.history.replaceState(null, "", "/app");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation((input, init) => {
+        const url = String(input);
+
+        if (url.includes("/auth/me")) {
+          return Promise.resolve(createJsonResponse(createAuthenticatedSession()));
+        }
+
+        if (url.endsWith("/v1/workspaces")) {
+          return Promise.resolve(
+            createJsonResponse({
+              workspaces: [workspaceOne, workspaceTwo]
+            })
+          );
+        }
+
+        if (
+          url.includes("/v1/workspaces/workspace-1/projects") &&
+          init?.method === "POST"
+        ) {
+          return Promise.resolve(
+            createJsonResponse({
+              createdAt: "2026-04-18T00:00:00.000Z",
+              id: "project-3",
+              name: "Launchpad Project",
+              updatedAt: "2026-04-18T00:00:00.000Z",
+              workspaceId: "workspace-1"
+            })
+          );
+        }
+
+        if (url.includes("/v1/workspaces/workspace-1/projects/project-3/files")) {
+          return Promise.resolve(
+            createJsonResponse({
+              files: [],
+              project: {
+                createdAt: "2026-04-18T00:00:00.000Z",
+                id: "project-3",
+                name: "Launchpad Project",
+                updatedAt: "2026-04-18T00:00:00.000Z",
+                workspaceId: "workspace-1"
+              },
+              workspace: workspaceOne
+            })
+          );
+        }
+
+        if (url.includes("/v1/workspaces/workspace-1/projects")) {
+          return Promise.resolve(createWorkspaceProjectsResponse("workspace-1"));
+        }
+
+        if (url.includes("/v1/workspaces/workspace-2/projects")) {
+          return Promise.resolve(createWorkspaceProjectsResponse("workspace-2"));
+        }
+
+        return Promise.resolve(new Response(null, { status: 404 }));
+      })
+    );
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "OpenMirage Dev" });
+    const projectNameInput = await screen.findByPlaceholderText("New project name");
+    fireEvent.change(projectNameInput, {
+      target: { value: "Launchpad Project" }
+    });
+    expect((projectNameInput as HTMLInputElement).value).toBe("Launchpad Project");
+    fireEvent.submit(projectNameInput.closest("form") as HTMLFormElement);
+
+    await screen.findByRole("heading", { name: "Launchpad Project" });
+    expect(window.localStorage.getItem("openmirage.activeWorkspaceId")).toBe(
+      "workspace-1"
+    );
+    expect(window.location.pathname).toBe(
+      "/app/workspaces/workspace-1/projects/project-3"
+    );
+  });
+
+  it("updates browser-local workspace memory from deep-link routes", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/app/workspaces/workspace-2/projects/project-2"
+    );
+
+    vi.stubGlobal("fetch", createAuthenticatedFetchMock());
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Client Project" });
+    expect(window.localStorage.getItem("openmirage.activeWorkspaceId")).toBe(
+      "workspace-2"
+    );
+    expect(screen.getByText("Client File")).toBeInTheDocument();
+  });
+
+  it("navigates to fallback workspace and project routes from the launchpad", async () => {
+    window.history.replaceState(null, "", "/app");
+
+    vi.stubGlobal("fetch", createAuthenticatedFetchMock());
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "OpenMirage Dev" });
+    fireEvent.click(screen.getAllByRole("button", { name: "View route" })[0]!);
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/app/workspaces/workspace-1")
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to launchpad" }));
+    await screen.findByRole("heading", { name: "OpenMirage Dev" });
+
+    fireEvent.click(screen.getByRole("button", { name: /Sprint 10 Project/i }));
+    await waitFor(() =>
+      expect(window.location.pathname).toBe(
+        "/app/workspaces/workspace-1/projects/project-1"
+      )
+    );
+  });
+
+  it("uses the launchpad project row to open the fallback workspace route", async () => {
+    window.history.replaceState(null, "", "/app");
+
+    vi.stubGlobal("fetch", createAuthenticatedFetchMock());
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "OpenMirage Dev" });
+    fireEvent.click(screen.getByRole("button", { name: "Workspace route" }));
+
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/app/workspaces/workspace-1")
+    );
+  });
+
   it("loads the authenticated page route and passes file data to the editor surface", async () => {
     window.history.replaceState(
       null,
@@ -111,7 +504,9 @@ describe("App auth and routing flows", () => {
       "fetch",
       vi
         .fn<typeof fetch>()
-        .mockResolvedValueOnce(createJsonResponse(authenticatedSession))
+        .mockResolvedValueOnce(
+          createJsonResponse(createAuthenticatedSession(["workspace-1"]))
+        )
         .mockResolvedValueOnce(
           createJsonResponse({
             access: {
@@ -161,12 +556,7 @@ describe("App auth and routing flows", () => {
               updatedAt: "2026-04-18T00:00:00.000Z",
               workspaceId: "workspace-1"
             },
-            workspace: {
-              id: "workspace-1",
-              name: "OpenMirage Dev",
-              role: "owner",
-              slug: "openmirage-dev"
-            }
+            workspace: workspaceOne
           })
         )
     );

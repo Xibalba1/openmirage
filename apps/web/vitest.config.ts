@@ -6,6 +6,10 @@ export default defineConfig({
   plugins: [react()],
   test: {
     ...jsdomTestConfig.test,
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html", "lcovonly"]
+    },
     include: ["src/**/*.vitest.test.ts", "src/**/*.vitest.test.tsx"],
     pool: "threads"
   }
