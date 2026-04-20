@@ -112,7 +112,6 @@ type AssetLoadState =
   | {
       assets: AssetRecordDto[];
       message: string;
-      requestId?: string;
       status: "error";
     };
 
@@ -358,13 +357,6 @@ function buildExportJobDownloadUrl(
   );
 }
 
-function readEditorRequestId(error: unknown): string | undefined {
-  return error instanceof Error &&
-    typeof (error as Error & { requestId?: string }).requestId === "string"
-    ? (error as Error & { requestId?: string }).requestId
-    : undefined;
-}
-
 function formatAssetErrorMessage(
   error: unknown,
   fallback: string
@@ -378,7 +370,9 @@ function formatAssetErrorMessage(
   if (
     code === "internal_error" ||
     code === "storage_unavailable" ||
-    code === "upload_persist_failed"
+    code === "upload_persist_failed" ||
+    (error instanceof Error &&
+      error.message.startsWith("Request failed with HTTP"))
   ) {
     return fallback;
   }
@@ -386,23 +380,27 @@ function formatAssetErrorMessage(
   return error instanceof Error ? error.message : String(error);
 }
 
+function formatUiErrorMessage(error: unknown, fallback: string): string {
+  if (
+    error instanceof Error &&
+    error.message &&
+    !error.message.startsWith("Request failed with HTTP")
+  ) {
+    return error.message;
+  }
+
+  return fallback;
+}
+
 function createAssetErrorState(
   assets: AssetRecordDto[],
-  message: string,
-  requestId?: string
+  message: string
 ): Extract<AssetLoadState, { status: "error" }> {
-  return requestId
-    ? {
-        assets,
-        message,
-        requestId,
-        status: "error"
-      }
-    : {
-        assets,
-        message,
-        status: "error"
-      };
+  return {
+    assets,
+    message,
+    status: "error"
+  };
 }
 
 function createPresenceParticipant(
@@ -1022,11 +1020,7 @@ export function PageEditorScreen(props: {
         setAssetLoadState((current) =>
           createAssetErrorState(
             current.assets,
-            formatAssetErrorMessage(
-              error,
-              "Assets couldn't be loaded. Refresh to retry."
-            ),
-            readEditorRequestId(error)
+            formatAssetErrorMessage(error, "Couldn't load your assets. Try again.")
           )
         );
       }
@@ -1086,11 +1080,7 @@ export function PageEditorScreen(props: {
         setAssetLoadState((current) =>
           createAssetErrorState(
             current.assets,
-            formatAssetErrorMessage(
-              error,
-              "Assets couldn't be loaded. Refresh to retry."
-            ),
-            readEditorRequestId(error)
+            formatAssetErrorMessage(error, "Couldn't load your assets. Try again.")
           )
         );
       });
@@ -1148,7 +1138,10 @@ export function PageEditorScreen(props: {
 
         setCommentLoadState((current) => ({
           comments: current.comments,
-          message: error instanceof Error ? error.message : String(error),
+          message: formatUiErrorMessage(
+            error,
+            "Couldn't load comments right now. Try again."
+          ),
           status: "error"
         }));
       }
@@ -1205,7 +1198,10 @@ export function PageEditorScreen(props: {
         }
 
         setShareLinkLoadState((current) => ({
-          message: error instanceof Error ? error.message : String(error),
+          message: formatUiErrorMessage(
+            error,
+            "Couldn't load share links right now. Try again."
+          ),
           shareLinks: current.shareLinks,
           status: "error"
         }));
@@ -1284,7 +1280,7 @@ export function PageEditorScreen(props: {
         if (nextJob.status === "failed" || nextJob.status === "cancelled") {
           setExportJobState({
             job: nextJob,
-            message: nextJob.errorMessage ?? `Export ${nextJob.status}.`,
+            message: nextJob.errorMessage ?? "This export didn't finish.",
             status: "failed"
           });
           return;
@@ -1301,7 +1297,10 @@ export function PageEditorScreen(props: {
 
         setExportJobState((current) => ({
           job: current.job,
-          message: error instanceof Error ? error.message : String(error),
+          message: formatUiErrorMessage(
+            error,
+            "Couldn't finish checking that export. Try again."
+          ),
           status: "failed"
         }));
       }
@@ -1593,7 +1592,10 @@ export function PageEditorScreen(props: {
       }
     } catch (error) {
       setShareLinkLoadState((current) => ({
-        message: error instanceof Error ? error.message : String(error),
+        message: formatUiErrorMessage(
+          error,
+          "Couldn't create a share link right now. Try again."
+        ),
         shareLinks: current.shareLinks,
         status: "error"
       }));
@@ -1637,7 +1639,10 @@ export function PageEditorScreen(props: {
       }));
     } catch (error) {
       setShareLinkLoadState((current) => ({
-        message: error instanceof Error ? error.message : String(error),
+        message: formatUiErrorMessage(
+          error,
+          "Couldn't update that share link right now. Try again."
+        ),
         shareLinks: current.shareLinks,
         status: "error"
       }));
@@ -1667,7 +1672,7 @@ export function PageEditorScreen(props: {
               }
             : {
                 job,
-                message: job.errorMessage ?? `Export ${job.status}.`,
+                message: job.errorMessage ?? "This export didn't finish.",
                 status: "failed"
               }
           : {
@@ -1678,7 +1683,10 @@ export function PageEditorScreen(props: {
     } catch (error) {
       setExportJobState({
         job: null,
-        message: error instanceof Error ? error.message : String(error),
+        message: formatUiErrorMessage(
+          error,
+          "Couldn't start that export. Try again."
+        ),
         status: "failed"
       });
     }
@@ -1759,8 +1767,7 @@ export function PageEditorScreen(props: {
       setAssetLoadState((current) =>
         createAssetErrorState(
           current.assets,
-          formatAssetErrorMessage(error, "Image upload failed. Please retry."),
-          readEditorRequestId(error)
+          formatAssetErrorMessage(error, "Couldn't upload that image. Try again.")
         )
       );
     } finally {
@@ -1822,7 +1829,10 @@ export function PageEditorScreen(props: {
     } catch (error) {
       setCommentLoadState((current) => ({
         comments: current.comments,
-        message: error instanceof Error ? error.message : String(error),
+        message: formatUiErrorMessage(
+          error,
+          "Couldn't save that comment. Try again."
+        ),
         status: "error"
       }));
     } finally {
@@ -1849,7 +1859,10 @@ export function PageEditorScreen(props: {
     } catch (error) {
       setCommentLoadState((current) => ({
         comments: current.comments,
-        message: error instanceof Error ? error.message : String(error),
+        message: formatUiErrorMessage(
+          error,
+          "Couldn't update that comment. Try again."
+        ),
         status: "error"
       }));
     } finally {
@@ -2292,12 +2305,16 @@ export function PageEditorScreen(props: {
       <section className="panel editor-stage-panel">
         <div className="editor-shell-header">
           <div className="editor-shell-heading">
-            <p className="eyebrow">Editor</p>
+            <p className="eyebrow">Canvas</p>
             <h2>{props.file.name}</h2>
+            <p className="muted" data-testid="editor-hierarchy">
+              {props.workspace.name} / {props.project.name} / {props.file.name} /{" "}
+              {props.page.name}
+            </p>
             <p className="muted">
               {canMutate
-                ? "Command-backed editing with collab persistence and inspect-ready values."
-                : "Read-only handoff mode with page navigation, selection, and inspect values."}
+                ? "Edit on canvas, move through pages, and keep share and export tools close by."
+                : "Review this file in read-only mode with page navigation, comments, and inspect details."}
             </p>
           </div>
           <div className="editor-shell-header-actions">
@@ -2373,7 +2390,9 @@ export function PageEditorScreen(props: {
           </div>
         ) : null}
         {!canMutate ? (
-          <div className="inline-alert">This file is open in read-only mode.</div>
+          <div className="inline-alert">
+            You're viewing a read-only version of this file.
+          </div>
         ) : null}
 
         <div className="editor-toolbar">
@@ -2513,22 +2532,28 @@ export function PageEditorScreen(props: {
 
         <div className="editor-meta">
           <span>Access: {props.access.mode}</span>
-          <span>Collab: {collabStatus.state}</span>
+          <span>
+            Sync:{" "}
+            {collabStatus.state === "connected"
+              ? "Live"
+              : collabStatus.state === "connecting"
+                ? "Connecting"
+                : collabStatus.state === "disconnected"
+                  ? "Offline"
+                  : "Needs attention"}
+          </span>
           <span>
             Assets:{" "}
             {assetLoadState.status === "error"
-              ? "error"
+              ? "Needs attention"
               : assetLoadState.status === "loading"
-                ? "loading"
-                : assetLoadState.assets.length}
+                ? "Loading"
+                : `${assetLoadState.assets.length} ready`}
           </span>
-          <span>
-            Viewport: {viewport.zoom.toFixed(2)}x · pan{" "}
-            {Math.round(viewport.panX)}/{Math.round(viewport.panY)}
-          </span>
+          <span>View: {viewport.zoom.toFixed(2)}x</span>
           <span>Nodes: {paintRecords.length}</span>
           <span>Selection: {effectivePrimarySelectionId ?? "None"}</span>
-          <span>Scope: {activeScopeId ?? "Root"}</span>
+          <span>Focus: {activeScopeId ?? "Canvas"}</span>
           <div className="presence-strip">
             <span className="presence-chip presence-chip-self">
               You · {props.currentUser.displayName}
@@ -2549,12 +2574,7 @@ export function PageEditorScreen(props: {
           </div>
         </div>
         {assetLoadState.status === "error" ? (
-          <p className="muted">
-            {assetLoadState.message}
-            {assetLoadState.requestId
-              ? ` Request ID: ${assetLoadState.requestId}`
-              : ""}
-          </p>
+          <p className="muted">{assetLoadState.message}</p>
         ) : null}
 
         <div className="editor-canvas-shell" ref={canvasShellRef}>
@@ -2766,7 +2786,7 @@ export function PageEditorScreen(props: {
                           <textarea
                             className="input comment-textarea"
                             onChange={(event) => setCommentDraft(event.target.value)}
-                            placeholder="Leave lightweight review context"
+                            placeholder="Add context for reviewers"
                             rows={4}
                             value={commentDraft}
                           />
@@ -2784,7 +2804,8 @@ export function PageEditorScreen(props: {
                       </form>
                     ) : (
                       <p className="muted">
-                        Comments are visible but read-only in this mode.
+                        Comments are visible here, but you can't add or resolve
+                        them in this view.
                       </p>
                     )}
                     {commentLoadState.status === "error" ? (
@@ -2851,7 +2872,9 @@ export function PageEditorScreen(props: {
                       })}
                       {sortedComments.length === 0 &&
                       commentLoadState.status !== "loading" ? (
-                        <p className="muted">No comments on this file/page yet.</p>
+                        <p className="muted">
+                          No comments yet for this page or file.
+                        </p>
                       ) : null}
                     </div>
                   </div>
@@ -3015,30 +3038,27 @@ export function PageEditorScreen(props: {
                             {describeExportJobState(exportJobState)}
                           </p>
                         ) : (
-                          <p className="muted">
-                            Export the current page as a PNG or the whole file as
-                            a PDF. Jobs run in the background so editing and
-                            collaboration stay responsive.
-                          </p>
-                        )}
-                      </>
-                    ) : (
                       <p className="muted">
-                        Export creation is unavailable from read-only share-link
-                        access.
+                        Export the current page as a PNG or the whole file as a
+                        PDF while you keep working.
                       </p>
                     )}
-                  </div>
-                ) : null}
+                  </>
+                ) : (
+                  <p className="muted">
+                    Exports aren't available from a read-only share link.
+                  </p>
+                )}
+              </div>
+            ) : null}
 
                 {rightPanelMode === "share" ? (
                   <div className="editor-sidebar-section">
                     <p className="eyebrow">Share</p>
                     {props.shareToken ? (
                       <p className="muted">
-                        This session is running from a read-only share link.
-                        Document changes are disabled in the UI and blocked
-                        server-side.
+                        This view came from a read-only share link, so changes
+                        and sharing controls are turned off.
                       </p>
                     ) : canManageShareLinks ? (
                       <>
@@ -3108,16 +3128,16 @@ export function PageEditorScreen(props: {
                           {shareLinkLoadState.shareLinks.length === 0 &&
                           shareLinkLoadState.status !== "loading" ? (
                             <p className="muted">
-                              No share links yet. Create one for lightweight
-                              review or handoff.
+                              No share links yet. Create one when you're ready
+                              to share this file.
                             </p>
                           ) : null}
                         </div>
                       </>
                     ) : (
                       <p className="muted">
-                        Share management is unavailable in read-only member
-                        access.
+                        You can view this file, but only editors can manage
+                        share links.
                       </p>
                     )}
                   </div>

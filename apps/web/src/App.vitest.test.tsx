@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -334,18 +334,21 @@ describe("App auth and routing flows", () => {
     render(<App />);
 
     await screen.findByRole("heading", {
-      name: "Sign in to your workspace"
+      name: "Sign in to OpenMirage"
     });
     await waitFor(() => expect(window.location.pathname).toBe("/auth"));
     expect(window.location.search).toContain("redirectTo=%2Fapp");
+    expect(
+      screen.queryByText(/Sprint 2 adds the first real product flow/i)
+    ).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Email"), {
       target: { value: "dev@openmirage.local" }
     });
     fireEvent.click(screen.getByRole("button", { name: "Send magic link" }));
 
-    await screen.findByRole("heading", { name: "Check your magic link" });
-    expect(screen.getByRole("link", { name: "Open development magic link" })).toHaveAttribute(
+    await screen.findByRole("heading", { name: "Check your email" });
+    expect(screen.getByRole("link", { name: "Open sign-in link" })).toHaveAttribute(
       "href",
       "http://127.0.0.1/auth/magic-link/consume?token=test-token"
     );
@@ -431,6 +434,9 @@ describe("App auth and routing flows", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "No workspaces yet" });
+    expect(
+      screen.getByText("You don't have access to a workspace yet.")
+    ).toBeInTheDocument();
     expect(window.localStorage.getItem("openmirage.activeWorkspaceId")).toBeNull();
   });
 
@@ -475,7 +481,7 @@ describe("App auth and routing flows", () => {
 
     render(<App />);
 
-    await screen.findByRole("heading", { name: "Metadata load failed" });
+    await screen.findByRole("heading", { name: "We couldn't load this view" });
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByText("Sprint 10 Project");
   });
@@ -641,8 +647,13 @@ describe("App auth and routing flows", () => {
 
     await screen.findByText("Sprint 10 File");
     await user.click(screen.getByRole("button", { name: "Browse pages" }));
-    await screen.findAllByRole("button", { name: "Open page" });
-    await user.click(screen.getAllByRole("button", { name: "Open page" })[1]!);
+    const pageRow = await screen.findByText("Page 2");
+    await user.click(
+      within(pageRow.closest(".resource-row-inline") as HTMLElement).getByRole(
+        "button",
+        { name: "Open page" }
+      )
+    );
 
     await screen.findByTestId("mock-page-editor");
     expect(window.location.pathname).toBe(
@@ -678,7 +689,9 @@ describe("App auth and routing flows", () => {
     await screen.findByText("Sprint 10 File");
     await user.click(screen.getByRole("button", { name: "Browse pages" }));
 
-    await screen.findByText("Page load failed");
+    await screen.findByText(
+      "Couldn't load pages right now. Close and reopen to try again."
+    );
   });
 
   it("creates a file from the launchpad project section and refreshes the grouped hierarchy", async () => {
@@ -938,11 +951,9 @@ describe("App auth and routing flows", () => {
 
     await screen.findByText("Untitled Draft");
     expect(screen.getByRole("button", { name: "Open" })).toBeDisabled();
-    expect(
-      screen.getByText(/does not have a default page/i)
-    ).toBeInTheDocument();
+    expect(screen.getByText("Add a page before opening this file.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Browse pages" }));
-    await screen.findByText("This file does not contain any pages yet.");
+    await screen.findByText("No pages yet. Add one to keep working here.");
   });
 
   it("shows launchpad form validation and submission errors", async () => {
@@ -973,12 +984,12 @@ describe("App auth and routing flows", () => {
     await user.click(screen.getByRole("button", { name: "New file" }));
     await screen.findByPlaceholderText("New file name");
     await user.click(screen.getByRole("button", { name: "Create file" }));
-    await screen.findByText("File name is required.");
+    await screen.findByText("Enter a file name.");
 
     await user.type(screen.getByPlaceholderText("New file name"), "Broken File");
     await user.clear(screen.getByPlaceholderText("Page 2"));
     await user.click(screen.getByRole("button", { name: "Create file" }));
-    await screen.findByText("Add at least two pages for the initial file.");
+    await screen.findByText("Add at least two pages to start this file.");
 
     await user.click(screen.getByRole("button", { name: "Add page field" }));
     expect(screen.getByPlaceholderText("Page 3")).toBeInTheDocument();
@@ -986,6 +997,62 @@ describe("App auth and routing flows", () => {
     await user.type(screen.getByPlaceholderText("Page 2"), "Page 2");
     await user.click(screen.getByRole("button", { name: "Create file" }));
     await screen.findByText("File creation failed");
+  });
+
+  it("shows fallback workspace form validation", async () => {
+    window.history.replaceState(null, "", "/app/workspaces/workspace-1");
+    const user = userEvent.setup();
+
+    vi.stubGlobal("fetch", createAuthenticatedFetchMock());
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "OpenMirage Dev" });
+    await user.click(screen.getByRole("button", { name: "Create project" }));
+    await screen.findByText("Enter a project name.");
+  });
+
+  it("shows fallback project form validation", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/app/workspaces/workspace-1/projects/project-1"
+    );
+    const user = userEvent.setup();
+
+    vi.stubGlobal("fetch", createAuthenticatedFetchMock());
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Sprint 10 Project" });
+    await user.click(screen.getByRole("button", { name: "Create file" }));
+    await screen.findByText("Enter a file name.");
+
+    await user.type(screen.getByPlaceholderText("New file name"), "Roadmap");
+    await user.clear(screen.getByPlaceholderText("Page 2"));
+    await user.click(screen.getByRole("button", { name: "Create file" }));
+    await screen.findByText("Add at least two pages to start this file.");
+  });
+
+  it("shows fallback file form validation", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/app/workspaces/workspace-1/projects/project-1/files/file-1"
+    );
+    const user = userEvent.setup();
+
+    vi.stubGlobal("fetch", createAuthenticatedFetchMock());
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Sprint 10 File" });
+    await user.click(screen.getByRole("button", { name: "Create page" }));
+    await screen.findByText("Enter a page name.");
+
+    await user.click(screen.getByRole("button", { name: "Rename file" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Enter a name.");
   });
 
   it("updates browser-local workspace memory from deep-link routes", async () => {
@@ -1014,7 +1081,7 @@ describe("App auth and routing flows", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "OpenMirage Dev" });
-    fireEvent.click(screen.getAllByRole("button", { name: "View route" })[0]!);
+    fireEvent.click(screen.getAllByRole("button", { name: "Open workspace" })[0]!);
     await waitFor(() =>
       expect(window.location.pathname).toBe("/app/workspaces/workspace-1")
     );
@@ -1022,7 +1089,7 @@ describe("App auth and routing flows", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back to launchpad" }));
     await screen.findByRole("heading", { name: "OpenMirage Dev" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Open project route" }));
+    fireEvent.click(screen.getByRole("button", { name: "View project" }));
     await waitFor(() =>
       expect(window.location.pathname).toBe(
         "/app/workspaces/workspace-1/projects/project-1"
@@ -1038,7 +1105,7 @@ describe("App auth and routing flows", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "OpenMirage Dev" });
-    fireEvent.click(screen.getByRole("button", { name: "Open workspace route" }));
+    fireEvent.click(screen.getByRole("button", { name: "View workspace" }));
 
     await waitFor(() =>
       expect(window.location.pathname).toBe("/app/workspaces/workspace-1")
@@ -1119,6 +1186,9 @@ describe("App auth and routing flows", () => {
     expect(screen.getByText("Sprint 10 File")).toBeInTheDocument();
     expect(screen.getByText("Page 2")).toBeInTheDocument();
     expect(screen.getByText("member-session")).toBeInTheDocument();
+    expect(
+      screen.getByText("Focus on the canvas while keeping workspace context close at hand.")
+    ).toBeInTheDocument();
   });
 
   it("renders shared page routes in read-only mode", async () => {
@@ -1188,7 +1258,7 @@ describe("App auth and routing flows", () => {
 
     render(<App />);
 
-    await screen.findByRole("heading", { name: "Shared inspect view" });
+    await screen.findByRole("heading", { name: "Read-only review" });
     await waitFor(() =>
       expect(screen.getByText("share-token")).toBeInTheDocument()
     );

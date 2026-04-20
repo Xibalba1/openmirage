@@ -701,10 +701,8 @@ export function App() {
       <main className="screen screen-centered">
         <section className="panel panel-compact">
           <p className="eyebrow">OpenMirage</p>
-          <h1>Loading your workspace</h1>
-          <p className="muted">
-            Checking your session and preparing metadata navigation.
-          </p>
+          <h1>Opening your workspace</h1>
+          <p className="muted">Checking your session and loading your work.</p>
         </section>
       </main>
     );
@@ -716,7 +714,7 @@ export function App() {
       <main className="screen screen-centered">
         <section className="panel panel-compact">
           <p className="eyebrow">OpenMirage</p>
-          <h1>Session bootstrap failed</h1>
+          <h1>We couldn't open OpenMirage</h1>
           <p className="muted">{sessionState.message}</p>
           <button
             className="button button-primary"
@@ -819,26 +817,25 @@ function AuthScreen(props: {
     <main className="screen auth-screen">
       <section className="auth-layout">
         <article className="auth-copy">
-          <p className="eyebrow">OpenMirage MVP foundation</p>
-          <h1>Sign in to your workspace</h1>
+          <p className="eyebrow">OpenMirage</p>
+          <h1>Sign in to OpenMirage</h1>
           <p className="lede">
-            Sprint 2 adds the first real product flow: navigate workspace,
-            project, file, and page metadata in the authenticated app.
+            A collaborative design workspace for shaping UI, reviewing changes,
+            and handing screens to engineers with clear context.
           </p>
           <div className="auth-notes">
             <div className="note-card">
-              <h2>What you get now</h2>
+              <h2>Built for focused teams</h2>
               <p>
-                Workspace-scoped metadata APIs, multi-page file creation, and
-                stable browser routes for reopening a file and page after
-                reload.
+                Keep work organized by workspace, project, file, and page
+                without adding extra navigation overhead.
               </p>
             </div>
             <div className="note-card">
-              <h2>What comes next</h2>
+              <h2>Simple sign-in</h2>
               <p>
-                Sprint 3 will attach real page-scoped collaboration and durable
-                page state to these routes.
+                Request a one-time sign-in link and return to the page you were
+                trying to open.
               </p>
             </div>
           </div>
@@ -846,18 +843,18 @@ function AuthScreen(props: {
 
         <article className="panel auth-panel">
           <p className="eyebrow">Authentication</p>
-          <h2>Magic link sign-in</h2>
+          <h2>Sign in with a magic link</h2>
           <p className="muted">
             Enter your email to request a one-time sign-in link.
           </p>
           {props.authSuccess ? (
             <div className="inline-alert inline-alert-success">
-              Sign-in succeeded. Finalizing your session.
+              Sign-in confirmed. Opening your workspace.
             </div>
           ) : null}
           {errorCode === "expired" ? (
             <div className="inline-alert inline-alert-error">
-              Your session is not active. Request a new magic link to continue.
+              Your session has expired. Request a new sign-in link to continue.
             </div>
           ) : null}
           <form
@@ -918,7 +915,7 @@ function AuthRequestResult(props: {
   if (props.requestState.status === "error") {
     return (
       <div className="request-result request-result-error">
-        <h3>Request failed</h3>
+        <h3>We couldn't send that link</h3>
         <p>{props.requestState.message}</p>
       </div>
     );
@@ -927,29 +924,29 @@ function AuthRequestResult(props: {
   if (props.requestState.status === "submitting") {
     return (
       <div className="request-result">
-        <h3>Requesting link</h3>
-        <p>OpenMirage is creating your one-time sign-in link.</p>
+        <h3>Sending sign-in link</h3>
+        <p>OpenMirage is preparing your one-time sign-in link.</p>
       </div>
     );
   }
 
   return (
     <div className="request-result request-result-success">
-      <h3>Check your magic link</h3>
+      <h3>Check your email</h3>
       <p>
         Delivery mode: <strong>{props.requestState.delivery}</strong>
       </p>
       <p>
         Expires at: {new Date(props.requestState.expiresAt).toLocaleString()}
       </p>
-      <p>After sign-in, OpenMirage will send you to {props.redirectTo}.</p>
+      <p>After sign-in, OpenMirage will return you to the page you requested.</p>
       {props.requestState.magicLinkUrl ? (
         <a
           className="button button-secondary"
           href={props.requestState.magicLinkUrl}
           rel="noreferrer"
         >
-          Open development magic link
+          Open sign-in link
         </a>
       ) : null}
     </div>
@@ -1346,17 +1343,17 @@ function AuthenticatedApp(props: {
           <p className="eyebrow">OpenMirage</p>
           <h1 className="app-title">
             {isEditorRoute
-              ? "Canvas editor"
+              ? "Canvas"
               : props.route.kind === "app-home"
                 ? "Workspace launchpad"
-                : "Workspace navigation"}
+                : "Workspace browser"}
           </h1>
           <p className="muted">
             {isEditorRoute
-              ? "Hydrate page content from collaboration state into a browser-owned scene graph and canvas renderer."
+              ? "Focus on the canvas while keeping workspace context close at hand."
               : props.route.kind === "app-home"
-                ? "Reopen the right workspace quickly without dropping directly into a canvas."
-                : "Use deep links and fallback routes to move through the workspace hierarchy."}
+                ? "Pick up work quickly in your active workspace."
+                : "Move through projects, files, and pages without losing your place."}
           </p>
         </div>
         <div className="header-actions">
@@ -1402,9 +1399,11 @@ function AuthenticatedApp(props: {
       ) : (
         <section className="app-shell">
           <aside className="panel sidebar-panel">
-            <p className="eyebrow">Routing</p>
-            <h2>Current route</h2>
-            <p className="route-chip">{getRoutePath(props.route)}</p>
+            <p className="eyebrow">Account</p>
+            <h2>Signed in</h2>
+            <p className="muted">
+              Keep your place in the launchpad or jump back to it anytime.
+            </p>
             <button
               className="button button-secondary button-full"
               onClick={() => props.onNavigate({ kind: "app-home" })}
@@ -1437,19 +1436,19 @@ function AuthenticatedApp(props: {
                 <h2>
                   {props.route.kind === "app-home"
                     ? "Loading launchpad"
-                    : "Fetching metadata"}
+                    : "Loading workspace"}
                 </h2>
                 <p className="muted">
                   {props.route.kind === "app-home"
-                    ? "Restoring your workspace dashboard from browser-local state."
-                    : "Reading the current workspace navigation state."}
+                    ? "Restoring your active workspace."
+                    : "Loading the latest workspace details."}
                 </p>
               </article>
             ) : null}
             {resourceState.status === "error" ? (
               <article className="panel">
-                <p className="eyebrow">Request failed</p>
-                <h2>Metadata load failed</h2>
+                <p className="eyebrow">Unavailable</p>
+                <h2>We couldn't load this view</h2>
                 <p className="muted">{resourceState.message}</p>
                 <button
                   className="button button-primary"
@@ -1545,11 +1544,10 @@ function SharedApp(props: {
       <main className="screen app-screen app-screen-editor">
         <header className="app-header">
           <div>
-            <p className="eyebrow">OpenMirage</p>
-            <h1 className="app-title">Shared inspect view</h1>
+            <p className="eyebrow">Shared file</p>
+            <h1 className="app-title">Read-only review</h1>
             <p className="muted">
-              Lightweight read-only handoff with inspect values and page
-              navigation.
+              Review pages and inspect details without changing the source file.
             </p>
           </div>
           <div className="header-actions">
@@ -1594,16 +1592,16 @@ function SharedApp(props: {
   return (
     <main className="screen screen-centered">
       <section className="panel panel-compact">
-        <p className="eyebrow">Shared handoff</p>
+        <p className="eyebrow">Shared file</p>
         <h1>
           {resourceState.status === "error"
-            ? "Shared file unavailable"
-            : "Loading shared file"}
+            ? "This shared file isn't available"
+            : "Opening shared file"}
         </h1>
         <p className="muted">
           {resourceState.status === "error"
             ? resourceState.message
-            : "Resolving the shared file and page metadata."}
+            : "Loading the file and page you were sent."}
         </p>
       </section>
     </main>
@@ -1704,7 +1702,9 @@ function NavigationContent(props: {
             />
             <p className="eyebrow">Projects</p>
             <h2>{data.workspace.name}</h2>
-            <p className="muted">Create a project or open an existing one.</p>
+            <p className="muted">
+              Open an existing project or start a new one in this workspace.
+            </p>
             <CreateProjectForm onCreate={props.onCreateProject} />
           </article>
           <article className="panel">
@@ -1775,7 +1775,7 @@ function NavigationContent(props: {
             <p className="eyebrow">Files</p>
             <h2>{data.project.name}</h2>
             <p className="muted">
-              Create a file with multiple pages, then open one of its pages.
+              Open a file or create a new one with multiple pages.
             </p>
             <CreateFileForm onCreate={props.onCreateFile} />
           </article>
@@ -1852,11 +1852,10 @@ function NavigationContent(props: {
               ]}
               onNavigate={props.onNavigate}
             />
-            <p className="eyebrow">File open</p>
+            <p className="eyebrow">Pages</p>
             <h2>{data.file.name}</h2>
             <p className="muted">
-              This is the Sprint 2 open flow. The page route is stable and can
-              be reloaded; the editor arrives in a later sprint.
+              Choose a page to continue in the canvas.
             </p>
             <div className="action-strip">
               <InlineRenameForm
@@ -1869,7 +1868,7 @@ function NavigationContent(props: {
           <article className="panel">
             <div className="page-open-summary">
               <div>
-                <p className="eyebrow">Selected page</p>
+                <p className="eyebrow">Current page</p>
                 <h3>
                   {data.pages.find((page) => page.id === data.selectedPageId)
                     ?.name ?? "No page selected"}
@@ -1950,7 +1949,7 @@ function CreateProjectForm(props: {
     const trimmed = name.trim();
 
     if (!trimmed) {
-      setError("Project name is required.");
+      setError("Enter a project name.");
       return;
     }
 
@@ -2018,12 +2017,12 @@ function CreateFileForm(props: {
       .filter(Boolean);
 
     if (!trimmedName) {
-      setError("File name is required.");
+      setError("Enter a file name.");
       return;
     }
 
     if (trimmedPages.length < 2) {
-      setError("Add at least two pages for the initial file.");
+      setError("Add at least two pages to start this file.");
       return;
     }
 
@@ -2100,7 +2099,7 @@ function CreatePageForm(props: { onCreate: (name: string) => Promise<void> }) {
     const trimmed = name.trim();
 
     if (!trimmed) {
-      setError("Page name is required.");
+      setError("Enter a page name.");
       return;
     }
 
@@ -2158,7 +2157,7 @@ function InlineRenameForm(props: {
     const trimmed = name.trim();
 
     if (!trimmed) {
-      setError("Name is required.");
+      setError("Enter a name.");
       return;
     }
 
