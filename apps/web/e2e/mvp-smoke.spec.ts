@@ -101,11 +101,14 @@ test("local MVP browser smoke flow passes", async ({
   await page.getByRole("link", { name: "Open development magic link" }).click();
 
   await expect(
-    page.getByRole("heading", { name: "Available workspaces" })
+    page.getByRole("heading", { name: "Workspace launchpad" })
   ).toBeVisible();
-  await page.getByRole("button", { name: /OpenMirage Dev/ }).click();
-
   await expect(page.getByRole("heading", { name: "OpenMirage Dev" })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.localStorage.getItem("openmirage.activeWorkspaceId"))
+    )
+    .not.toBeNull();
   await page.getByPlaceholder("New project name").fill(projectName);
   await page.getByRole("button", { name: "Create project" }).click();
 

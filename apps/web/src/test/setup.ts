@@ -5,6 +5,7 @@ import { afterEach, vi } from "vitest";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  window.localStorage.clear();
   window.sessionStorage.clear();
   window.history.replaceState(null, "", "/");
   delete window.__OPENMIRAGE_RUNTIME__;
