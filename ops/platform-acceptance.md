@@ -1,6 +1,6 @@
-# MVP Acceptance And Staging Closure
+# Epic 3 Acceptance And Staging Closure
 
-This runbook closes Epic 2 at the MVP boundary without expanding product scope. It stays within [`plan/mvp/1-thesis-and-mvp-boundary.md`](/Users/ik/repos/openmirage/plan/mvp/1-thesis-and-mvp-boundary.md), [`plan/mvp/2-domain-model.md`](/Users/ik/repos/openmirage/plan/mvp/2-domain-model.md), [`plan/mvp/3-architecture-overview.md`](/Users/ik/repos/openmirage/plan/mvp/3-architecture-overview.md), [`plan/mvp/4-technical-design-deployment-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-deployment-model.md), [`plan/mvp/4-technical-design-persistence-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-persistence-model.md), [`plan/mvp/4-technical-design-collaboration-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-collaboration-model.md), [`plan/mvp/4-technical-design-editor-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-editor-model.md), and [`plan/mvp/4-technical-design-rendering-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-rendering-model.md).
+This runbook closes Epic 3 at the MVP boundary without expanding product scope. It stays within [`plan/mvp/1-thesis-and-mvp-boundary.md`](/Users/ik/repos/openmirage/plan/mvp/1-thesis-and-mvp-boundary.md), [`plan/mvp/2-domain-model.md`](/Users/ik/repos/openmirage/plan/mvp/2-domain-model.md), [`plan/mvp/3-architecture-overview.md`](/Users/ik/repos/openmirage/plan/mvp/3-architecture-overview.md), [`plan/mvp/4-technical-design-deployment-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-deployment-model.md), [`plan/mvp/4-technical-design-persistence-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-persistence-model.md), [`plan/mvp/4-technical-design-collaboration-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-collaboration-model.md), [`plan/mvp/4-technical-design-editor-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-editor-model.md), and [`plan/mvp/4-technical-design-rendering-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-rendering-model.md).
 
 ## Guardrails
 
@@ -32,7 +32,7 @@ Use [`scripts/verify-platform-prereqs.mjs`](/Users/ik/repos/openmirage/scripts/v
 - `reuse as-is`: [`scripts/verify-platform-infra.mjs`](/Users/ik/repos/openmirage/scripts/verify-platform-infra.mjs)
 - `new canonical acceptance step`: [`scripts/verify-mvp-browser-smoke.mjs`](/Users/ik/repos/openmirage/scripts/verify-mvp-browser-smoke.mjs)
 - `reuse with doc updates`: [`README.md`](/Users/ik/repos/openmirage/README.md)
-- `gap closed in step 13`: this runbook and the external evidence contract in [`ops/platform-acceptance-evidence.example.json`](/Users/ik/repos/openmirage/ops/platform-acceptance-evidence.example.json)
+- `gap closed in this runbook`: this runbook and the external evidence contract in [`ops/platform-acceptance-evidence.example.json`](/Users/ik/repos/openmirage/ops/platform-acceptance-evidence.example.json)
 
 ## Canonical Commands
 
@@ -52,7 +52,7 @@ pnpm verify:platform:acceptance
 The acceptance command always:
 
 - prints the mandatory prerequisite rule
-- audits the Sprint 10 acceptance assets
+- audits the current acceptance assets
 - runs the prerequisite gate
 - runs the full local Caddy-routed infra smoke path
 - runs the full local MVP browser smoke path
@@ -179,7 +179,7 @@ If the evidence file is missing or incomplete, the acceptance command must repor
 
 ## Pass / Fail Rule
 
-Epic 2 closes only when every checklist item is `pass`.
+Epic 3 closes only when every checklist item is `pass`.
 
 - `fail`: a repo-managed verification step failed
 - `blocked`: local verification passed, but staging proof or backup/restore proof is still missing

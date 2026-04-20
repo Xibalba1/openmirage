@@ -1,6 +1,6 @@
 # OpenMirage
 
-OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository now implements the Epic 2 MVP slice across `web`, `api`, `collab`, and `worker`: authenticated workspace/project/file/page flows, browser-owned editor interactions, page-scoped realtime collaboration, comments, share links, asset upload and delivery, export jobs, structured observability, and single-VPS deployment/runbook support.
+OpenMirage is a browser-based, self-hostable collaborative UI design workspace for startup product teams. This repository now implements the MVP product slice across `web`, `api`, `collab`, and `worker`: authenticated workspace/project/file/page flows, browser-owned editor interactions, page-scoped realtime collaboration, comments, share links, asset upload and delivery, export jobs, structured observability, and single-VPS deployment/runbook support.
 
 ## Current Slice
 
@@ -37,7 +37,7 @@ Included now:
 - Caddy as the single local browser entrypoint with websocket proxying for collab
 - API and browser smoke verification commands for local MVP acceptance
 - CI image validation and a protected staging deploy workflow that reuses the same checked-in artifacts
-- a Sprint 10 acceptance runbook and external evidence contract for staging and backup/restore closure
+- an acceptance runbook and external evidence contract for staging and backup/restore closure
 
 Not included yet:
 
@@ -507,11 +507,11 @@ This command:
 - verifies Postgres and MinIO on their published operator ports
 - tears down the Compose stack when finished
 
-This remains the base local infra verifier used by the phase-closing acceptance command.
+This remains the base local infra verifier used by the acceptance command.
 
 ## Platform Acceptance
 
-The canonical phase-closing acceptance command is:
+The canonical acceptance command is:
 
 ```bash
 pnpm verify:platform:acceptance
@@ -520,14 +520,14 @@ pnpm verify:platform:acceptance
 This command:
 
 - prints the mandatory prerequisite policy before doing any work
-- audits the current Sprint 10 acceptance assets
+- audits the current acceptance assets
 - runs the prerequisite gate
 - runs the full local Caddy-routed infra smoke path with the diagnostics error route enabled
 - runs the full local MVP browser smoke path
 - checks for operator-managed staging and backup/restore evidence
 - emits one final `pass`, `fail`, or `blocked` decision
 
-For a full phase close, create `ops/platform-acceptance-evidence.json` from the example contract in [ops/platform-acceptance-evidence.example.json](/Users/ik/repos/openmirage/ops/platform-acceptance-evidence.example.json), then run:
+For a full acceptance close, create `ops/platform-acceptance-evidence.json` from the example contract in [ops/platform-acceptance-evidence.example.json](/Users/ik/repos/openmirage/ops/platform-acceptance-evidence.example.json), then run:
 
 ```bash
 OPENMIRAGE_ACCEPTANCE_EVIDENCE_FILE=ops/platform-acceptance-evidence.json \

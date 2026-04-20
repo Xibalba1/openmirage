@@ -461,8 +461,20 @@ describe("PageEditorScreen shell", () => {
         name: /Copy|Copied/
       })
     );
+    await waitFor(() =>
+      expect(
+        within(firstShareCard as HTMLElement).getByRole("button", {
+          name: "Copied"
+        })
+      ).toBeVisible()
+    );
     await user.click(
       within(firstShareCard as HTMLElement).getByRole("button", { name: "Revoke" })
+    );
+    await waitFor(() =>
+      expect(
+        within(firstShareCard as HTMLElement).getByText("Revoked link")
+      ).toBeVisible()
     );
 
     await user.click(
