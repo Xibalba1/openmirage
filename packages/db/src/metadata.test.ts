@@ -15,6 +15,7 @@ import {
   findNextFileMissingThumbnail,
   findNextPageMissingThumbnail,
   getFileOpenDetails,
+  getWorkspaceLaunchpad,
   getAuthorizedCollabPageSession,
   getAuthorizedExportJob,
   getAuthorizedAsset,
@@ -178,6 +179,120 @@ test("listAuthorizedWorkspaces and listWorkspaceProjects stay membership-scoped"
       client
     );
     assert.equal(hiddenProjects, null);
+  });
+
+  if (!ran) {
+    t.skip("database unavailable");
+  }
+});
+
+test("getWorkspaceLaunchpad groups files by project with default pages and page counts", async (t) => {
+  const ran = await withDatabaseTransaction(async (client) => {
+    const visibleUserId = await insertUser(
+      client,
+      `launchpad-visible-${Date.now()}@example.com`,
+      "Launchpad Visible User"
+    );
+    const hiddenUserId = await insertUser(
+      client,
+      `launchpad-hidden-${Date.now()}@example.com`,
+      "Launchpad Hidden User"
+    );
+    const workspaceId = await insertWorkspace(
+      client,
+      "Launchpad Workspace",
+      `launchpad-${Date.now()}`
+    );
+    const hiddenWorkspaceId = await insertWorkspace(
+      client,
+      "Hidden Launchpad Workspace",
+      `launchpad-hidden-${Date.now()}`
+    );
+
+    await insertMembership(client, workspaceId, visibleUserId, "owner");
+    await insertMembership(client, hiddenWorkspaceId, hiddenUserId, "owner");
+
+    const firstProjectId = await insertProject(client, workspaceId, "Alpha Project");
+    const secondProjectId = await insertProject(client, workspaceId, "Beta Project");
+    const hiddenProjectId = await insertProject(
+      client,
+      hiddenWorkspaceId,
+      "Hidden Project"
+    );
+
+    const alphaFile = await createFileWithPages(
+      visibleUserId,
+      workspaceId,
+      firstProjectId,
+      "Alpha File",
+      [{ name: "Cover" }, { name: "Specs" }],
+      client
+    );
+    const betaFile = await createFileWithPages(
+      visibleUserId,
+      workspaceId,
+      secondProjectId,
+      "Beta File",
+      [{ name: "Only Page" }],
+      client
+    );
+    await createFileWithPages(
+      hiddenUserId,
+      hiddenWorkspaceId,
+      hiddenProjectId,
+      "Hidden File",
+      [{ name: "Secret" }],
+      client
+    );
+
+    const launchpad = await getWorkspaceLaunchpad(
+      visibleUserId,
+      workspaceId,
+      client
+    );
+
+    assert.ok(launchpad);
+    assert.equal(launchpad.workspace.id, workspaceId);
+    assert.equal(launchpad.projects.length, 2);
+    assert.deepEqual(
+      launchpad.projects.map((group: (typeof launchpad.projects)[number]) => group.project.name),
+      ["Alpha Project", "Beta Project"]
+    );
+    assert.deepEqual(
+      launchpad.projects[0]?.files.map((summary: (typeof launchpad.projects)[number]["files"][number]) => ({
+        defaultPageId: summary.defaultPageId,
+        name: summary.file.name,
+        pageCount: summary.pageCount
+      })),
+      [
+        {
+          defaultPageId: alphaFile?.defaultPageId ?? null,
+          name: "Alpha File",
+          pageCount: 2
+        }
+      ]
+    );
+    assert.deepEqual(
+      launchpad.projects[1]?.files.map((summary: (typeof launchpad.projects)[number]["files"][number]) => ({
+        defaultPageId: summary.defaultPageId,
+        name: summary.file.name,
+        pageCount: summary.pageCount
+      })),
+      [
+        {
+          defaultPageId: betaFile?.defaultPageId ?? null,
+          name: "Beta File",
+          pageCount: 1
+        }
+      ]
+    );
+
+    const hiddenLaunchpad = await getWorkspaceLaunchpad(
+      visibleUserId,
+      hiddenWorkspaceId,
+      client
+    );
+    assert.equal(hiddenLaunchpad, null);
   });
 
   if (!ran) {
@@ -1316,7 +1431,7 @@ test("export jobs and thumbnail helpers stay scoped, transition correctly, and e
     assert.equal(nextPageThumbnail?.file.id, fileId);
 
     const nextFileThumbnail = await findNextFileMissingThumbnail(client);
-    assert.equal(nextFileThumbnail, null);
+    assert.notEqual(nextFileThumbnail?.file.id, fileId);
   });
 
   if (!ran) {

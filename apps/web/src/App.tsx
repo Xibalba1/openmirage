@@ -7,6 +7,7 @@ import {
   type EditorAccessDto,
   type FileDto,
   type FileOpenResponse,
+  type LaunchpadProjectGroup,
   type PageDto,
   type ProjectDto,
   type RenameFileInput,
@@ -14,6 +15,7 @@ import {
   type RenameProjectInput,
   type RuntimeUrls,
   type SharedFileOpenResponse,
+  type WorkspaceLaunchpadResponse,
   type WorkspaceDto,
   type WorkspaceDetailDto
 } from "@openmirage/types";
@@ -26,6 +28,7 @@ import {
 } from "./active-workspace";
 import { PageEditorScreen } from "./editor/PageEditorScreen";
 import { buildJsonRequestHeaders } from "./http";
+import { LaunchpadView } from "./launchpad";
 import { readRuntimeWebEnv } from "./runtime-env";
 
 const pendingRedirectStorageKey = "openmirage.pendingRedirect";
@@ -102,7 +105,7 @@ type ResourceData =
   | {
       activeWorkspace: WorkspaceDetailDto | null;
       kind: "launchpad";
-      projects: ProjectDto[];
+      projectGroups: LaunchpadProjectGroup[];
       workspaces: WorkspaceDetailDto[];
     }
   | { kind: "projects"; projects: ProjectDto[]; workspace: WorkspaceDetailDto }
@@ -398,23 +401,23 @@ async function fetchLaunchpadResource(
     return {
       activeWorkspace: null,
       kind: "launchpad",
-      projects: [],
+      projectGroups: [],
       workspaces: workspacesPayload.workspaces
     };
   }
 
-  const projectPayload = await fetchJson<ProjectListResponse>(
+  const launchpadPayload = await fetchJson<WorkspaceLaunchpadResponse>(
     apiBaseUrl,
-    `/v1/workspaces/${encodeURIComponent(activeWorkspace.id)}/projects`,
+    `/v1/workspaces/${encodeURIComponent(activeWorkspace.id)}/launchpad`,
     {
       method: "GET"
     }
   );
 
   return {
-    activeWorkspace: projectPayload.workspace,
+    activeWorkspace: launchpadPayload.workspace,
     kind: "launchpad",
-    projects: projectPayload.projects,
+    projectGroups: launchpadPayload.projects,
     workspaces: workspacesPayload.workspaces
   };
 }
@@ -1099,6 +1102,12 @@ function AuthenticatedApp(props: {
     );
     writeStoredActiveWorkspaceId(workspaceId);
     setAppHomeWorkspaceId(workspaceId);
+
+    if (props.route.kind === "app-home") {
+      await reloadResource();
+      return;
+    }
+
     props.onNavigate({
       kind: "project",
       projectId: project.id,
@@ -1169,6 +1178,32 @@ function AuthenticatedApp(props: {
     });
   }
 
+  async function handleCreateLaunchpadFile(
+    projectId: string,
+    name: string,
+    pageNames: string[]
+  ) {
+    const workspaceId = (
+      resourceState.status === "loaded" &&
+      resourceState.value.kind === "launchpad"
+        ? resourceState.value.activeWorkspace?.id
+        : null
+    ) as string;
+
+    await fetchJson<FileOpenResponse>(
+      props.apiBaseUrl,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/files`,
+      {
+        body: JSON.stringify({
+          initialPages: pageNames.map((pageName) => ({ name: pageName })),
+          name
+        } satisfies CreateFileInput),
+        method: "POST"
+      }
+    );
+    await reloadResource();
+  }
+
   async function handleRenameFile(fileId: string, name: string) {
     const route = props.route;
 
@@ -1214,6 +1249,56 @@ function AuthenticatedApp(props: {
       projectId: route.projectId,
       workspaceId: route.workspaceId
     });
+  }
+
+  async function handleCreateLaunchpadPage(
+    projectId: string,
+    fileId: string,
+    name: string
+  ): Promise<FileOpenResponse> {
+    const workspaceId = (
+      resourceState.status === "loaded" &&
+      resourceState.value.kind === "launchpad"
+        ? resourceState.value.activeWorkspace?.id
+        : null
+    ) as string;
+    await fetchJson<PageDto>(
+      props.apiBaseUrl,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/pages`,
+      {
+        body: JSON.stringify({ name } satisfies CreatePageInput),
+        method: "POST"
+      }
+    );
+    const payload = await fetchJson<FileOpenResponse>(
+      props.apiBaseUrl,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}`,
+      {
+        method: "GET"
+      }
+    );
+    await reloadResource();
+    return payload;
+  }
+
+  async function loadLaunchpadFileDetails(
+    projectId: string,
+    fileId: string
+  ): Promise<FileOpenResponse> {
+    const workspaceId = (
+      resourceState.status === "loaded" &&
+      resourceState.value.kind === "launchpad"
+        ? resourceState.value.activeWorkspace?.id
+        : null
+    ) as string;
+
+    return fetchJson<FileOpenResponse>(
+      props.apiBaseUrl,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}`,
+      {
+        method: "GET"
+      }
+    );
   }
 
   async function handleRenamePage(pageId: string, name: string) {
@@ -1379,8 +1464,11 @@ function AuthenticatedApp(props: {
               <NavigationContent
                 data={resourceState.value}
                 onCreateFile={handleCreateFile}
+                onCreateLaunchpadFile={handleCreateLaunchpadFile}
+                onCreateLaunchpadPage={handleCreateLaunchpadPage}
                 onCreatePage={handleCreatePage}
                 onCreateProject={handleCreateProject}
+                onLoadLaunchpadFileDetails={loadLaunchpadFileDetails}
                 onNavigate={props.onNavigate}
                 onRenameFile={handleRenameFile}
                 onRenamePage={handleRenamePage}
@@ -1525,8 +1613,22 @@ function SharedApp(props: {
 function NavigationContent(props: {
   data: ResourceData;
   onCreateFile: (name: string, pageNames: string[]) => Promise<void>;
+  onCreateLaunchpadFile: (
+    projectId: string,
+    name: string,
+    pageNames: string[]
+  ) => Promise<void>;
+  onCreateLaunchpadPage: (
+    projectId: string,
+    fileId: string,
+    name: string
+  ) => Promise<FileOpenResponse>;
   onCreatePage: (name: string) => Promise<void>;
   onCreateProject: (name: string) => Promise<void>;
+  onLoadLaunchpadFileDetails: (
+    projectId: string,
+    fileId: string
+  ) => Promise<FileOpenResponse>;
   onNavigate: (route: AppRoute) => void;
   onRenameFile: (fileId: string, name: string) => Promise<void>;
   onRenamePage: (pageId: string, name: string) => Promise<void>;
@@ -1536,131 +1638,46 @@ function NavigationContent(props: {
   switch (props.data.kind) {
     case "launchpad": {
       const data = props.data;
-      const activeWorkspace = data.activeWorkspace;
 
       return (
-        <>
-          <article className="panel">
-            <p className="eyebrow">Launchpad</p>
-            <h2>{activeWorkspace ? activeWorkspace.name : "No workspaces yet"}</h2>
-            <p className="muted">
-              {activeWorkspace
-                ? "This workspace is restored from browser-local state and stays separate from direct file/page routes."
-                : "You do not have access to any workspaces yet."}
-            </p>
-            {activeWorkspace ? (
-              <div className="action-strip">
-                <CreateProjectForm onCreate={props.onCreateProject} />
-                <button
-                  className="button button-secondary"
-                  onClick={() =>
-                    props.onNavigate({
-                      kind: "workspace",
-                      workspaceId: activeWorkspace.id
-                    })
-                  }
-                  type="button"
-                >
-                  Open workspace route
-                </button>
-              </div>
-            ) : null}
-          </article>
-          <article className="panel">
-            <p className="eyebrow">Workspaces</p>
-            <h2>Switch active workspace</h2>
-            <ul className="resource-list">
-              {data.workspaces.map((workspace) => (
-                <li key={workspace.id}>
-                  <div className="resource-row">
-                    <button
-                      className={`resource-button ${
-                        workspace.id === activeWorkspace?.id
-                          ? "resource-button-active"
-                          : ""
-                      }`}
-                      onClick={() => props.onSelectLaunchpadWorkspace(workspace.id)}
-                      type="button"
-                    >
-                      <strong>{workspace.name}</strong>
-                      <span>
-                        {workspace.slug} · {workspace.role}
-                        {workspace.id === activeWorkspace?.id
-                          ? " · Active"
-                          : ""}
-                      </span>
-                    </button>
-                    <button
-                      className="button button-secondary"
-                      onClick={() =>
-                        props.onNavigate({
-                          kind: "workspace",
-                          workspaceId: workspace.id
-                        })
-                      }
-                      type="button"
-                    >
-                      View route
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </article>
-          {activeWorkspace ? (
-            <article className="panel">
-              <p className="eyebrow">Projects</p>
-              <h2>Recent project list</h2>
-              <p className="muted">
-                Open a project or use its deep-link route. File grouping stays in
-                the next sprint.
-              </p>
-              {data.projects.length > 0 ? (
-                <ul className="resource-list">
-                  {data.projects.map((project) => (
-                    <li key={project.id}>
-                      <div className="resource-row">
-                        <button
-                          className="resource-button"
-                          onClick={() =>
-                            props.onNavigate({
-                              kind: "project",
-                              projectId: project.id,
-                              workspaceId: activeWorkspace.id
-                            })
-                          }
-                          type="button"
-                        >
-                          <strong>{project.name}</strong>
-                          <span>
-                            Updated {new Date(project.updatedAt).toLocaleString()}
-                          </span>
-                        </button>
-                        <button
-                          className="button button-secondary"
-                          onClick={() =>
-                            props.onNavigate({
-                              kind: "workspace",
-                              workspaceId: activeWorkspace.id
-                            })
-                          }
-                          type="button"
-                        >
-                          Workspace route
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="muted">
-                  No projects in this workspace yet. Create one from the
-                  launchpad to keep `/app` as the primary entry point.
-                </p>
-              )}
-            </article>
-          ) : null}
-        </>
+        <LaunchpadView
+          data={{
+            activeWorkspace: data.activeWorkspace,
+            projectGroups: data.projectGroups,
+            workspaces: data.workspaces
+          }}
+          onCreateFile={props.onCreateLaunchpadFile}
+          onCreatePage={props.onCreateLaunchpadPage}
+          onCreateProject={props.onCreateProject}
+          onLoadFileDetails={props.onLoadLaunchpadFileDetails}
+          onOpenPage={(projectId, fileId, pageId) => {
+            const activeWorkspaceId = data.activeWorkspace?.id as string;
+
+            props.onNavigate({
+              fileId,
+              kind: "page",
+              pageId,
+              projectId,
+              workspaceId: activeWorkspaceId
+            });
+          }}
+          onOpenProjectRoute={(projectId) => {
+            const activeWorkspaceId = data.activeWorkspace?.id as string;
+
+            props.onNavigate({
+              kind: "project",
+              projectId,
+              workspaceId: activeWorkspaceId
+            });
+          }}
+          onOpenWorkspaceRoute={(workspaceId) =>
+            props.onNavigate({
+              kind: "workspace",
+              workspaceId
+            })
+          }
+          onSelectWorkspace={props.onSelectLaunchpadWorkspace}
+        />
       );
     }
     case "projects": {

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -55,6 +56,7 @@ const projectsByWorkspace = {
   "workspace-1": [
     {
       createdAt: "2026-04-18T00:00:00.000Z",
+      description: null,
       id: "project-1",
       name: "Sprint 10 Project",
       updatedAt: "2026-04-18T00:00:00.000Z",
@@ -64,13 +66,102 @@ const projectsByWorkspace = {
   "workspace-2": [
     {
       createdAt: "2026-04-18T00:00:00.000Z",
+      description: null,
       id: "project-2",
       name: "Client Project",
       updatedAt: "2026-04-18T01:00:00.000Z",
       workspaceId: "workspace-2"
     }
   ]
-} satisfies Record<string, Array<Record<string, string>>>;
+} satisfies Record<string, Array<Record<string, string | null>>>;
+
+const fileOpenByFileId = {
+  "file-1": {
+    access: {
+      canComment: true,
+      canManageShareLinks: true,
+      canMutate: true,
+      mode: "writable",
+      role: "owner",
+      source: "membership"
+    },
+    defaultPageId: "page-1",
+    file: {
+      createdAt: "2026-04-18T00:00:00.000Z",
+      createdByUserId: "user-1",
+      deletedAt: null,
+      description: null,
+      id: "file-1",
+      name: "Sprint 10 File",
+      projectId: "project-1",
+      updatedAt: "2026-04-18T00:00:00.000Z",
+      workspaceId: "workspace-1"
+    },
+    pages: [
+      {
+        background: "#ffffff",
+        createdAt: "2026-04-18T00:00:00.000Z",
+        fileId: "file-1",
+        height: 1024,
+        id: "page-1",
+        name: "Page 1",
+        orderIndex: 0,
+        updatedAt: "2026-04-18T00:00:00.000Z",
+        width: 1440
+      },
+      {
+        background: "#ffffff",
+        createdAt: "2026-04-18T00:00:00.000Z",
+        fileId: "file-1",
+        height: 1024,
+        id: "page-2",
+        name: "Page 2",
+        orderIndex: 1,
+        updatedAt: "2026-04-18T00:00:00.000Z",
+        width: 1440
+      }
+    ],
+    project: projectsByWorkspace["workspace-1"][0],
+    workspace: workspaceOne
+  },
+  "file-2": {
+    access: {
+      canComment: true,
+      canManageShareLinks: true,
+      canMutate: true,
+      mode: "writable",
+      role: "editor",
+      source: "membership"
+    },
+    defaultPageId: "page-3",
+    file: {
+      createdAt: "2026-04-18T00:00:00.000Z",
+      createdByUserId: "user-1",
+      deletedAt: null,
+      description: null,
+      id: "file-2",
+      name: "Client File",
+      projectId: "project-2",
+      updatedAt: "2026-04-18T00:00:00.000Z",
+      workspaceId: "workspace-2"
+    },
+    pages: [
+      {
+        background: "#ffffff",
+        createdAt: "2026-04-18T00:00:00.000Z",
+        fileId: "file-2",
+        height: 1024,
+        id: "page-3",
+        name: "Client Page",
+        orderIndex: 0,
+        updatedAt: "2026-04-18T00:00:00.000Z",
+        width: 1440
+      }
+    ],
+    project: projectsByWorkspace["workspace-2"][0],
+    workspace: workspaceTwo
+  }
+};
 
 function createAuthenticatedSession(
   workspaceIds: string[] = ["workspace-1", "workspace-2"]
@@ -101,6 +192,35 @@ function createWorkspaceProjectsResponse(workspaceId: "workspace-1" | "workspace
   });
 }
 
+function createWorkspaceLaunchpadPayload(
+  workspaceId: "workspace-1" | "workspace-2"
+) {
+  const fileOpen =
+    workspaceId === "workspace-1" ? fileOpenByFileId["file-1"] : fileOpenByFileId["file-2"];
+
+  return {
+    projects: [
+      {
+        files: [
+          {
+            defaultPageId: fileOpen.defaultPageId,
+            file: fileOpen.file,
+            pageCount: fileOpen.pages.length
+          }
+        ],
+        project: fileOpen.project
+      }
+    ],
+    workspace: workspaceId === "workspace-1" ? workspaceOne : workspaceTwo
+  };
+}
+
+function createWorkspaceLaunchpadResponse(
+  workspaceId: "workspace-1" | "workspace-2"
+) {
+  return createJsonResponse(createWorkspaceLaunchpadPayload(workspaceId));
+}
+
 function createAuthenticatedFetchMock() {
   return vi.fn<typeof fetch>().mockImplementation((input) => {
     const url = String(input);
@@ -117,20 +237,30 @@ function createAuthenticatedFetchMock() {
       );
     }
 
+    if (url.includes("/v1/workspaces/workspace-1/launchpad")) {
+      return Promise.resolve(createWorkspaceLaunchpadResponse("workspace-1"));
+    }
+
+    if (url.includes("/v1/workspaces/workspace-2/launchpad")) {
+      return Promise.resolve(createWorkspaceLaunchpadResponse("workspace-2"));
+    }
+
+    if (
+      url.includes("/v1/workspaces/workspace-1/projects/project-1/files/file-1")
+    ) {
+      return Promise.resolve(createJsonResponse(fileOpenByFileId["file-1"]));
+    }
+
+    if (
+      url.includes("/v1/workspaces/workspace-2/projects/project-2/files/file-2")
+    ) {
+      return Promise.resolve(createJsonResponse(fileOpenByFileId["file-2"]));
+    }
+
     if (url.includes("/v1/workspaces/workspace-2/projects/project-2/files")) {
       return Promise.resolve(
         createJsonResponse({
-          files: [
-            {
-              createdAt: "2026-04-18T00:00:00.000Z",
-              createdByUserId: "user-1",
-              id: "file-2",
-              name: "Client File",
-              projectId: "project-2",
-              updatedAt: "2026-04-18T00:00:00.000Z",
-              workspaceId: "workspace-2"
-            }
-          ],
+          files: [fileOpenByFileId["file-2"].file],
           project: projectsByWorkspace["workspace-2"][0],
           workspace: workspaceTwo
         })
@@ -140,17 +270,7 @@ function createAuthenticatedFetchMock() {
     if (url.includes("/v1/workspaces/workspace-1/projects/project-1/files")) {
       return Promise.resolve(
         createJsonResponse({
-          files: [
-            {
-              createdAt: "2026-04-18T00:00:00.000Z",
-              createdByUserId: "user-1",
-              id: "file-1",
-              name: "Sprint 10 File",
-              projectId: "project-1",
-              updatedAt: "2026-04-18T00:00:00.000Z",
-              workspaceId: "workspace-1"
-            }
-          ],
+          files: [fileOpenByFileId["file-1"].file],
           project: projectsByWorkspace["workspace-1"][0],
           workspace: workspaceOne
         })
@@ -232,7 +352,7 @@ describe("App auth and routing flows", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("loads the authenticated /app launchpad without auto-opening a canvas", async () => {
+  it("loads the authenticated /app launchpad with grouped files and file actions", async () => {
     window.history.replaceState(null, "", "/app");
 
     vi.stubGlobal("fetch", createAuthenticatedFetchMock());
@@ -242,6 +362,11 @@ describe("App auth and routing flows", () => {
     await screen.findByRole("heading", { name: "Workspace launchpad" });
     await screen.findByRole("heading", { name: "OpenMirage Dev" });
     expect(screen.getByText("Sprint 10 Project")).toBeInTheDocument();
+    expect(screen.getByText("Sprint 10 File")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Browse pages" })
+    ).toBeInTheDocument();
     expect(screen.queryByTestId("mock-page-editor")).not.toBeInTheDocument();
     expect(window.localStorage.getItem("openmirage.activeWorkspaceId")).toBe(
       "workspace-1"
@@ -259,6 +384,7 @@ describe("App auth and routing flows", () => {
     await screen.findByRole("heading", { name: "Workspace launchpad" });
     await screen.findByRole("heading", { name: "Client Workspace" });
     expect(screen.getByText("Client Project")).toBeInTheDocument();
+    expect(screen.getByText("Client File")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /OpenMirage Dev/i }));
 
@@ -270,11 +396,11 @@ describe("App auth and routing flows", () => {
       "workspace-1"
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/v1/workspaces/workspace-2/projects"),
+      expect.stringContaining("/v1/workspaces/workspace-2/launchpad"),
       expect.any(Object)
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/v1/workspaces/workspace-1/projects"),
+      expect.stringContaining("/v1/workspaces/workspace-1/launchpad"),
       expect.any(Object)
     );
   });
@@ -329,18 +455,18 @@ describe("App auth and routing flows", () => {
           );
         }
 
-        if (url.includes("/v1/workspaces/workspace-1/projects")) {
+        if (url.includes("/v1/workspaces/workspace-1/launchpad")) {
           projectLoadAttempts += 1;
 
           return Promise.resolve(
             projectLoadAttempts === 1
               ? createJsonResponse({ error: "Workspace load failed" }, 500)
-              : createWorkspaceProjectsResponse("workspace-1")
+              : createWorkspaceLaunchpadResponse("workspace-1")
           );
         }
 
-        if (url.includes("/v1/workspaces/workspace-2/projects")) {
-          return Promise.resolve(createWorkspaceProjectsResponse("workspace-2"));
+        if (url.includes("/v1/workspaces/workspace-2/launchpad")) {
+          return Promise.resolve(createWorkspaceLaunchpadResponse("workspace-2"));
         }
 
         return Promise.resolve(new Response(null, { status: 404 }));
@@ -354,8 +480,10 @@ describe("App auth and routing flows", () => {
     await screen.findByText("Sprint 10 Project");
   });
 
-  it("creates a project from the launchpad and keeps the active workspace in browser-local state", async () => {
+  it("creates a project from the launchpad and keeps the user on /app", async () => {
     window.history.replaceState(null, "", "/app");
+    let createdProject = false;
+    const user = userEvent.setup();
 
     vi.stubGlobal(
       "fetch",
@@ -378,39 +506,44 @@ describe("App auth and routing flows", () => {
           url.includes("/v1/workspaces/workspace-1/projects") &&
           init?.method === "POST"
         ) {
+          createdProject = true;
           return Promise.resolve(
             createJsonResponse({
               createdAt: "2026-04-18T00:00:00.000Z",
+              description: null,
               id: "project-3",
               name: "Launchpad Project",
+              deletedAt: null,
               updatedAt: "2026-04-18T00:00:00.000Z",
               workspaceId: "workspace-1"
             })
           );
         }
 
-        if (url.includes("/v1/workspaces/workspace-1/projects/project-3/files")) {
+        if (url.includes("/v1/workspaces/workspace-1/launchpad")) {
           return Promise.resolve(
             createJsonResponse({
-              files: [],
-              project: {
-                createdAt: "2026-04-18T00:00:00.000Z",
-                id: "project-3",
-                name: "Launchpad Project",
-                updatedAt: "2026-04-18T00:00:00.000Z",
-                workspaceId: "workspace-1"
-              },
+              projects: [
+                ...(createdProject
+                  ? [
+                      {
+                        files: [],
+                        project: {
+                          createdAt: "2026-04-18T00:00:00.000Z",
+                          description: null,
+                          id: "project-3",
+                          name: "Launchpad Project",
+                          updatedAt: "2026-04-18T00:00:00.000Z",
+                          workspaceId: "workspace-1"
+                        }
+                      }
+                    ]
+                  : []),
+                ...createWorkspaceLaunchpadPayload("workspace-1").projects
+              ],
               workspace: workspaceOne
             })
           );
-        }
-
-        if (url.includes("/v1/workspaces/workspace-1/projects")) {
-          return Promise.resolve(createWorkspaceProjectsResponse("workspace-1"));
-        }
-
-        if (url.includes("/v1/workspaces/workspace-2/projects")) {
-          return Promise.resolve(createWorkspaceProjectsResponse("workspace-2"));
         }
 
         return Promise.resolve(new Response(null, { status: 404 }));
@@ -420,20 +553,438 @@ describe("App auth and routing flows", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "OpenMirage Dev" });
+    await user.click(screen.getByRole("button", { name: "New project" }));
     const projectNameInput = await screen.findByPlaceholderText("New project name");
-    fireEvent.change(projectNameInput, {
-      target: { value: "Launchpad Project" }
-    });
+    await user.type(projectNameInput, "Launchpad Project");
     expect((projectNameInput as HTMLInputElement).value).toBe("Launchpad Project");
-    fireEvent.submit(projectNameInput.closest("form") as HTMLFormElement);
+    await user.click(screen.getByRole("button", { name: "Create project" }));
 
-    await screen.findByRole("heading", { name: "Launchpad Project" });
+    await screen.findByText("Launchpad Project");
     expect(window.localStorage.getItem("openmirage.activeWorkspaceId")).toBe(
       "workspace-1"
     );
+    expect(window.location.pathname).toBe("/app");
+  });
+
+  it("opens a file directly to its default page from the launchpad", async () => {
+    window.history.replaceState(null, "", "/app");
+
+    vi.stubGlobal("fetch", createAuthenticatedFetchMock());
+
+    render(<App />);
+
+    await screen.findByText("Sprint 10 File");
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+
+    await screen.findByTestId("mock-page-editor");
     expect(window.location.pathname).toBe(
-      "/app/workspaces/workspace-1/projects/project-3"
+      "/app/workspaces/workspace-1/projects/project-1/files/file-1/pages/page-1"
     );
+    expect(screen.getByText("Page 1")).toBeInTheDocument();
+  });
+
+  it("browses pages inline from the launchpad and navigates directly to a selected page", async () => {
+    window.history.replaceState(null, "", "/app");
+    const user = userEvent.setup();
+
+    vi.stubGlobal("fetch", createAuthenticatedFetchMock());
+
+    render(<App />);
+
+    await screen.findByText("Sprint 10 File");
+    await user.click(screen.getByRole("button", { name: "Browse pages" }));
+
+    await screen.findAllByRole("button", { name: "Open page" });
+    expect(screen.getByText("Page 1")).toBeInTheDocument();
+    expect(screen.getByText("Page 2")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Page 2/i }));
+
+    await screen.findByTestId("mock-page-editor");
+    expect(window.location.pathname).toBe(
+      "/app/workspaces/workspace-1/projects/project-1/files/file-1/pages/page-2"
+    );
+    expect(screen.getByText("Page 2")).toBeInTheDocument();
+  });
+
+  it("reuses cached file details when pages are hidden and reopened", async () => {
+    window.history.replaceState(null, "", "/app");
+    const fetchMock = createAuthenticatedFetchMock();
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await screen.findByText("Sprint 10 File");
+    await user.click(screen.getByRole("button", { name: "Browse pages" }));
+    await screen.findByText("Page 2");
+    await user.click(screen.getByRole("button", { name: "Hide pages" }));
+    await user.click(screen.getByRole("button", { name: "Browse pages" }));
+    await screen.findByText("Page 2");
+
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes(
+          "/v1/workspaces/workspace-1/projects/project-1/files/file-1"
+        )
+      ).length
+    ).toBe(1);
+  });
+
+  it("opens a page from the inline secondary page action", async () => {
+    window.history.replaceState(null, "", "/app");
+    const user = userEvent.setup();
+
+    vi.stubGlobal("fetch", createAuthenticatedFetchMock());
+
+    render(<App />);
+
+    await screen.findByText("Sprint 10 File");
+    await user.click(screen.getByRole("button", { name: "Browse pages" }));
+    await screen.findAllByRole("button", { name: "Open page" });
+    await user.click(screen.getAllByRole("button", { name: "Open page" })[1]!);
+
+    await screen.findByTestId("mock-page-editor");
+    expect(window.location.pathname).toBe(
+      "/app/workspaces/workspace-1/projects/project-1/files/file-1/pages/page-2"
+    );
+  });
+
+  it("shows an inline browse error when page loading fails", async () => {
+    window.history.replaceState(null, "", "/app");
+    const user = userEvent.setup();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation((input, init) => {
+        const url = String(input);
+
+        if (
+          url.includes("/v1/workspaces/workspace-1/projects/project-1/files/file-1")
+        ) {
+          return Promise.resolve(
+            init?.method === "GET"
+              ? createJsonResponse({ error: "Page load failed" }, 500)
+              : new Response(null, { status: 404 })
+          );
+        }
+
+        return createAuthenticatedFetchMock()(input, init);
+      })
+    );
+
+    render(<App />);
+
+    await screen.findByText("Sprint 10 File");
+    await user.click(screen.getByRole("button", { name: "Browse pages" }));
+
+    await screen.findByText("Page load failed");
+  });
+
+  it("creates a file from the launchpad project section and refreshes the grouped hierarchy", async () => {
+    window.history.replaceState(null, "", "/app");
+    let createdFile = false;
+    const user = userEvent.setup();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation((input, init) => {
+        const url = String(input);
+
+        if (url.includes("/auth/me")) {
+          return Promise.resolve(createJsonResponse(createAuthenticatedSession()));
+        }
+
+        if (url.endsWith("/v1/workspaces")) {
+          return Promise.resolve(
+            createJsonResponse({
+              workspaces: [workspaceOne, workspaceTwo]
+            })
+          );
+        }
+
+        if (
+          url.includes("/v1/workspaces/workspace-1/projects/project-1/files") &&
+          init?.method === "POST"
+        ) {
+          createdFile = true;
+          return Promise.resolve(
+            createJsonResponse({
+              ...fileOpenByFileId["file-1"],
+              defaultPageId: "page-4",
+              file: {
+                ...fileOpenByFileId["file-1"].file,
+                id: "file-4",
+                name: "New Launchpad File"
+              },
+              pages: [
+                {
+                  ...fileOpenByFileId["file-1"].pages[0],
+                  id: "page-4",
+                  name: "Kickoff"
+                },
+                {
+                  ...fileOpenByFileId["file-1"].pages[1],
+                  id: "page-5",
+                  name: "Specs"
+                }
+              ]
+            })
+          );
+        }
+
+        if (url.includes("/v1/workspaces/workspace-1/launchpad")) {
+          const payload = createWorkspaceLaunchpadPayload("workspace-1");
+
+          if (createdFile) {
+            payload.projects[0]?.files.unshift({
+              defaultPageId: "page-4",
+              file: {
+                ...fileOpenByFileId["file-1"].file,
+                id: "file-4",
+                name: "New Launchpad File"
+              },
+              pageCount: 2
+            });
+          }
+
+          return Promise.resolve(createJsonResponse(payload));
+        }
+
+        return createAuthenticatedFetchMock()(input, init);
+      })
+    );
+
+    render(<App />);
+
+    await screen.findByText("Sprint 10 Project");
+    await user.click(screen.getByRole("button", { name: "New file" }));
+    await user.type(
+      screen.getByPlaceholderText("New file name"),
+      "New Launchpad File"
+    );
+    await user.clear(screen.getByPlaceholderText("Page 1"));
+    await user.type(screen.getByPlaceholderText("Page 1"), "Kickoff");
+    await user.clear(screen.getByPlaceholderText("Page 2"));
+    await user.type(screen.getByPlaceholderText("Page 2"), "Specs");
+    await user.click(screen.getByRole("button", { name: "Create file" }));
+
+    await screen.findByText("New Launchpad File");
+    expect(window.location.pathname).toBe("/app");
+  });
+
+  it("creates a page from an expanded file and refreshes inline page browsing", async () => {
+    window.history.replaceState(null, "", "/app");
+    let createdPage = false;
+    const user = userEvent.setup();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation((input, init) => {
+        const url = String(input);
+
+        if (url.includes("/auth/me")) {
+          return Promise.resolve(createJsonResponse(createAuthenticatedSession()));
+        }
+
+        if (url.endsWith("/v1/workspaces")) {
+          return Promise.resolve(
+            createJsonResponse({
+              workspaces: [workspaceOne, workspaceTwo]
+            })
+          );
+        }
+
+        if (
+          url.includes("/v1/workspaces/workspace-1/projects/project-1/files/file-1/pages") &&
+          init?.method === "POST"
+        ) {
+          createdPage = true;
+          return Promise.resolve(
+            createJsonResponse({
+              ...fileOpenByFileId["file-1"].pages[0],
+              id: "page-9",
+              name: "New Launchpad Page",
+              orderIndex: 2
+            })
+          );
+        }
+
+        if (
+          url.includes("/v1/workspaces/workspace-1/projects/project-1/files/file-1")
+        ) {
+          if (!createdPage) {
+            return Promise.resolve(createJsonResponse(fileOpenByFileId["file-1"]));
+          }
+
+          return Promise.resolve(
+            createJsonResponse({
+              ...fileOpenByFileId["file-1"],
+              pages: [
+                ...fileOpenByFileId["file-1"].pages,
+                {
+                  ...fileOpenByFileId["file-1"].pages[0],
+                  id: "page-9",
+                  name: "New Launchpad Page",
+                  orderIndex: 2
+                }
+              ]
+            })
+          );
+        }
+
+        if (url.includes("/v1/workspaces/workspace-1/launchpad")) {
+          const payload = createWorkspaceLaunchpadPayload("workspace-1");
+
+          if (createdPage) {
+            payload.projects[0]!.files[0] = {
+              ...payload.projects[0]!.files[0]!,
+              pageCount: 3
+            };
+          }
+
+          return Promise.resolve(createJsonResponse(payload));
+        }
+
+        return createAuthenticatedFetchMock()(input, init);
+      })
+    );
+
+    render(<App />);
+
+    await screen.findByText("Sprint 10 File");
+    await user.click(screen.getByRole("button", { name: "Browse pages" }));
+    await screen.findByText("Page 2");
+
+    await user.click(screen.getByRole("button", { name: "New page" }));
+    await user.type(
+      screen.getByPlaceholderText("New page name"),
+      "New Launchpad Page"
+    );
+    await user.click(screen.getByRole("button", { name: "Create page" }));
+
+    await screen.findByText("New Launchpad Page");
+    expect(screen.getByText(/3 pages/)).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/app");
+  });
+
+  it("disables direct open when the launchpad file summary has no default page", async () => {
+    window.history.replaceState(null, "", "/app");
+    const user = userEvent.setup();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation((input) => {
+        const url = String(input);
+
+        if (url.includes("/auth/me")) {
+          return Promise.resolve(createJsonResponse(createAuthenticatedSession()));
+        }
+
+        if (url.endsWith("/v1/workspaces")) {
+          return Promise.resolve(
+            createJsonResponse({
+              workspaces: [workspaceOne]
+            })
+          );
+        }
+
+        if (url.includes("/v1/workspaces/workspace-1/launchpad")) {
+          return Promise.resolve(
+            createJsonResponse({
+              projects: [
+                {
+                  files: [
+                    {
+                      defaultPageId: null,
+                      file: {
+                        ...fileOpenByFileId["file-1"].file,
+                        id: "file-empty",
+                        name: "Untitled Draft"
+                      },
+                      pageCount: 0
+                    }
+                  ],
+                  project: projectsByWorkspace["workspace-1"][0]
+                }
+              ],
+              workspace: workspaceOne
+            })
+          );
+        }
+
+        if (
+          url.includes("/v1/workspaces/workspace-1/projects/project-1/files/file-empty")
+        ) {
+          return Promise.resolve(
+            createJsonResponse({
+              ...fileOpenByFileId["file-1"],
+              defaultPageId: null,
+              file: {
+                ...fileOpenByFileId["file-1"].file,
+                id: "file-empty",
+                name: "Untitled Draft"
+              },
+              pages: []
+            })
+          );
+        }
+
+        return Promise.resolve(new Response(null, { status: 404 }));
+      })
+    );
+
+    render(<App />);
+
+    await screen.findByText("Untitled Draft");
+    expect(screen.getByRole("button", { name: "Open" })).toBeDisabled();
+    expect(
+      screen.getByText(/does not have a default page/i)
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Browse pages" }));
+    await screen.findByText("This file does not contain any pages yet.");
+  });
+
+  it("shows launchpad form validation and submission errors", async () => {
+    window.history.replaceState(null, "", "/app");
+    const user = userEvent.setup();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation((input, init) => {
+        const url = String(input);
+
+        if (
+          url.includes("/v1/workspaces/workspace-1/projects/project-1/files") &&
+          init?.method === "POST"
+        ) {
+          return Promise.resolve(
+            createJsonResponse({ error: "File creation failed" }, 500)
+          );
+        }
+
+        return createAuthenticatedFetchMock()(input, init);
+      })
+    );
+
+    render(<App />);
+
+    await screen.findByText("Sprint 10 Project");
+    await user.click(screen.getByRole("button", { name: "New file" }));
+    await user.click(screen.getByRole("button", { name: "Create file" }));
+    await screen.findByText("File name is required.");
+
+    await user.type(screen.getByPlaceholderText("New file name"), "Broken File");
+    await user.clear(screen.getByPlaceholderText("Page 2"));
+    await user.click(screen.getByRole("button", { name: "Create file" }));
+    await screen.findByText("Add at least two pages for the initial file.");
+
+    await user.click(screen.getByRole("button", { name: "Add page field" }));
+    expect(screen.getByPlaceholderText("Page 3")).toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText("Page 2"), "Page 2");
+    await user.click(screen.getByRole("button", { name: "Create file" }));
+    await screen.findByText("File creation failed");
   });
 
   it("updates browser-local workspace memory from deep-link routes", async () => {
@@ -470,7 +1021,7 @@ describe("App auth and routing flows", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back to launchpad" }));
     await screen.findByRole("heading", { name: "OpenMirage Dev" });
 
-    fireEvent.click(screen.getByRole("button", { name: /Sprint 10 Project/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Open project route" }));
     await waitFor(() =>
       expect(window.location.pathname).toBe(
         "/app/workspaces/workspace-1/projects/project-1"
@@ -478,7 +1029,7 @@ describe("App auth and routing flows", () => {
     );
   });
 
-  it("uses the launchpad project row to open the fallback workspace route", async () => {
+  it("uses the launchpad header action to open the fallback workspace route", async () => {
     window.history.replaceState(null, "", "/app");
 
     vi.stubGlobal("fetch", createAuthenticatedFetchMock());
@@ -486,7 +1037,7 @@ describe("App auth and routing flows", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "OpenMirage Dev" });
-    fireEvent.click(screen.getByRole("button", { name: "Workspace route" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open workspace route" }));
 
     await waitFor(() =>
       expect(window.location.pathname).toBe("/app/workspaces/workspace-1")

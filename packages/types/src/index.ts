@@ -162,6 +162,22 @@ export interface FileListResponse {
   workspace: WorkspaceDetailDto;
 }
 
+export interface LaunchpadFileSummary {
+  defaultPageId: string | null;
+  file: FileDto;
+  pageCount: number;
+}
+
+export interface LaunchpadProjectGroup {
+  files: LaunchpadFileSummary[];
+  project: ProjectDto;
+}
+
+export interface WorkspaceLaunchpadResponse {
+  projects: LaunchpadProjectGroup[];
+  workspace: WorkspaceDetailDto;
+}
+
 export interface PageListResponse {
   file: FileDto;
   pages: PageDto[];

@@ -405,6 +405,11 @@ h3 {
   gap: 12px;
 }
 
+.resource-row-inline {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
 .resource-button {
   width: 100%;
   display: grid;
@@ -555,6 +560,74 @@ h3 {
 
 .compact-resource-list {
   gap: 10px;
+}
+
+.launchpad-heading,
+.launchpad-project-header,
+.launchpad-pages-header,
+.launchpad-file-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+}
+
+.launchpad-project-list,
+.launchpad-file-list {
+  display: grid;
+  gap: 18px;
+}
+
+.launchpad-project-section {
+  display: grid;
+  gap: 16px;
+  padding-top: 8px;
+}
+
+.launchpad-project-section + .launchpad-project-section {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 24px;
+}
+
+.launchpad-file-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.launchpad-file-meta {
+  display: grid;
+  gap: 6px;
+}
+
+.launchpad-file-meta span {
+  color: rgba(247, 241, 231, 0.72);
+}
+
+.launchpad-pages-panel {
+  display: grid;
+  gap: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.launchpad-pages-header h4 {
+  margin: 0 0 8px;
+  font-size: 0.98rem;
+}
+
+.contextual-form {
+  display: grid;
+  gap: 12px;
+  min-width: min(520px, 100%);
+}
+
+.contextual-form-stack {
+  min-width: min(760px, 100%);
 }
 
 .compact-inline-form {
@@ -863,6 +936,20 @@ h3 {
   .page-open-summary {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .resource-row-inline,
+  .launchpad-heading,
+  .launchpad-project-header,
+  .launchpad-pages-header,
+  .launchpad-file-row {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .contextual-form,
+  .contextual-form-stack {
+    min-width: 0;
   }
 
   .editor-layout {

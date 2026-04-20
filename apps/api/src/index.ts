@@ -20,6 +20,7 @@ import {
   createMetadataStoreContract,
   deriveDisplayName,
   getFileOpenDetails,
+  getWorkspaceLaunchpad,
   getAuthContextForSessionToken,
   getApplicationVersionInfo,
   issueMagicLinkForEmail,
@@ -62,7 +63,8 @@ import {
   type RenamePageInput,
   type RenameProjectInput,
   type ServiceCheck,
-  type StorageConfig
+  type StorageConfig,
+  type WorkspaceLaunchpadResponse
 } from "@openmirage/types";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { pathToFileURL } from "node:url";
@@ -976,6 +978,43 @@ export async function createApiApp(
       )
     };
   });
+  app.get<{ Params: WorkspaceParams }>(
+    "/v1/workspaces/:workspaceId/launchpad",
+    async (request, reply) => {
+      const authContext = await requireAuthContext(
+        request,
+        reply,
+        databasePool,
+        sessionContract
+      );
+
+      if (!authContext) {
+        return reply;
+      }
+
+      if (
+        !requireWorkspaceMembership(
+          authContext,
+          request.params.workspaceId,
+          reply
+        )
+      ) {
+        return reply;
+      }
+
+      const result = await getWorkspaceLaunchpad(
+        authContext.user.id,
+        request.params.workspaceId,
+        databasePool
+      );
+
+      if (!result) {
+        return createNotFoundReply(reply);
+      }
+
+      return result satisfies WorkspaceLaunchpadResponse;
+    }
+  );
   app.get<{ Params: WorkspaceParams }>(
     "/v1/workspaces/:workspaceId/projects",
     async (request, reply) => {

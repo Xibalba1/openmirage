@@ -111,6 +111,43 @@ test("api route integration covers auth, redirect sanitization, metadata CRUD, a
     });
     assert.equal(createPageResponse.statusCode, 201);
 
+    const launchpad = await app.inject({
+      headers: {
+        cookie
+      },
+      method: "GET",
+      url: `/v1/workspaces/${workspaceId}/launchpad`
+    });
+    assert.equal(launchpad.statusCode, 200);
+    const launchpadBody = readJson<{
+      projects: Array<{
+        files: Array<{
+          defaultPageId: string | null;
+          file: { id: string; name: string };
+          pageCount: number;
+        }>;
+        project: { id: string; name: string };
+      }>;
+      workspace: { id: string };
+    }>(launchpad.body);
+    assert.equal(launchpadBody.workspace.id, workspaceId);
+    assert.equal(launchpadBody.projects.length, 1);
+    assert.equal(launchpadBody.projects[0]?.project.id, createdProject.id);
+    assert.equal(launchpadBody.projects[0]?.files.length, 1);
+    assert.equal(
+      launchpadBody.projects[0]?.files[0]?.defaultPageId,
+      firstPageId
+    );
+    assert.equal(
+      launchpadBody.projects[0]?.files[0]?.file.id,
+      createdFile.file.id
+    );
+    assert.equal(
+      launchpadBody.projects[0]?.files[0]?.file.name,
+      "Routes File"
+    );
+    assert.equal(launchpadBody.projects[0]?.files[0]?.pageCount, 3);
+
     const fileOpen = await app.inject({
       headers: {
         cookie
