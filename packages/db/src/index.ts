@@ -57,6 +57,7 @@ export {
   getSharedAsset,
   getSharedCollabPageSession,
   getSharedFileOpenDetails,
+  getWorkspaceLaunchpad,
   hardDeleteAssetRecord,
   listDeletedThumbnailAssetsForCleanup,
   listRenderableAssetsForFile,

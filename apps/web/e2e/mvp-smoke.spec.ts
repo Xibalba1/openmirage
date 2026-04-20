@@ -82,6 +82,7 @@ test("local MVP browser smoke flow passes", async ({
   const fileName = createUniqueName("Sprint 10 File");
   const pageOneName = "Flow Page 1";
   const pageTwoName = "Flow Page 2";
+  const pageThreeName = "Flow Page 3";
   const commentBody = "Sprint 10 browser smoke comment";
 
   await context.grantPermissions(["clipboard-read", "clipboard-write"], {
@@ -109,14 +110,27 @@ test("local MVP browser smoke flow passes", async ({
       page.evaluate(() => window.localStorage.getItem("openmirage.activeWorkspaceId"))
     )
     .not.toBeNull();
+  await page.getByRole("button", { name: "New project" }).click();
   await page.getByPlaceholder("New project name").fill(projectName);
   await page.getByRole("button", { name: "Create project" }).click();
 
-  await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
-  await page.getByPlaceholder("New file name").fill(fileName);
-  await page.locator(".page-grid input").nth(0).fill(pageOneName);
-  await page.locator(".page-grid input").nth(1).fill(pageTwoName);
-  await page.getByRole("button", { name: "Create file" }).click();
+  await expect(page.getByText(projectName)).toBeVisible();
+  await expect(page).toHaveURL(/\/app$/);
+  const projectSection = page.locator(".launchpad-project-section", {
+    has: page.getByRole("heading", { name: projectName })
+  });
+  await projectSection.getByRole("button", { name: "New file" }).click();
+  await projectSection.getByPlaceholder("New file name").fill(fileName);
+  await projectSection.locator(".page-grid input").nth(0).fill(pageOneName);
+  await projectSection.locator(".page-grid input").nth(1).fill(pageTwoName);
+  await projectSection.getByRole("button", { name: "Create file" }).click();
+
+  await expect(page.getByText(fileName)).toBeVisible();
+  await expect(page).toHaveURL(/\/app$/);
+  const fileCard = page.locator(".launchpad-file-card", {
+    has: page.getByText(fileName)
+  });
+  await fileCard.getByRole("button", { name: "Open" }).click();
 
   await expect(page).toHaveURL(/\/pages\//);
   await expect(page.getByText("Collab: connected")).toBeVisible({
@@ -133,7 +147,31 @@ test("local MVP browser smoke flow passes", async ({
     page.locator(".layer-list .layer-label", { hasText: "Rectangle" }).first()
   ).toBeVisible();
 
-  await page.getByRole("button", { name: /Flow Page 2/ }).click();
+  const launchpadUrl = new URL("/app", page.url()).toString();
+  await page.goto(launchpadUrl);
+  await expect(
+    page.getByRole("heading", { name: "Workspace launchpad" })
+  ).toBeVisible();
+  await fileCard.getByRole("button", { name: "Browse pages" }).click();
+  await expect(fileCard.getByText(pageTwoName)).toBeVisible();
+  await fileCard.getByRole("button", { name: "New page" }).click();
+  await fileCard.getByPlaceholder("New page name").fill(pageThreeName);
+  await fileCard.getByRole("button", { name: "Create page" }).click();
+  await expect(fileCard).toContainText("3 pages");
+  const browsePagesButton = fileCard.getByRole("button", {
+    name: /Browse pages|Hide pages/
+  });
+
+  if ((await browsePagesButton.textContent())?.includes("Browse pages")) {
+    await browsePagesButton.click();
+  }
+
+  await expect(fileCard.getByText(pageThreeName)).toBeVisible();
+  await fileCard
+    .locator(".resource-row-inline", { hasText: pageTwoName })
+    .getByRole("button", { name: "Open page" })
+    .click();
+
   await expect(page).toHaveURL(/\/pages\//);
   const pageTwoRoute = parsePageRoute(page.url());
   await page.getByRole("button", { name: "Frame" }).click();

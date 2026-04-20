@@ -12,6 +12,9 @@ import {
   createEditorAccess,
   type FileDto,
   type FileOpenResponse,
+  type LaunchpadProjectGroup,
+  type LaunchpadFileSummary,
+  type WorkspaceLaunchpadResponse,
   type ListCommentsInput,
   type ListAssetsInput,
   type PageDto,
@@ -59,6 +62,11 @@ interface FileRow {
   thumbnail_asset_id: string | null;
   updated_at: Date;
   workspace_id: string;
+}
+
+interface LaunchpadFileSummaryRow extends FileRow {
+  default_page_id: string | null;
+  page_count: number | string;
 }
 
 interface PageRow {
@@ -227,6 +235,16 @@ function mapFile(row: FileRow): FileDto {
     projectId: row.project_id,
     updatedAt: row.updated_at.toISOString(),
     workspaceId: row.workspace_id
+  };
+}
+
+function mapLaunchpadFileSummary(
+  row: LaunchpadFileSummaryRow
+): LaunchpadFileSummary {
+  return {
+    defaultPageId: row.default_page_id,
+    file: mapFile(row),
+    pageCount: Number(row.page_count)
   };
 }
 
@@ -661,6 +679,82 @@ export async function listWorkspaceProjects(
   return {
     projects: result.rows.map(mapProject),
     workspace: mapWorkspace(workspace)
+  };
+}
+
+export async function getWorkspaceLaunchpad(
+  userId: string,
+  workspaceId: string,
+  poolOrClient?: Pool | PoolClient
+): Promise<WorkspaceLaunchpadResponse | null> {
+  const workspaceProjects = await listWorkspaceProjects(
+    userId,
+    workspaceId,
+    poolOrClient
+  );
+
+  if (!workspaceProjects) {
+    return null;
+  }
+
+  const filesByProjectId = new Map<string, LaunchpadFileSummary[]>();
+  const db = requireClient(poolOrClient);
+  const fileResult = await db.query<LaunchpadFileSummaryRow>(
+    `
+      select
+        files.created_at,
+        files.created_by_user_id,
+        files.deleted_at,
+        files.description,
+        files.id,
+        files.name,
+        files.project_id,
+        files.thumbnail_asset_id,
+        files.updated_at,
+        files.workspace_id,
+        default_page.id as default_page_id,
+        coalesce(page_count.page_count, 0) as page_count
+      from files
+      inner join memberships
+        on memberships.workspace_id = files.workspace_id
+      inner join projects
+        on projects.id = files.project_id
+      left join lateral (
+        select pages.id
+        from pages
+        where pages.file_id = files.id
+        order by pages.order_index asc, pages.created_at asc, pages.id asc
+        limit 1
+      ) as default_page
+        on true
+      left join lateral (
+        select count(*)::int as page_count
+        from pages
+        where pages.file_id = files.id
+      ) as page_count
+        on true
+      where memberships.user_id = $1
+        and files.workspace_id = $2
+        and files.deleted_at is null
+        and projects.deleted_at is null
+      order by files.updated_at desc, files.name asc, files.id asc
+    `,
+    [userId, workspaceId]
+  );
+
+  for (const row of fileResult.rows) {
+    const fileSummary = mapLaunchpadFileSummary(row);
+    const fileSummaries = filesByProjectId.get(fileSummary.file.projectId) ?? [];
+    fileSummaries.push(fileSummary);
+    filesByProjectId.set(fileSummary.file.projectId, fileSummaries);
+  }
+
+  return {
+    projects: workspaceProjects.projects.map<LaunchpadProjectGroup>((project) => ({
+      files: filesByProjectId.get(project.id) ?? [],
+      project
+    })),
+    workspace: workspaceProjects.workspace
   };
 }
 
@@ -2001,7 +2095,9 @@ export async function listComments(
         )
       order by
         comments.resolved_at is null desc,
-        comments.created_at asc
+        comments.page_id is null desc,
+        comments.created_at asc,
+        comments.id asc
     `,
     [input.fileId, includeResolved, input.pageId ?? null]
   );
