@@ -98,6 +98,9 @@ interface AppPageRoute {
   workspaceId: string;
 }
 
+type LeftRailMode = "comments" | "layers" | "pages";
+type RightPanelMode = "export" | "inspect" | "share";
+
 type CommentLoadState =
   | { comments: CommentDto[]; status: "loaded" }
   | { comments: CommentDto[]; status: "loading" }
@@ -687,6 +690,12 @@ export function PageEditorScreen(props: {
   const canComment = props.access.canComment && canViewComments;
   const canManageShareLinks = props.access.canManageShareLinks && !props.shareToken;
   const canCreateExports = canCreateExportJobs(props.shareToken);
+  const [leftRailOpen, setLeftRailOpen] = useState(false);
+  const [leftRailMode, setLeftRailMode] = useState<LeftRailMode>("pages");
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [rightPanelMode, setRightPanelMode] =
+    useState<RightPanelMode>("inspect");
+  const [showFileRename, setShowFileRename] = useState(false);
 
   if (!imageLoadManagerRef.current) {
     imageLoadManagerRef.current = createImageLoadManager({
@@ -1226,6 +1235,21 @@ export function PageEditorScreen(props: {
       status: "idle"
     });
   }, [canCreateExports]);
+
+  useEffect(() => {
+    setLeftRailOpen(false);
+    setRightPanelOpen(false);
+    setShowFileRename(false);
+    setLeftRailMode("pages");
+    setRightPanelMode("inspect");
+  }, [props.file.id, props.page.id, props.shareToken]);
+
+  useEffect(() => {
+    if (!canViewComments && leftRailMode === "comments") {
+      setLeftRailMode("pages");
+      setLeftRailOpen(false);
+    }
+  }, [canViewComments, leftRailMode]);
 
   useEffect(() => {
     if (!shouldPollExportJob(exportJobState)) {
@@ -2221,6 +2245,26 @@ export function PageEditorScreen(props: {
     updateSelection([], null);
   }
 
+  function toggleLeftRail(mode: LeftRailMode) {
+    setLeftRailOpen((current) => {
+      const sameMode = leftRailMode === mode;
+      setLeftRailMode(mode);
+      return sameMode ? !current : true;
+    });
+  }
+
+  function toggleRightPanel(mode: RightPanelMode) {
+    setRightPanelOpen((current) => {
+      const sameMode = rightPanelMode === mode;
+      setRightPanelMode(mode);
+      return sameMode ? !current : true;
+    });
+  }
+
+  const leftRailModes: LeftRailMode[] = canViewComments
+    ? ["pages", "layers", "comments"]
+    : ["pages", "layers"];
+
   const textEditStyle = useMemo(() => {
     if (!textEditRecord || !activeTextNode || !canvasShellRef.current) {
       return null;
@@ -2245,241 +2289,93 @@ export function PageEditorScreen(props: {
 
   return (
     <section className="editor-layout">
-      <aside className="panel editor-sidebar">
-        <p className="eyebrow">Editor</p>
-        <h2>{props.file.name}</h2>
-        <p className="muted">
-          {canMutate
-            ? "Command-backed editing with collab persistence and inspect-ready values."
-            : "Read-only handoff mode with page navigation, selection, and inspect values."}
-        </p>
-        {canMutate ? (
-          <div className="action-strip">
-            <InlineRenameForm
-              label="Rename file"
-              onSubmit={(name) => props.onRenameFile(props.file.id, name)}
-            />
-            <CreatePageForm onCreate={props.onCreatePage} />
+      <section className="panel editor-stage-panel">
+        <div className="editor-shell-header">
+          <div className="editor-shell-heading">
+            <p className="eyebrow">Editor</p>
+            <h2>{props.file.name}</h2>
+            <p className="muted">
+              {canMutate
+                ? "Command-backed editing with collab persistence and inspect-ready values."
+                : "Read-only handoff mode with page navigation, selection, and inspect values."}
+            </p>
           </div>
-        ) : (
-          <div className="inline-alert">This file is open in read-only mode.</div>
-        )}
-        <div className="editor-sidebar-section">
-          <p className="eyebrow">Pages</p>
-          <ul className="resource-list compact-resource-list">
-            {props.pages.map((page) => (
-              <li key={page.id}>
-                <div className="resource-row">
-                  <button
-                    className={`resource-button ${
-                      page.id === props.page.id ? "resource-button-active" : ""
-                    }`}
-                    onClick={() => props.onNavigatePage(page.id)}
-                    type="button"
-                  >
-                    <strong>{page.name}</strong>
-                    <span>Order {page.orderIndex + 1}</span>
-                  </button>
-                  {canMutate ? (
-                    <InlineRenameForm
-                      label="Rename page"
-                      onSubmit={(name) => props.onRenamePage(page.id, name)}
-                    />
-                  ) : null}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div className="editor-sidebar-section">
-          <p className="eyebrow">Layers</p>
-          <div className="layer-list">
-            {layerItems.map(({ depth, node }) => {
-              const order = getLayerOrder(
-                sessionSnapshot.document,
-                node.parentId
-              );
-              const index = order.indexOf(node.id);
-
-              return (
-                <div
-                  className={`layer-row ${selectedIds.includes(node.id) ? "layer-row-active" : ""}`}
-                  key={node.id}
-                  style={{ paddingLeft: `${12 + depth * 16}px` }}
-                >
-                  <button
-                    className="layer-label"
-                    onClick={() => updateSelection([node.id], node.id)}
-                    type="button"
-                  >
-                    <strong>{node.name}</strong>
-                    <span>{node.type}</span>
-                  </button>
-                  {canMutate ? (
-                    <div className="layer-actions">
-                      <button
-                        className="button button-secondary button-icon"
-                        onClick={() => reorderNode(node.id, -1)}
-                        type="button"
-                      >
-                        ↑
-                      </button>
-                      <button
-                        className="button button-secondary button-icon"
-                        onClick={() => reorderNode(node.id, 1)}
-                        type="button"
-                      >
-                        ↓
-                      </button>
-                      <button
-                        className="button button-secondary button-icon"
-                        onClick={() =>
-                          toggleNodeFlag(node.id, {
-                            locked: !node.locked
-                          } as Partial<SceneGraphNode>)
-                        }
-                        type="button"
-                      >
-                        {node.locked ? "Unlock" : "Lock"}
-                      </button>
-                      <button
-                        className="button button-secondary button-icon"
-                        onClick={() =>
-                          toggleNodeFlag(node.id, {
-                            visible: !node.visible
-                          } as Partial<SceneGraphNode>)
-                        }
-                        type="button"
-                      >
-                        {node.visible ? "Hide" : "Show"}
-                      </button>
-                      <button
-                        className="button button-secondary button-icon"
-                        onClick={() => deleteNodes([node.id])}
-                        type="button"
-                      >
-                        Del
-                      </button>
-                    </div>
-                  ) : null}
-                  <span className="layer-order">#{index + 1}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-        {canViewComments ? (
-          <div className="editor-sidebar-section">
-            <p className="eyebrow">Comments</p>
-            {canComment ? (
-              <form className="comment-form" onSubmit={handleSubmitComment}>
-                <label className="comment-field">
-                  <span>Anchor</span>
-                  <select
-                    className="input"
-                    onChange={(event) =>
-                      setCommentTargetType(
-                        event.target.value as "file" | "node" | "page"
-                      )
-                    }
-                    value={commentTargetType}
-                  >
-                    {availableCommentTargetTypes.map((targetType) => (
-                      <option key={targetType} value={targetType}>
-                        {targetType === "node"
-                          ? "Selected node"
-                          : targetType === "page"
-                            ? "Current page"
-                            : "Whole file"}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="comment-field">
-                  <span>Comment</span>
-                  <textarea
-                    className="input comment-textarea"
-                    onChange={(event) => setCommentDraft(event.target.value)}
-                    placeholder="Leave lightweight review context"
-                    rows={4}
-                    value={commentDraft}
-                  />
-                </label>
-                <button
-                  className="button button-secondary"
-                  disabled={isSubmittingComment || commentDraft.trim().length === 0}
-                  type="submit"
-                >
-                  {isSubmittingComment ? "Saving..." : "Add comment"}
-                </button>
-              </form>
-            ) : (
-              <p className="muted">Comments are visible but read-only in this mode.</p>
-            )}
-            {commentLoadState.status === "error" ? (
-              <p className="muted">{commentLoadState.message}</p>
+          <div className="editor-shell-header-actions">
+            {canMutate ? (
+              <button
+                className="button button-secondary"
+                onClick={() => setShowFileRename((current) => !current)}
+                type="button"
+              >
+                {showFileRename ? "Hide file rename" : "Rename file"}
+              </button>
             ) : null}
-            <div className="comment-list">
-              {sortedComments.map((comment) => {
-                const nodeMissing =
-                  comment.nodeId !== null &&
-                  !sessionSnapshot.document.nodes[comment.nodeId];
-                const targetLabel =
-                  comment.nodeId !== null
-                    ? nodeMissing
-                      ? "Node (missing)"
-                      : "Node"
-                    : comment.pageId !== null
-                      ? "Page"
-                      : "File";
-
-                return (
-                  <article
-                    className={`comment-card ${comment.resolvedAt ? "comment-card-resolved" : ""}`}
-                    key={comment.id}
-                  >
-                    <div className="comment-card-header">
-                      <div>
-                        <strong>{comment.author.displayName}</strong>
-                        <p className="muted">
-                          {new Date(comment.createdAt).toLocaleString()}
-                        </p>
-                      </div>
-                      <span className="presence-chip comment-target-chip">
-                        {targetLabel}
-                      </span>
-                    </div>
-                    <p>{comment.body}</p>
-                    <div className="comment-card-footer">
-                      <span>
-                        {comment.resolvedAt
-                          ? `Resolved ${new Date(comment.resolvedAt).toLocaleString()}`
-                          : "Open"}
-                      </span>
-                      {!comment.resolvedAt && canComment ? (
-                        <button
-                          className="button button-secondary button-icon"
-                          disabled={resolvingCommentId === comment.id}
-                          onClick={() => void handleResolveComment(comment.id)}
-                          type="button"
-                        >
-                          {resolvingCommentId === comment.id ? "..." : "Resolve"}
-                        </button>
-                      ) : null}
-                    </div>
-                  </article>
-                );
-              })}
-              {sortedComments.length === 0 &&
-              commentLoadState.status !== "loading" ? (
-                <p className="muted">No comments on this file/page yet.</p>
-              ) : null}
+            <div className="editor-mode-strip" aria-label="Left rail modes">
+              {leftRailModes.map((mode) => (
+                <button
+                  aria-controls="editor-left-rail"
+                  aria-expanded={leftRailOpen && leftRailMode === mode}
+                  aria-pressed={leftRailOpen && leftRailMode === mode}
+                  className={`button button-secondary ${
+                    leftRailOpen && leftRailMode === mode
+                      ? "editor-mode-button-active"
+                      : ""
+                  }`}
+                  data-testid={`left-rail-toggle-${mode}`}
+                  key={mode}
+                  onClick={() => toggleLeftRail(mode)}
+                  type="button"
+                >
+                  {mode === "pages"
+                    ? "Pages"
+                    : mode === "layers"
+                      ? "Layers"
+                      : "Comments"}
+                </button>
+              ))}
+            </div>
+            <div className="editor-mode-strip" aria-label="Right panel modes">
+              {(["inspect", "share", "export"] as RightPanelMode[]).map((mode) => (
+                <button
+                  aria-controls="editor-right-panel"
+                  aria-expanded={rightPanelOpen && rightPanelMode === mode}
+                  aria-pressed={rightPanelOpen && rightPanelMode === mode}
+                  className={`button button-secondary ${
+                    rightPanelOpen && rightPanelMode === mode
+                      ? "editor-mode-button-active"
+                      : ""
+                  }`}
+                  data-testid={`right-panel-toggle-${mode}`}
+                  key={mode}
+                  onClick={() => toggleRightPanel(mode)}
+                  type="button"
+                >
+                  {mode === "inspect"
+                    ? "Inspect"
+                    : mode === "share"
+                      ? "Share"
+                      : "Export"}
+                </button>
+              ))}
             </div>
           </div>
-        ) : null}
-      </aside>
+        </div>
 
-      <section className="panel editor-panel">
+        {showFileRename && canMutate ? (
+          <div className="editor-contextual-strip" data-testid="file-rename-panel">
+            <InlineRenameForm
+              label="Rename file"
+              onSubmit={async (name) => {
+                await props.onRenameFile(props.file.id, name);
+                setShowFileRename(false);
+              }}
+            />
+          </div>
+        ) : null}
+        {!canMutate ? (
+          <div className="inline-alert">This file is open in read-only mode.</div>
+        ) : null}
+
         <div className="editor-toolbar">
           <div>
             <p className="eyebrow">Page</p>
@@ -2678,6 +2574,558 @@ export function PageEditorScreen(props: {
             onWheel={handleWheel}
             ref={canvasRef}
           />
+
+          {leftRailOpen ? (
+            <aside
+              aria-label="Editor left rail"
+              className="editor-overlay-panel editor-overlay-panel-left"
+              data-testid="left-rail"
+              id="editor-left-rail"
+            >
+              <div className="editor-overlay-panel-header">
+                <div className="editor-overlay-panel-tabs">
+                  {leftRailModes.map((mode) => (
+                    <button
+                      aria-pressed={leftRailMode === mode}
+                      className={`button button-secondary button-icon ${
+                        leftRailMode === mode
+                          ? "editor-mode-button-active"
+                          : ""
+                      }`}
+                      key={mode}
+                      onClick={() => {
+                        setLeftRailMode(mode);
+                        setLeftRailOpen(true);
+                      }}
+                      type="button"
+                    >
+                      {mode === "pages"
+                        ? "Pages"
+                        : mode === "layers"
+                          ? "Layers"
+                          : "Comments"}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  aria-label="Close left rail"
+                  className="button button-secondary button-icon"
+                  onClick={() => setLeftRailOpen(false)}
+                  type="button"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="editor-overlay-panel-body">
+                {leftRailMode === "pages" ? (
+                  <div className="editor-sidebar-section">
+                    <p className="eyebrow">Pages</p>
+                    {canMutate ? <CreatePageForm onCreate={props.onCreatePage} /> : null}
+                    <ul className="resource-list compact-resource-list">
+                      {props.pages.map((page) => (
+                        <li key={page.id}>
+                          <div className="resource-row">
+                            <button
+                              className={`resource-button ${
+                                page.id === props.page.id
+                                  ? "resource-button-active"
+                                  : ""
+                              }`}
+                              onClick={() => props.onNavigatePage(page.id)}
+                              type="button"
+                            >
+                              <strong>{page.name}</strong>
+                              <span>Order {page.orderIndex + 1}</span>
+                            </button>
+                            {canMutate ? (
+                              <InlineRenameForm
+                                label="Rename page"
+                                onSubmit={(name) => props.onRenamePage(page.id, name)}
+                              />
+                            ) : null}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {leftRailMode === "layers" ? (
+                  <div className="editor-sidebar-section">
+                    <p className="eyebrow">Layers</p>
+                    <div className="layer-list">
+                      {layerItems.map(({ depth, node }) => {
+                        const order = getLayerOrder(
+                          sessionSnapshot.document,
+                          node.parentId
+                        );
+                        const index = order.indexOf(node.id);
+
+                        return (
+                          <div
+                            className={`layer-row ${
+                              selectedIds.includes(node.id)
+                                ? "layer-row-active"
+                                : ""
+                            }`}
+                            key={node.id}
+                            style={{ paddingLeft: `${12 + depth * 16}px` }}
+                          >
+                            <button
+                              className="layer-label"
+                              onClick={() => updateSelection([node.id], node.id)}
+                              type="button"
+                            >
+                              <strong>{node.name}</strong>
+                              <span>{node.type}</span>
+                            </button>
+                            {canMutate ? (
+                              <div className="layer-actions">
+                                <button
+                                  className="button button-secondary button-icon"
+                                  onClick={() => reorderNode(node.id, -1)}
+                                  type="button"
+                                >
+                                  ↑
+                                </button>
+                                <button
+                                  className="button button-secondary button-icon"
+                                  onClick={() => reorderNode(node.id, 1)}
+                                  type="button"
+                                >
+                                  ↓
+                                </button>
+                                <button
+                                  className="button button-secondary button-icon"
+                                  onClick={() =>
+                                    toggleNodeFlag(node.id, {
+                                      locked: !node.locked
+                                    } as Partial<SceneGraphNode>)
+                                  }
+                                  type="button"
+                                >
+                                  {node.locked ? "Unlock" : "Lock"}
+                                </button>
+                                <button
+                                  className="button button-secondary button-icon"
+                                  onClick={() =>
+                                    toggleNodeFlag(node.id, {
+                                      visible: !node.visible
+                                    } as Partial<SceneGraphNode>)
+                                  }
+                                  type="button"
+                                >
+                                  {node.visible ? "Hide" : "Show"}
+                                </button>
+                                <button
+                                  className="button button-secondary button-icon"
+                                  onClick={() => deleteNodes([node.id])}
+                                  type="button"
+                                >
+                                  Del
+                                </button>
+                              </div>
+                            ) : null}
+                            <span className="layer-order">#{index + 1}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+
+                {leftRailMode === "comments" && canViewComments ? (
+                  <div className="editor-sidebar-section">
+                    <p className="eyebrow">Comments</p>
+                    {canComment ? (
+                      <form className="comment-form" onSubmit={handleSubmitComment}>
+                        <label className="comment-field">
+                          <span>Anchor</span>
+                          <select
+                            className="input"
+                            onChange={(event) =>
+                              setCommentTargetType(
+                                event.target.value as "file" | "node" | "page"
+                              )
+                            }
+                            value={commentTargetType}
+                          >
+                            {availableCommentTargetTypes.map((targetType) => (
+                              <option key={targetType} value={targetType}>
+                                {targetType === "node"
+                                  ? "Selected node"
+                                  : targetType === "page"
+                                    ? "Current page"
+                                    : "Whole file"}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="comment-field">
+                          <span>Comment</span>
+                          <textarea
+                            className="input comment-textarea"
+                            onChange={(event) => setCommentDraft(event.target.value)}
+                            placeholder="Leave lightweight review context"
+                            rows={4}
+                            value={commentDraft}
+                          />
+                        </label>
+                        <button
+                          className="button button-secondary"
+                          disabled={
+                            isSubmittingComment ||
+                            commentDraft.trim().length === 0
+                          }
+                          type="submit"
+                        >
+                          {isSubmittingComment ? "Saving..." : "Add comment"}
+                        </button>
+                      </form>
+                    ) : (
+                      <p className="muted">
+                        Comments are visible but read-only in this mode.
+                      </p>
+                    )}
+                    {commentLoadState.status === "error" ? (
+                      <p className="muted">{commentLoadState.message}</p>
+                    ) : null}
+                    <div className="comment-list">
+                      {sortedComments.map((comment) => {
+                        const nodeMissing =
+                          comment.nodeId !== null &&
+                          !sessionSnapshot.document.nodes[comment.nodeId];
+                        const targetLabel =
+                          comment.nodeId !== null
+                            ? nodeMissing
+                              ? "Node (missing)"
+                              : "Node"
+                            : comment.pageId !== null
+                              ? "Page"
+                              : "File";
+
+                        return (
+                          <article
+                            className={`comment-card ${
+                              comment.resolvedAt ? "comment-card-resolved" : ""
+                            }`}
+                            key={comment.id}
+                          >
+                            <div className="comment-card-header">
+                              <div>
+                                <strong>{comment.author.displayName}</strong>
+                                <p className="muted">
+                                  {new Date(comment.createdAt).toLocaleString()}
+                                </p>
+                              </div>
+                              <span className="presence-chip comment-target-chip">
+                                {targetLabel}
+                              </span>
+                            </div>
+                            <p>{comment.body}</p>
+                            <div className="comment-card-footer">
+                              <span>
+                                {comment.resolvedAt
+                                  ? `Resolved ${new Date(
+                                      comment.resolvedAt
+                                    ).toLocaleString()}`
+                                  : "Open"}
+                              </span>
+                              {!comment.resolvedAt && canComment ? (
+                                <button
+                                  className="button button-secondary button-icon"
+                                  disabled={resolvingCommentId === comment.id}
+                                  onClick={() =>
+                                    void handleResolveComment(comment.id)
+                                  }
+                                  type="button"
+                                >
+                                  {resolvingCommentId === comment.id
+                                    ? "..."
+                                    : "Resolve"}
+                                </button>
+                              ) : null}
+                            </div>
+                          </article>
+                        );
+                      })}
+                      {sortedComments.length === 0 &&
+                      commentLoadState.status !== "loading" ? (
+                        <p className="muted">No comments on this file/page yet.</p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </aside>
+          ) : null}
+
+          {rightPanelOpen ? (
+            <aside
+              aria-label="Editor right panel"
+              className="editor-overlay-panel editor-overlay-panel-right"
+              data-testid="right-panel"
+              id="editor-right-panel"
+            >
+              <div className="editor-overlay-panel-header">
+                <div className="editor-overlay-panel-tabs">
+                  {(["inspect", "share", "export"] as RightPanelMode[]).map(
+                    (mode) => (
+                      <button
+                        aria-pressed={rightPanelMode === mode}
+                        className={`button button-secondary button-icon ${
+                          rightPanelMode === mode
+                            ? "editor-mode-button-active"
+                            : ""
+                        }`}
+                        key={mode}
+                        onClick={() => {
+                          setRightPanelMode(mode);
+                          setRightPanelOpen(true);
+                        }}
+                        type="button"
+                      >
+                        {mode === "inspect"
+                          ? "Inspect"
+                          : mode === "share"
+                            ? "Share"
+                            : "Export"}
+                      </button>
+                    )
+                  )}
+                </div>
+                <button
+                  aria-label="Close right panel"
+                  className="button button-secondary button-icon"
+                  onClick={() => setRightPanelOpen(false)}
+                  type="button"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="editor-overlay-panel-body">
+                {rightPanelMode === "inspect" ? (
+                  <div className="editor-sidebar-section">
+                    <p className="eyebrow">Inspect</p>
+                    {inspectDetails ? (
+                      <div className="inspect-sections">
+                        {inspectDetails.sections.map((section) => (
+                          <section className="inspect-section" key={section.title}>
+                            <h3>{section.title}</h3>
+                            <dl className="inspect-grid">
+                              {section.fields.map((field) => (
+                                <div key={field.label}>
+                                  <dt>{field.label}</dt>
+                                  <dd>{field.value}</dd>
+                                </div>
+                              ))}
+                            </dl>
+                          </section>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="muted">
+                        Select a supported node to inspect dimensions, spacing,
+                        color, typography, and metadata.
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+
+                {rightPanelMode === "export" ? (
+                  <div className="editor-sidebar-section">
+                    <p className="eyebrow">Export</p>
+                    {canCreateExports ? (
+                      <>
+                        <div className="share-link-actions">
+                          <button
+                            className="button button-secondary"
+                            disabled={isExportActionDisabled(exportJobState)}
+                            onClick={() =>
+                              void handleCreateExportJob({
+                                format: "png",
+                                pageId: props.page.id
+                              })
+                            }
+                            type="button"
+                          >
+                            Export page PNG
+                          </button>
+                          <button
+                            className="button button-secondary"
+                            disabled={isExportActionDisabled(exportJobState)}
+                            onClick={() =>
+                              void handleCreateExportJob({
+                                format: "pdf",
+                                pageId: null
+                              })
+                            }
+                            type="button"
+                          >
+                            Export file PDF
+                          </button>
+                        </div>
+                        {exportJobState.job ? (
+                          <article className="share-link-card">
+                            <div>
+                              <strong>
+                                {exportJobState.job.format === "pdf"
+                                  ? "File PDF export"
+                                  : "Page PNG export"}
+                              </strong>
+                              <p className="muted">
+                                Requested{" "}
+                                {new Date(
+                                  exportJobState.job.createdAt
+                                ).toLocaleString()}
+                              </p>
+                              {describeExportJobState(exportJobState) ? (
+                                <p className="muted">
+                                  Status: {describeExportJobState(exportJobState)}
+                                </p>
+                              ) : null}
+                            </div>
+                            <div className="share-link-actions">
+                              {exportJobState.status === "succeeded" ? (
+                                <a
+                                  className="button button-secondary button-icon"
+                                  href={buildExportJobDownloadUrl(
+                                    props.collab.apiBaseUrl,
+                                    props.route,
+                                    exportJobState.job.id
+                                  )}
+                                >
+                                  Download
+                                </a>
+                              ) : null}
+                              {exportJobState.status === "failed" ||
+                              exportJobState.status === "succeeded" ? (
+                                <button
+                                  className="button button-secondary button-icon"
+                                  onClick={handleDismissExportJob}
+                                  type="button"
+                                >
+                                  Dismiss
+                                </button>
+                              ) : null}
+                            </div>
+                          </article>
+                        ) : describeExportJobState(exportJobState) ? (
+                          <p className="muted">
+                            {describeExportJobState(exportJobState)}
+                          </p>
+                        ) : (
+                          <p className="muted">
+                            Export the current page as a PNG or the whole file as
+                            a PDF. Jobs run in the background so editing and
+                            collaboration stay responsive.
+                          </p>
+                        )}
+                      </>
+                    ) : (
+                      <p className="muted">
+                        Export creation is unavailable from read-only share-link
+                        access.
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+
+                {rightPanelMode === "share" ? (
+                  <div className="editor-sidebar-section">
+                    <p className="eyebrow">Share</p>
+                    {props.shareToken ? (
+                      <p className="muted">
+                        This session is running from a read-only share link.
+                        Document changes are disabled in the UI and blocked
+                        server-side.
+                      </p>
+                    ) : canManageShareLinks ? (
+                      <>
+                        <button
+                          className="button button-secondary"
+                          disabled={isCreatingShareLink}
+                          onClick={() => void handleCreateShareLink()}
+                          type="button"
+                        >
+                          {isCreatingShareLink
+                            ? "Creating..."
+                            : "Create share link"}
+                        </button>
+                        {shareLinkLoadState.status === "error" ? (
+                          <p className="muted">{shareLinkLoadState.message}</p>
+                        ) : null}
+                        <div className="share-link-list">
+                          {shareLinkLoadState.shareLinks.map((shareLink) => (
+                            <article
+                              className="share-link-card"
+                              data-share-url={shareLink.shareUrl ?? ""}
+                              data-testid="share-link-card"
+                              key={shareLink.id}
+                            >
+                              <div>
+                                <strong>
+                                  {shareLink.revokedAt
+                                    ? "Revoked link"
+                                    : "Active link"}
+                                </strong>
+                                <p className="muted">
+                                  Created{" "}
+                                  {new Date(
+                                    shareLink.createdAt
+                                  ).toLocaleString()}
+                                </p>
+                              </div>
+                              <div className="share-link-actions">
+                                <button
+                                  className="button button-secondary button-icon"
+                                  disabled={!shareLink.shareUrl}
+                                  onClick={() => void handleCopyShareLink(shareLink)}
+                                  type="button"
+                                >
+                                  {copiedShareLinkId === shareLink.id
+                                    ? "Copied"
+                                    : "Copy"}
+                                </button>
+                                <button
+                                  className="button button-secondary button-icon"
+                                  disabled={
+                                    Boolean(shareLink.revokedAt) ||
+                                    revokingShareLinkId === shareLink.id
+                                  }
+                                  onClick={() =>
+                                    void handleRevokeShareLink(shareLink.id)
+                                  }
+                                  type="button"
+                                >
+                                  {revokingShareLinkId === shareLink.id
+                                    ? "..."
+                                    : "Revoke"}
+                                </button>
+                              </div>
+                            </article>
+                          ))}
+                          {shareLinkLoadState.shareLinks.length === 0 &&
+                          shareLinkLoadState.status !== "loading" ? (
+                            <p className="muted">
+                              No share links yet. Create one for lightweight
+                              review or handoff.
+                            </p>
+                          ) : null}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="muted">
+                        Share management is unavailable in read-only member
+                        access.
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            </aside>
+          ) : null}
+
           {remoteSelectionEntries.map((entry) =>
             entry.nodeRecords.map((record) => {
               const topLeft = pagePointToScreenPoint(
@@ -2775,199 +3223,6 @@ export function PageEditorScreen(props: {
           ) : null}
         </div>
       </section>
-
-      <aside className="panel editor-inspect-panel">
-        <div className="editor-sidebar-section">
-          <p className="eyebrow">Inspect</p>
-          {inspectDetails ? (
-            <div className="inspect-sections">
-              {inspectDetails.sections.map((section) => (
-                <section className="inspect-section" key={section.title}>
-                  <h3>{section.title}</h3>
-                  <dl className="inspect-grid">
-                    {section.fields.map((field) => (
-                      <div key={field.label}>
-                        <dt>{field.label}</dt>
-                        <dd>{field.value}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </section>
-              ))}
-            </div>
-          ) : (
-            <p className="muted">
-              Select a supported node to inspect dimensions, spacing, color,
-              typography, and metadata.
-            </p>
-          )}
-        </div>
-
-        <div className="editor-sidebar-section">
-          <p className="eyebrow">Export</p>
-          {canCreateExports ? (
-            <>
-              <div className="share-link-actions">
-                <button
-                  className="button button-secondary"
-                  disabled={isExportActionDisabled(exportJobState)}
-                  onClick={() =>
-                    void handleCreateExportJob({
-                      format: "png",
-                      pageId: props.page.id
-                    })
-                  }
-                  type="button"
-                >
-                  Export page PNG
-                </button>
-                <button
-                  className="button button-secondary"
-                  disabled={isExportActionDisabled(exportJobState)}
-                  onClick={() =>
-                    void handleCreateExportJob({
-                      format: "pdf",
-                      pageId: null
-                    })
-                  }
-                  type="button"
-                >
-                  Export file PDF
-                </button>
-              </div>
-              {exportJobState.job ? (
-                <article className="share-link-card">
-                  <div>
-                    <strong>
-                      {exportJobState.job.format === "pdf"
-                        ? "File PDF export"
-                        : "Page PNG export"}
-                    </strong>
-                    <p className="muted">
-                      Requested{" "}
-                      {new Date(exportJobState.job.createdAt).toLocaleString()}
-                    </p>
-                    {describeExportJobState(exportJobState) ? (
-                      <p className="muted">
-                        Status: {describeExportJobState(exportJobState)}
-                      </p>
-                    ) : null}
-                  </div>
-                  <div className="share-link-actions">
-                    {exportJobState.status === "succeeded" ? (
-                      <a
-                        className="button button-secondary button-icon"
-                        href={buildExportJobDownloadUrl(
-                          props.collab.apiBaseUrl,
-                          props.route,
-                          exportJobState.job.id
-                        )}
-                      >
-                        Download
-                      </a>
-                    ) : null}
-                    {exportJobState.status === "failed" ||
-                    exportJobState.status === "succeeded" ? (
-                      <button
-                        className="button button-secondary button-icon"
-                        onClick={handleDismissExportJob}
-                        type="button"
-                      >
-                        Dismiss
-                      </button>
-                    ) : null}
-                  </div>
-                </article>
-              ) : describeExportJobState(exportJobState) ? (
-                <p className="muted">{describeExportJobState(exportJobState)}</p>
-              ) : (
-                <p className="muted">
-                  Export the current page as a PNG or the whole file as a PDF.
-                  Jobs run in the background so editing and collaboration stay
-                  responsive.
-                </p>
-              )}
-            </>
-          ) : (
-            <p className="muted">
-              Export creation is unavailable from read-only share-link access.
-            </p>
-          )}
-        </div>
-
-        <div className="editor-sidebar-section">
-          <p className="eyebrow">Share</p>
-          {props.shareToken ? (
-            <p className="muted">
-              This session is running from a read-only share link. Document
-              changes are disabled in the UI and blocked server-side.
-            </p>
-          ) : canManageShareLinks ? (
-            <>
-              <button
-                className="button button-secondary"
-                disabled={isCreatingShareLink}
-                onClick={() => void handleCreateShareLink()}
-                type="button"
-              >
-                {isCreatingShareLink ? "Creating..." : "Create share link"}
-              </button>
-              {shareLinkLoadState.status === "error" ? (
-                <p className="muted">{shareLinkLoadState.message}</p>
-              ) : null}
-              <div className="share-link-list">
-                {shareLinkLoadState.shareLinks.map((shareLink) => (
-                  <article
-                    className="share-link-card"
-                    data-share-url={shareLink.shareUrl ?? ""}
-                    data-testid="share-link-card"
-                    key={shareLink.id}
-                  >
-                    <div>
-                      <strong>{shareLink.revokedAt ? "Revoked link" : "Active link"}</strong>
-                      <p className="muted">
-                        Created {new Date(shareLink.createdAt).toLocaleString()}
-                      </p>
-                    </div>
-                    <div className="share-link-actions">
-                      <button
-                        className="button button-secondary button-icon"
-                        disabled={!shareLink.shareUrl}
-                        onClick={() => void handleCopyShareLink(shareLink)}
-                        type="button"
-                      >
-                        {copiedShareLinkId === shareLink.id ? "Copied" : "Copy"}
-                      </button>
-                      <button
-                        className="button button-secondary button-icon"
-                        disabled={
-                          Boolean(shareLink.revokedAt) ||
-                          revokingShareLinkId === shareLink.id
-                        }
-                        onClick={() => void handleRevokeShareLink(shareLink.id)}
-                        type="button"
-                      >
-                        {revokingShareLinkId === shareLink.id ? "..." : "Revoke"}
-                      </button>
-                    </div>
-                  </article>
-                ))}
-                {shareLinkLoadState.shareLinks.length === 0 &&
-                shareLinkLoadState.status !== "loading" ? (
-                  <p className="muted">
-                    No share links yet. Create one for lightweight review or
-                    handoff.
-                  </p>
-                ) : null}
-              </div>
-            </>
-          ) : (
-            <p className="muted">
-              Share management is unavailable in read-only member access.
-            </p>
-          )}
-        </div>
-      </aside>
     </section>
   );
 }

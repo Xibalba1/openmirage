@@ -971,6 +971,7 @@ describe("App auth and routing flows", () => {
 
     await screen.findByText("Sprint 10 Project");
     await user.click(screen.getByRole("button", { name: "New file" }));
+    await screen.findByPlaceholderText("New file name");
     await user.click(screen.getByRole("button", { name: "Create file" }));
     await screen.findByText("File name is required.");
 

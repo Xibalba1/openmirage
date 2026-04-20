@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { createDatabasePool, PgCollabPersistence } from "@openmirage/db";
 
 const SMOKE_PNG = Buffer.from(
@@ -72,6 +72,20 @@ async function waitForStoredNodeCount(
     .toBeGreaterThanOrEqual(expectedMinimumCount);
 }
 
+async function ensureModePanelOpen(
+  page: Page,
+  toggleTestId: string,
+  panelTestId: string
+): Promise<void> {
+  const toggle = page.getByTestId(toggleTestId);
+
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+    await toggle.click();
+  }
+
+  await expect(page.getByTestId(panelTestId)).toBeVisible();
+}
+
 test("local MVP browser smoke flow passes", async ({
   baseURL,
   browser,
@@ -136,13 +150,32 @@ test("local MVP browser smoke flow passes", async ({
   await expect(page.getByText("Collab: connected")).toBeVisible({
     timeout: 30_000
   });
+  await expect(page.getByTestId("left-rail")).toHaveCount(0);
+  await expect(page.getByTestId("right-panel")).toHaveCount(0);
+
+  const canvas = page.getByTestId("editor-canvas");
+  const canvasBeforeOverlays = await canvas.boundingBox();
+
+  if (!canvasBeforeOverlays) {
+    throw new Error("expected editor canvas bounds");
+  }
+
+  await ensureModePanelOpen(page, "left-rail-toggle-pages", "left-rail");
+  const canvasAfterLeftRail = await canvas.boundingBox();
+  expect(canvasAfterLeftRail?.width).toBeCloseTo(canvasBeforeOverlays.width, 4);
+  expect(canvasAfterLeftRail?.height).toBeCloseTo(canvasBeforeOverlays.height, 4);
+
+  await ensureModePanelOpen(page, "right-panel-toggle-inspect", "right-panel");
+  const canvasAfterRightPanel = await canvas.boundingBox();
+  expect(canvasAfterRightPanel?.width).toBeCloseTo(canvasBeforeOverlays.width, 4);
+  expect(canvasAfterRightPanel?.height).toBeCloseTo(canvasBeforeOverlays.height, 4);
 
   const pageOneRoute = parsePageRoute(page.url());
 
   await page.getByRole("button", { name: "Rectangle" }).click();
   await page.getByRole("button", { name: "Text" }).click();
-  await expect(page.getByText("Dimensions")).toBeVisible();
-  await expect(page.getByText("Color")).toBeVisible();
+  await expect(page.getByText("Metadata")).toBeVisible();
+  await ensureModePanelOpen(page, "left-rail-toggle-layers", "left-rail");
   await expect(
     page.locator(".layer-list .layer-label", { hasText: "Rectangle" }).first()
   ).toBeVisible();
@@ -175,6 +208,7 @@ test("local MVP browser smoke flow passes", async ({
   await expect(page).toHaveURL(/\/pages\//);
   const pageTwoRoute = parsePageRoute(page.url());
   await page.getByRole("button", { name: "Frame" }).click();
+  await ensureModePanelOpen(page, "left-rail-toggle-layers", "left-rail");
   await expect(
     page.locator(".layer-list .layer-label", { hasText: "Frame" }).first()
   ).toBeVisible();
@@ -184,12 +218,15 @@ test("local MVP browser smoke flow passes", async ({
   await expect(page.getByText("Collab: connected")).toBeVisible({
     timeout: 30_000
   });
+  await ensureModePanelOpen(page, "left-rail-toggle-layers", "left-rail");
   await expect(
     page.locator(".layer-list .layer-label", { hasText: "Frame" }).first()
   ).toBeVisible();
 
+  await ensureModePanelOpen(page, "left-rail-toggle-pages", "left-rail");
   await page.getByRole("button", { name: /Flow Page 1/ }).click();
   await expect(page).toHaveURL(new RegExp(`${pageOneRoute.pageId}$`));
+  await ensureModePanelOpen(page, "left-rail-toggle-layers", "left-rail");
   await expect(
     page.locator(".layer-list .layer-label", { hasText: "Rectangle" }).first()
   ).toBeVisible();
@@ -236,6 +273,7 @@ test("local MVP browser smoke flow passes", async ({
   await expect(page.getByTestId("remote-selection")).toHaveCount(1, {
     timeout: 15_000
   });
+  await ensureModePanelOpen(page, "left-rail-toggle-layers", "left-rail");
   await expect(
     page.locator(".layer-list .layer-label", { hasText: "Ellipse" }).first()
   ).toBeVisible({
@@ -243,6 +281,7 @@ test("local MVP browser smoke flow passes", async ({
   });
   await collaboratorContext.close();
 
+  await ensureModePanelOpen(page, "left-rail-toggle-comments", "left-rail");
   await page.getByPlaceholder("Leave lightweight review context").fill(commentBody);
   await page.getByRole("button", { name: "Add comment" }).click();
   await expect(page.getByText(commentBody)).toBeVisible();
@@ -254,6 +293,7 @@ test("local MVP browser smoke flow passes", async ({
     mimeType: "image/png",
     name: "smoke.png"
   });
+  await ensureModePanelOpen(page, "left-rail-toggle-layers", "left-rail");
   await expect(
     page.locator(".layer-list .layer-label", { hasText: "Image" }).first()
   ).toBeVisible({
@@ -264,6 +304,7 @@ test("local MVP browser smoke flow passes", async ({
   await expect(page.getByText("Collab: connected")).toBeVisible({
     timeout: 30_000
   });
+  await ensureModePanelOpen(page, "left-rail-toggle-layers", "left-rail");
   await expect(
     page.locator(".layer-list .layer-label", { hasText: "Image" }).first()
   ).toBeVisible();
@@ -279,6 +320,7 @@ test("local MVP browser smoke flow passes", async ({
   expect(storedPageJson).not.toContain(commentBody);
   expect(storedPageJson).not.toContain("data:image");
 
+  await ensureModePanelOpen(page, "right-panel-toggle-share", "right-panel");
   await page.getByRole("button", { name: "Create share link" }).click();
   const shareLinkCard = page.getByTestId("share-link-card").first();
   await expect(shareLinkCard).toBeVisible();
@@ -291,12 +333,14 @@ test("local MVP browser smoke flow passes", async ({
     sharedPage.getByRole("heading", { name: "Shared inspect view" })
   ).toBeVisible();
   await expect(
-    sharedPage.getByText(
-      "This session is running from a read-only share link. Document changes are disabled in the UI and blocked server-side."
-    )
+    sharedPage.getByText("Lightweight read-only handoff with inspect values and page navigation.")
+  ).toBeVisible();
+  await expect(
+    sharedPage.getByText("This file is open in read-only mode.")
   ).toBeVisible();
   await sharedPage.close();
 
+  await ensureModePanelOpen(page, "right-panel-toggle-export", "right-panel");
   await page.getByRole("button", { name: "Export page PNG" }).click();
   await expect(page.getByText(/Status: (Queued|Running|Succeeded)/)).toBeVisible({
     timeout: 30_000
