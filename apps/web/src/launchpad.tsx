@@ -114,15 +114,21 @@ export function LaunchpadView(props: {
   return (
     <>
       <article className="panel">
-        <p className="eyebrow">Launchpad</p>
+        <p className="eyebrow">Active workspace</p>
         <div className="launchpad-heading">
           <div>
             <h2>{activeWorkspace ? activeWorkspace.name : "No workspaces yet"}</h2>
             <p className="muted">
               {activeWorkspace
-                ? "Browse projects and files inline, then jump straight into the page you need."
-                : "You do not have access to any workspaces yet."}
+                ? `${activeWorkspace.slug} · ${activeWorkspace.role}`
+                : "You don't have access to a workspace yet."}
             </p>
+            {activeWorkspace ? (
+              <p className="muted">
+                Browse projects and files in one place, then open the page you
+                need.
+              </p>
+            ) : null}
           </div>
           {activeWorkspace ? (
             <div className="action-strip">
@@ -132,7 +138,7 @@ export function LaunchpadView(props: {
                 onClick={() => props.onOpenWorkspaceRoute(activeWorkspace.id)}
                 type="button"
               >
-                Open workspace route
+                View workspace
               </button>
             </div>
           ) : null}
@@ -140,7 +146,7 @@ export function LaunchpadView(props: {
       </article>
       <article className="panel">
         <p className="eyebrow">Workspaces</p>
-        <h2>Switch active workspace</h2>
+        <h2>Choose workspace</h2>
         <ul className="resource-list">
           {props.data.workspaces.map((workspace) => (
             <li key={workspace.id}>
@@ -165,7 +171,7 @@ export function LaunchpadView(props: {
                   onClick={() => props.onOpenWorkspaceRoute(workspace.id)}
                   type="button"
                 >
-                  View route
+                  Open workspace
                 </button>
               </div>
             </li>
@@ -175,10 +181,10 @@ export function LaunchpadView(props: {
       {activeWorkspace ? (
         <article className="panel">
           <p className="eyebrow">Projects</p>
-          <h2>Active workspace hierarchy</h2>
+          <h2>Projects</h2>
           <p className="muted">
-            Projects stay grouped in place so you can browse, create, and open
-            files without leaving the launchpad.
+            Projects stay grouped here so you can create, browse, and open files
+            without leaving the launchpad.
           </p>
           {props.data.projectGroups.length > 0 ? (
             <div className="launchpad-project-list">
@@ -208,8 +214,8 @@ export function LaunchpadView(props: {
             </div>
           ) : (
             <p className="muted">
-              No projects in this workspace yet. Create one here to keep `/app`
-              as the primary entry point.
+              No projects yet. Create one to start organizing work in this
+              workspace.
             </p>
           )}
         </article>
@@ -244,7 +250,7 @@ function LaunchpadProjectSection(props: {
             onClick={props.onOpenProjectRoute}
             type="button"
           >
-            Open project route
+            View project
           </button>
         </div>
       </header>
@@ -293,8 +299,7 @@ function LaunchpadProjectSection(props: {
                 </div>
                 {!summary.defaultPageId ? (
                   <p className="form-error">
-                    This file does not have a default page yet. Add a page before
-                    opening it directly.
+                    Add a page before opening this file.
                   </p>
                 ) : null}
                 {isExpanded ? (
@@ -303,7 +308,7 @@ function LaunchpadProjectSection(props: {
                       <div>
                         <h4>Pages</h4>
                         <p className="muted">
-                          Jump to any page inline without leaving the launchpad.
+                          Open any page here without leaving the launchpad.
                         </p>
                       </div>
                       <DisclosureCreatePage
@@ -326,8 +331,7 @@ function LaunchpadProjectSection(props: {
         </div>
       ) : (
         <p className="muted">
-          No files in this project yet. Create one here to keep browsing inside
-          the active workspace.
+          No files yet. Create one to start designing in this project.
         </p>
       )}
     </section>
@@ -342,17 +346,21 @@ function LaunchpadPagesState(props: {
     props.fileDetailsState.status === "loading" ||
     props.fileDetailsState.status === "idle"
   ) {
-    return <p className="muted">Loading file pages.</p>;
+    return <p className="muted">Loading pages...</p>;
   }
 
   if (props.fileDetailsState.status === "error") {
-    return <p className="form-error">{props.fileDetailsState.message}</p>;
+    return (
+      <p className="form-error">
+        Couldn't load pages right now. Close and reopen to try again.
+      </p>
+    );
   }
 
   const loadedState = props.fileDetailsState;
 
   if (loadedState.value.pages.length === 0) {
-    return <p className="muted">This file does not contain any pages yet.</p>;
+    return <p className="muted">No pages yet. Add one to keep working here.</p>;
   }
 
   return (
@@ -457,12 +465,12 @@ function DisclosureForm(props: {
     const trimmedPageNames = pageNames.map((entry) => entry.trim()).filter(Boolean);
 
     if (!trimmedName) {
-      setError(`${props.errorPrefix} name is required.`);
+      setError(`Enter a ${props.errorPrefix.toLowerCase()} name.`);
       return;
     }
 
     if (props.withPageInputs && trimmedPageNames.length < 2) {
-      setError("Add at least two pages for the initial file.");
+      setError("Add at least two pages to start this file.");
       return;
     }
 

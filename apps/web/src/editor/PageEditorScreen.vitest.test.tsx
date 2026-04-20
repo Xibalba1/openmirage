@@ -364,6 +364,9 @@ describe("PageEditorScreen shell", () => {
     await waitFor(() => expect(sessionStubs).toHaveLength(1));
     expect(screen.queryByTestId("left-rail")).not.toBeInTheDocument();
     expect(screen.queryByTestId("right-panel")).not.toBeInTheDocument();
+    expect(screen.getByTestId("editor-hierarchy")).toHaveTextContent(
+      "Workspace / Project / Canvas File / Page 1"
+    );
 
     await user.click(screen.getByTestId("left-rail-toggle-pages"));
     expect(screen.getByTestId("left-rail")).toBeVisible();
@@ -378,7 +381,7 @@ describe("PageEditorScreen shell", () => {
 
     await user.click(screen.getByTestId("left-rail-toggle-comments"));
     expect(
-      screen.getByPlaceholderText("Leave lightweight review context")
+      screen.getByPlaceholderText("Add context for reviewers")
     ).toBeVisible();
 
     await user.click(screen.getByLabelText("Close left rail"));
@@ -434,7 +437,7 @@ describe("PageEditorScreen shell", () => {
     );
     await user.selectOptions(screen.getByRole("combobox"), "file");
     await user.type(
-      screen.getByPlaceholderText("Leave lightweight review context"),
+      screen.getByPlaceholderText("Add context for reviewers"),
       "Check alignment"
     );
     await user.click(screen.getByRole("button", { name: "Resolve" }));
@@ -520,21 +523,108 @@ describe("PageEditorScreen shell", () => {
     await waitFor(() => expect(sessionStubs).toHaveLength(1));
     expect(screen.queryByTestId("left-rail-toggle-comments")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Rename file" })).not.toBeInTheDocument();
-    expect(screen.getByText("This file is open in read-only mode.")).toBeVisible();
+    expect(
+      screen.getByText("You're viewing a read-only version of this file.")
+    ).toBeVisible();
 
     await user.click(screen.getByTestId("right-panel-toggle-share"));
     expect(
       screen.getByText(
-        "This session is running from a read-only share link. Document changes are disabled in the UI and blocked server-side."
+        "This view came from a read-only share link, so changes and sharing controls are turned off."
       )
     ).toBeVisible();
 
     await user.click(screen.getByTestId("right-panel-toggle-export"));
     expect(
-      screen.getByText(
-        "Export creation is unavailable from read-only share-link access."
-      )
+      screen.getByText("Exports aren't available from a read-only share link.")
     ).toBeVisible();
+  });
+
+  it("shows a product-facing asset error when asset loading fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation((input, init) => {
+        const url = String(input);
+
+        if (url.includes("/assets")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({}), {
+              headers: {
+                "content-type": "application/json"
+              },
+              status: 500
+            })
+          );
+        }
+
+        return createFetchMock()(input, init);
+      })
+    );
+
+    render(<PageEditorScreen {...createProps()} />);
+
+    await waitFor(() =>
+      expect(screen.getByText("Couldn't load your assets. Try again.")).toBeVisible()
+    );
+  });
+
+  it("formats comment and share-link load errors for the UI", async () => {
+    const user = userEvent.setup();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation((input, init) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+
+        if (url.includes("/comments") && method === "GET") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ error: "Comments are temporarily unavailable." }),
+              {
+                headers: {
+                  "content-type": "application/json"
+                },
+                status: 500
+              }
+            )
+          );
+        }
+
+        if (url.includes("/share-links") && method === "GET") {
+          return Promise.resolve(
+            new Response(JSON.stringify({}), {
+              headers: {
+                "content-type": "application/json"
+              },
+              status: 500
+            })
+          );
+        }
+
+        return createFetchMock()(input, init);
+      })
+    );
+
+    render(<PageEditorScreen {...createProps()} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("left-rail-toggle-comments")).toBeInTheDocument()
+    );
+
+    await user.click(screen.getByTestId("left-rail-toggle-comments"));
+    await waitFor(() =>
+      expect(
+        screen.getByText("Comments are temporarily unavailable.")
+      ).toBeVisible()
+    );
+
+    await user.click(screen.getByTestId("right-panel-toggle-share"));
+    await waitFor(() =>
+      expect(
+        screen.getByText("Couldn't load share links right now. Try again.")
+      ).toBeVisible()
+    );
   });
 
   it("resets comment mode when comments become unavailable", async () => {

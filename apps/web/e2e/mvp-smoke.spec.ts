@@ -105,15 +105,15 @@ test("local MVP browser smoke flow passes", async ({
 
   await page.goto("/app");
   await expect(
-    page.getByRole("heading", { name: "Sign in to your workspace" })
+    page.getByRole("heading", { name: "Sign in to OpenMirage" })
   ).toBeVisible();
 
   await page.getByLabel("Email").fill("dev@openmirage.local");
   await page.getByRole("button", { name: "Send magic link" }).click();
   await expect(
-    page.getByRole("link", { name: "Open development magic link" })
+    page.getByRole("link", { name: "Open sign-in link" })
   ).toBeVisible();
-  await page.getByRole("link", { name: "Open development magic link" }).click();
+  await page.getByRole("link", { name: "Open sign-in link" }).click();
 
   await expect(
     page.getByRole("heading", { name: "Workspace launchpad" })
@@ -147,7 +147,7 @@ test("local MVP browser smoke flow passes", async ({
   await fileCard.getByRole("button", { name: "Open" }).click();
 
   await expect(page).toHaveURL(/\/pages\//);
-  await expect(page.getByText("Collab: connected")).toBeVisible({
+  await expect(page.getByText("Sync: Live")).toBeVisible({
     timeout: 30_000
   });
   await expect(page.getByTestId("left-rail")).toHaveCount(0);
@@ -215,7 +215,7 @@ test("local MVP browser smoke flow passes", async ({
   await waitForStoredNodeCount(pageTwoRoute.pageId, 1);
 
   await page.reload();
-  await expect(page.getByText("Collab: connected")).toBeVisible({
+  await expect(page.getByText("Sync: Live")).toBeVisible({
     timeout: 30_000
   });
   await ensureModePanelOpen(page, "left-rail-toggle-layers", "left-rail");
@@ -236,7 +236,7 @@ test("local MVP browser smoke flow passes", async ({
   });
   const collaboratorPage = await collaboratorContext.newPage();
   await collaboratorPage.goto(page.url());
-  await expect(collaboratorPage.getByText("Collab: connected")).toBeVisible({
+  await expect(collaboratorPage.getByText("Sync: Live")).toBeVisible({
     timeout: 30_000
   });
   await expect
@@ -282,7 +282,7 @@ test("local MVP browser smoke flow passes", async ({
   await collaboratorContext.close();
 
   await ensureModePanelOpen(page, "left-rail-toggle-comments", "left-rail");
-  await page.getByPlaceholder("Leave lightweight review context").fill(commentBody);
+  await page.getByPlaceholder("Add context for reviewers").fill(commentBody);
   await page.getByRole("button", { name: "Add comment" }).click();
   await expect(page.getByText(commentBody)).toBeVisible();
   await page.getByRole("button", { name: "Resolve" }).click();
@@ -301,7 +301,7 @@ test("local MVP browser smoke flow passes", async ({
   });
 
   await page.reload();
-  await expect(page.getByText("Collab: connected")).toBeVisible({
+  await expect(page.getByText("Sync: Live")).toBeVisible({
     timeout: 30_000
   });
   await ensureModePanelOpen(page, "left-rail-toggle-layers", "left-rail");
@@ -330,13 +330,15 @@ test("local MVP browser smoke flow passes", async ({
   const sharedPage = await browser.newPage();
   await sharedPage.goto(shareUrl as string);
   await expect(
-    sharedPage.getByRole("heading", { name: "Shared inspect view" })
+    sharedPage.getByRole("heading", { name: "Read-only review" })
   ).toBeVisible();
   await expect(
-    sharedPage.getByText("Lightweight read-only handoff with inspect values and page navigation.")
+    sharedPage.getByText(
+      "Review pages and inspect details without changing the source file."
+    )
   ).toBeVisible();
   await expect(
-    sharedPage.getByText("This file is open in read-only mode.")
+    sharedPage.getByText("You're viewing a read-only version of this file.")
   ).toBeVisible();
   await sharedPage.close();
 
