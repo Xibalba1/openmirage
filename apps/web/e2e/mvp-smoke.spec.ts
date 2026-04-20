@@ -92,12 +92,12 @@ test("local MVP browser smoke flow passes", async ({
   context,
   page
 }) => {
-  const projectName = createUniqueName("Sprint 10 Project");
-  const fileName = createUniqueName("Sprint 10 File");
+  const projectName = createUniqueName("Launchpad Project");
+  const fileName = createUniqueName("Launchpad File");
   const pageOneName = "Flow Page 1";
   const pageTwoName = "Flow Page 2";
   const pageThreeName = "Flow Page 3";
-  const commentBody = "Sprint 10 browser smoke comment";
+  const commentBody = "Browser smoke review comment";
 
   await context.grantPermissions(["clipboard-read", "clipboard-write"], {
     origin: new URL(baseURL ?? "http://127.0.0.1").origin
@@ -181,6 +181,17 @@ test("local MVP browser smoke flow passes", async ({
   ).toBeVisible();
 
   const launchpadUrl = new URL("/app", page.url()).toString();
+  const fallbackProjectUrl = new URL(
+    `/app/workspaces/${pageOneRoute.workspaceId}/projects/${pageOneRoute.projectId}`,
+    page.url()
+  ).toString();
+  await page.goto(fallbackProjectUrl);
+  await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Back to launchpad" })
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Back to launchpad" }).click();
+  await expect(page).toHaveURL(launchpadUrl);
   await page.goto(launchpadUrl);
   await expect(
     page.getByRole("heading", { name: "Workspace launchpad" })

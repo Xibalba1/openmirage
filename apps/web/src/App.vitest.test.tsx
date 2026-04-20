@@ -52,13 +52,17 @@ const workspaceTwo = {
   slug: "client-workspace"
 };
 
+const primaryProjectName = "Launchpad Project";
+const primaryFileName = "Launchpad File";
+const sharedPrimaryFileName = "Shared Launchpad File";
+
 const projectsByWorkspace = {
   "workspace-1": [
     {
       createdAt: "2026-04-18T00:00:00.000Z",
       description: null,
       id: "project-1",
-      name: "Sprint 10 Project",
+      name: primaryProjectName,
       updatedAt: "2026-04-18T00:00:00.000Z",
       workspaceId: "workspace-1"
     }
@@ -92,7 +96,7 @@ const fileOpenByFileId = {
       deletedAt: null,
       description: null,
       id: "file-1",
-      name: "Sprint 10 File",
+      name: primaryFileName,
       projectId: "project-1",
       updatedAt: "2026-04-18T00:00:00.000Z",
       workspaceId: "workspace-1"
@@ -364,8 +368,8 @@ describe("App auth and routing flows", () => {
 
     await screen.findByRole("heading", { name: "Workspace launchpad" });
     await screen.findByRole("heading", { name: "OpenMirage Dev" });
-    expect(screen.getByText("Sprint 10 Project")).toBeInTheDocument();
-    expect(screen.getByText("Sprint 10 File")).toBeInTheDocument();
+    expect(screen.getByText(primaryProjectName)).toBeInTheDocument();
+    expect(screen.getByText(primaryFileName)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Browse pages" })
@@ -393,7 +397,7 @@ describe("App auth and routing flows", () => {
 
     await screen.findByRole("heading", { name: "OpenMirage Dev" });
     await waitFor(() =>
-      expect(screen.getByText("Sprint 10 Project")).toBeInTheDocument()
+      expect(screen.getByText(primaryProjectName)).toBeInTheDocument()
     );
     expect(window.localStorage.getItem("openmirage.activeWorkspaceId")).toBe(
       "workspace-1"
@@ -437,7 +441,9 @@ describe("App auth and routing flows", () => {
     expect(
       screen.getByText("You don't have access to a workspace yet.")
     ).toBeInTheDocument();
-    expect(window.localStorage.getItem("openmirage.activeWorkspaceId")).toBeNull();
+    await waitFor(() =>
+      expect(window.localStorage.getItem("openmirage.activeWorkspaceId")).toBeNull()
+    );
   });
 
   it("retries launchpad loading after a workspace request failure", async () => {
@@ -483,13 +489,14 @@ describe("App auth and routing flows", () => {
 
     await screen.findByRole("heading", { name: "We couldn't load this view" });
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await screen.findByText("Sprint 10 Project");
+    await screen.findByText(primaryProjectName);
   });
 
   it("creates a project from the launchpad and keeps the user on /app", async () => {
     window.history.replaceState(null, "", "/app");
     let createdProject = false;
     const user = userEvent.setup();
+    const createdProjectName = "Fresh Launchpad Project";
 
     vi.stubGlobal(
       "fetch",
@@ -518,7 +525,7 @@ describe("App auth and routing flows", () => {
               createdAt: "2026-04-18T00:00:00.000Z",
               description: null,
               id: "project-3",
-              name: "Launchpad Project",
+              name: createdProjectName,
               deletedAt: null,
               updatedAt: "2026-04-18T00:00:00.000Z",
               workspaceId: "workspace-1"
@@ -538,7 +545,7 @@ describe("App auth and routing flows", () => {
                           createdAt: "2026-04-18T00:00:00.000Z",
                           description: null,
                           id: "project-3",
-                          name: "Launchpad Project",
+                          name: createdProjectName,
                           updatedAt: "2026-04-18T00:00:00.000Z",
                           workspaceId: "workspace-1"
                         }
@@ -561,11 +568,11 @@ describe("App auth and routing flows", () => {
     await screen.findByRole("heading", { name: "OpenMirage Dev" });
     await user.click(screen.getByRole("button", { name: "New project" }));
     const projectNameInput = await screen.findByPlaceholderText("New project name");
-    await user.type(projectNameInput, "Launchpad Project");
-    expect((projectNameInput as HTMLInputElement).value).toBe("Launchpad Project");
+    await user.type(projectNameInput, createdProjectName);
+    expect((projectNameInput as HTMLInputElement).value).toBe(createdProjectName);
     await user.click(screen.getByRole("button", { name: "Create project" }));
 
-    await screen.findByText("Launchpad Project");
+    await screen.findByText(createdProjectName);
     expect(window.localStorage.getItem("openmirage.activeWorkspaceId")).toBe(
       "workspace-1"
     );
@@ -579,7 +586,7 @@ describe("App auth and routing flows", () => {
 
     render(<App />);
 
-    await screen.findByText("Sprint 10 File");
+    await screen.findByText(primaryFileName);
     fireEvent.click(screen.getByRole("button", { name: "Open" }));
 
     await screen.findByTestId("mock-page-editor");
@@ -597,7 +604,7 @@ describe("App auth and routing flows", () => {
 
     render(<App />);
 
-    await screen.findByText("Sprint 10 File");
+    await screen.findByText(primaryFileName);
     await user.click(screen.getByRole("button", { name: "Browse pages" }));
 
     await screen.findAllByRole("button", { name: "Open page" });
@@ -621,7 +628,7 @@ describe("App auth and routing flows", () => {
 
     render(<App />);
 
-    await screen.findByText("Sprint 10 File");
+    await screen.findByText(primaryFileName);
     await user.click(screen.getByRole("button", { name: "Browse pages" }));
     await screen.findByText("Page 2");
     await user.click(screen.getByRole("button", { name: "Hide pages" }));
@@ -645,7 +652,7 @@ describe("App auth and routing flows", () => {
 
     render(<App />);
 
-    await screen.findByText("Sprint 10 File");
+    await screen.findByText(primaryFileName);
     await user.click(screen.getByRole("button", { name: "Browse pages" }));
     const pageRow = await screen.findByText("Page 2");
     await user.click(
@@ -686,7 +693,7 @@ describe("App auth and routing flows", () => {
 
     render(<App />);
 
-    await screen.findByText("Sprint 10 File");
+    await screen.findByText(primaryFileName);
     await user.click(screen.getByRole("button", { name: "Browse pages" }));
 
     await screen.findByText(
@@ -770,7 +777,7 @@ describe("App auth and routing flows", () => {
 
     render(<App />);
 
-    await screen.findByText("Sprint 10 Project");
+    await screen.findByText(primaryProjectName);
     await user.click(screen.getByRole("button", { name: "New file" }));
     await user.type(
       screen.getByPlaceholderText("New file name"),
@@ -865,7 +872,7 @@ describe("App auth and routing flows", () => {
 
     render(<App />);
 
-    await screen.findByText("Sprint 10 File");
+    await screen.findByText(primaryFileName);
     await user.click(screen.getByRole("button", { name: "Browse pages" }));
     await screen.findByText("Page 2");
 
@@ -980,7 +987,7 @@ describe("App auth and routing flows", () => {
 
     render(<App />);
 
-    await screen.findByText("Sprint 10 Project");
+    await screen.findByText(primaryProjectName);
     await user.click(screen.getByRole("button", { name: "New file" }));
     await screen.findByPlaceholderText("New file name");
     await user.click(screen.getByRole("button", { name: "Create file" }));
@@ -1024,7 +1031,7 @@ describe("App auth and routing flows", () => {
 
     render(<App />);
 
-    await screen.findByRole("heading", { name: "Sprint 10 Project" });
+    await screen.findByRole("heading", { name: primaryProjectName });
     await user.click(screen.getByRole("button", { name: "Create file" }));
     await screen.findByText("Enter a file name.");
 
@@ -1046,7 +1053,7 @@ describe("App auth and routing flows", () => {
 
     render(<App />);
 
-    await screen.findByRole("heading", { name: "Sprint 10 File" });
+    await screen.findByRole("heading", { name: primaryFileName });
     await user.click(screen.getByRole("button", { name: "Create page" }));
     await screen.findByText("Enter a page name.");
 
@@ -1139,7 +1146,7 @@ describe("App auth and routing flows", () => {
               createdAt: "2026-04-18T00:00:00.000Z",
               createdByUserId: "user-1",
               id: "file-1",
-              name: "Sprint 10 File",
+              name: primaryFileName,
               projectId: "project-1",
               updatedAt: "2026-04-18T00:00:00.000Z",
               workspaceId: "workspace-1"
@@ -1171,7 +1178,7 @@ describe("App auth and routing flows", () => {
             project: {
               createdAt: "2026-04-18T00:00:00.000Z",
               id: "project-1",
-              name: "Sprint 10 Project",
+              name: primaryProjectName,
               updatedAt: "2026-04-18T00:00:00.000Z",
               workspaceId: "workspace-1"
             },
@@ -1183,7 +1190,7 @@ describe("App auth and routing flows", () => {
     render(<App />);
 
     await screen.findByTestId("mock-page-editor");
-    expect(screen.getByText("Sprint 10 File")).toBeInTheDocument();
+    expect(screen.getByText(primaryFileName)).toBeInTheDocument();
     expect(screen.getByText("Page 2")).toBeInTheDocument();
     expect(screen.getByText("member-session")).toBeInTheDocument();
     expect(
@@ -1217,7 +1224,7 @@ describe("App auth and routing flows", () => {
                 createdAt: "2026-04-18T00:00:00.000Z",
                 createdByUserId: "user-1",
                 id: "file-1",
-                name: "Shared Sprint 10 File",
+                name: sharedPrimaryFileName,
                 projectId: "project-1",
                 updatedAt: "2026-04-18T00:00:00.000Z",
                 workspaceId: "workspace-1"
