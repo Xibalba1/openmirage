@@ -1,188 +1,134 @@
-# Epic 3 Acceptance And Staging Closure
+# Platform Verification Runbook
 
-This runbook closes Epic 3 at the MVP boundary without expanding product scope. It stays within [`plan/mvp/1-thesis-and-mvp-boundary.md`](/Users/ik/repos/openmirage/plan/mvp/1-thesis-and-mvp-boundary.md), [`plan/mvp/2-domain-model.md`](/Users/ik/repos/openmirage/plan/mvp/2-domain-model.md), [`plan/mvp/3-architecture-overview.md`](/Users/ik/repos/openmirage/plan/mvp/3-architecture-overview.md), [`plan/mvp/4-technical-design-deployment-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-deployment-model.md), [`plan/mvp/4-technical-design-persistence-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-persistence-model.md), [`plan/mvp/4-technical-design-collaboration-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-collaboration-model.md), [`plan/mvp/4-technical-design-editor-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-editor-model.md), and [`plan/mvp/4-technical-design-rendering-model.md`](/Users/ik/repos/openmirage/plan/mvp/4-technical-design-rendering-model.md).
+## Purpose
 
-## Guardrails
+Use this runbook to verify that the repository, local runtime, staging deployment, and recovery evidence are all in a healthy state for the current MVP.
 
-Will do:
+This document is the operator-facing reference for `pnpm verify:platform:acceptance`. It keeps verification aligned with the documented service boundaries:
 
-- reuse the existing deploy and infra verification assets as the baseline
-- add one canonical acceptance command for local MVP verification
-- treat staging verification and backup/restore proof as operator-managed evidence
-- keep verification inside the documented `web`, `api`, `collab`, `worker`, Postgres, blob storage, and Caddy seams
+- `web`
+- `api`
+- `collab`
+- `worker`
+- Postgres
+- blob storage
+- Caddy
 
-Won't do:
+## Commands
 
-- no new editor features or Figma-parity expansion beyond the MVP boundary
-- no replacement of Docker Compose, Caddy, GHCR, or the single-VPS deploy model
-- no second staging pipeline when [`.github/workflows/staging-deploy.yml`](/Users/ik/repos/openmirage/.github/workflows/staging-deploy.yml) already provides the canonical path
-- no DNS, TLS, or VPS provisioning automation in this slice
-
-## Mandatory Prerequisite Rule
-
-> before modifying any code, identify any prerequisites to your work that you cannot accomplish (ex: software installs on the local machine). check those prerequisites (pass or fail), if any fail, do not proceed. output the failures and provide procedural, step-by-step instructions on how to complete/fulfill the failing prerequisites
-
-Use [`scripts/verify-platform-prereqs.mjs`](/Users/ik/repos/openmirage/scripts/verify-platform-prereqs.mjs) as the canonical gate. If it fails, stop immediately and fix the reported prerequisite before doing anything else.
-
-## Asset Audit
-
-- `reuse as-is`: [`.github/workflows/ci.yml`](/Users/ik/repos/openmirage/.github/workflows/ci.yml)
-- `reuse as-is`: [`.github/workflows/staging-deploy.yml`](/Users/ik/repos/openmirage/.github/workflows/staging-deploy.yml)
-- `reuse as-is`: [`scripts/verify-platform-prereqs.mjs`](/Users/ik/repos/openmirage/scripts/verify-platform-prereqs.mjs)
-- `reuse as-is`: [`scripts/verify-platform-infra.mjs`](/Users/ik/repos/openmirage/scripts/verify-platform-infra.mjs)
-- `new canonical acceptance step`: [`scripts/verify-mvp-browser-smoke.mjs`](/Users/ik/repos/openmirage/scripts/verify-mvp-browser-smoke.mjs)
-- `reuse with doc updates`: [`README.md`](/Users/ik/repos/openmirage/README.md)
-- `gap closed in this runbook`: this runbook and the external evidence contract in [`ops/platform-acceptance-evidence.example.json`](/Users/ik/repos/openmirage/ops/platform-acceptance-evidence.example.json)
-
-## Canonical Commands
-
-Local acceptance:
+Run the full local verification flow:
 
 ```bash
 pnpm verify:platform:acceptance
 ```
 
-Full phase closure after operator evidence exists:
+Run the same flow with recorded staging and recovery evidence:
 
 ```bash
 OPENMIRAGE_ACCEPTANCE_EVIDENCE_FILE=ops/platform-acceptance-evidence.json \
 pnpm verify:platform:acceptance
 ```
 
-The acceptance command always:
+The default evidence path is `ops/platform-acceptance-evidence.json`. Use [`ops/platform-acceptance-evidence.example.json`](./platform-acceptance-evidence.example.json) as the schema reference.
 
-- prints the mandatory prerequisite rule
-- audits the current acceptance assets
-- runs the prerequisite gate
-- runs the full local Caddy-routed infra smoke path
-- runs the full local MVP browser smoke path
-- verifies metrics, logs, and the gated diagnostics error route
-- checks whether staging and backup/restore evidence have been recorded
-- emits a single `pass`, `fail`, or `blocked` checklist
+## What The Verification Command Checks
 
-## Local Acceptance Checklist
+`pnpm verify:platform:acceptance` performs these checks in order:
 
-The local acceptance command must pass all of these without hand-editing the environment mid-run:
+1. Verifies the expected validation assets exist in the repo.
+2. Runs the prerequisite verifier.
+3. Runs the local infrastructure verifier.
+4. Runs the browser smoke test.
+5. Validates the staging evidence file, if present.
+6. Validates the backup and restore evidence, if present.
+7. Prints a final checklist with `pass`, `fail`, or `blocked` results.
 
-1. prerequisite gate passes
-2. `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` pass at the repo root
-3. Compose boots the full stack with one command and routes all browser traffic through Caddy
-4. `/healthz`, `/readyz`, `/metrics`, `/collab/healthz`, `/collab/metrics`, `/worker/readyz`, `/worker/metrics`, and `/worker/status` respond as documented
-5. magic-link request, consume, session validation, refresh, and revoke work through the public Caddy origin
-6. unauthenticated collab websocket access is rejected with `401`
-7. authenticated collab websocket access upgrades successfully
-8. storage smoke upload, list, and delete work through the API abstraction
-9. `docker compose logs` show API, collab, and worker request/activity records
-10. the diagnostics error route returns `500` only when `ENABLE_TEST_ERROR_ROUTES=true`
-11. the browser smoke verifies, in order:
-    - sign in and enter the authenticated app shell
-    - create or open a file with multiple pages
-    - edit at least two pages and confirm persistence after reload
-    - create representative frame/shape/text content and confirm inspect data is visible
-    - verify two-user presence, remote cursor, remote selection, and remote mutation on one page
-    - create and resolve comments without persisting them into the page document
-    - create a share link and confirm the shared session is read-only in the UI
-    - upload an image asset, place it on the page, reload, and confirm the stored Yjs page document contains an asset reference rather than embedded binary data
-    - create page PNG and file PDF exports, download both, and confirm API/collab/worker readiness remains healthy during export
+## Local Verification Checklist
 
-## Staging Acceptance Path
+The local verification flow is expected to prove all of the following:
 
-Use the existing GitHub Actions deployment path. Do not create a second deploy pipeline.
+1. `pnpm verify:platform:prereqs` passes.
+2. `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` pass.
+3. The full Docker Compose stack boots successfully and routes browser traffic through Caddy.
+4. `/healthz`, `/readyz`, `/metrics`, `/collab/healthz`, `/collab/metrics`, `/worker/readyz`, `/worker/metrics`, and `/worker/status` respond as expected.
+5. Magic-link request, consume, session validation, refresh, and revoke work through the Caddy-facing origin.
+6. Unauthenticated collaboration access is rejected and authenticated collaboration upgrades successfully.
+7. Storage smoke upload, list, and delete operations succeed through the API abstraction.
+8. Compose logs show activity from API, collaboration, and worker services.
+9. The diagnostics error route returns `500` only when `ENABLE_TEST_ERROR_ROUTES=true`.
+10. The browser smoke covers:
+    - sign-in and entry into the authenticated app shell
+    - opening or creating a multi-page file
+    - page persistence after reload
+    - representative frame, shape, text, and image editing
+    - inspect data visibility
+    - live two-user collaboration signals
+    - comment creation and resolution
+    - read-only share links
+    - page PNG and file PDF exports
 
-1. Push the desired commit to `main` so CI publishes immutable GHCR images.
-2. Run the protected `Staging Deploy` workflow from [`.github/workflows/staging-deploy.yml`](/Users/ik/repos/openmirage/.github/workflows/staging-deploy.yml).
-3. Confirm the workflow smoke checks pass against the public staging origin.
-4. Confirm staging still uses the same route model as local:
-   - `/`
-   - `/healthz`
-   - `/readyz`
-   - `/collab/healthz`
-   - `/worker/readyz`
-   - authenticated page-scoped collab handshake and sync at `/collab`
-   - disposable smoke workspace bootstrap and cleanup through the secret-gated `/internal/smoke/collab/bootstrap` and `/internal/smoke/collab/cleanup` routes
-5. Verify auth/session behavior on the public HTTPS origin:
-   - magic-link origin uses the public host
-   - session cookies are `Secure`
-   - a signed-in user can create or open a verification project/file/page and reach `Collab: connected`
-6. Run the full MVP smoke on staging and record the completion timestamp:
-   - sign in
-   - create or open a file with multiple pages
-   - edit multiple pages and confirm persistence after reload
-   - create representative frame/shape/text content
-   - add and resolve a comment
-   - use inspect data
-   - create a read-only share link
-   - upload an image asset and place it on the page
-   - create page PNG and file PDF exports
-7. Run the two-user collaboration smoke on staging with two editor-capable users:
-   - both users open the same page and see each other in the presence strip
-   - cursor movement and node selection appear remotely in real time
-   - rectangle, frame, text, and image creation/mutation appear remotely without refresh
-   - file, page, and node comments survive refresh and resolving a comment does not alter page content
-   - after both users disconnect and reopen, page content and comments persist but stale cursor/selection state does not
-8. Verify observability on staging:
-   - logs are visible through `docker compose logs`
-   - `/metrics` is reachable for API, collab, and worker
-   - the forced diagnostics route is only enabled when intentionally gated
-   - error reporting is visible in the configured sink when `SENTRY_DSN` is set
-9. Verify fresh-VPS repeatability:
-   - start from a clean or disposable VPS with only base VM provisioning completed
-   - follow [`ops/staging-vps.md`](/Users/ik/repos/openmirage/ops/staging-vps.md:1) exactly to install Docker and Compose, create `$VPS_DEPLOY_DIR`, create `.env.staging`, validate SSH, DNS, and public ports, and run the canonical `Staging Deploy` workflow
-   - confirm the run required no undocumented shell history, manual repo changes, or ad hoc deploy steps
-10. Record the workflow run URL, commit SHA, staging URL, verification booleans, timestamped MVP smoke proof fields, fresh-VPS proof fields, error-reporting proof fields, and any remaining polish/non-goals in `ops/platform-acceptance-evidence.json`.
+## Staging Verification
 
-Staging proof is incomplete unless the evidence file records all of these as concrete proof:
+Staging verification uses the checked-in GitHub Actions deployment path in [`.github/workflows/staging-deploy.yml`](../.github/workflows/staging-deploy.yml).
 
-- `publicOriginVerified=true`
-- `fullMvpSmokeVerified=true`
-- `fullMvpSmokeVerifiedAt`
-- `twoUserCollaborationVerified=true`
-- `twoUserCollaborationVerifiedAt`
-- `secureCookiesVerified=true`
-- `secureCookiesVerifiedAt`
-- `observabilityVerified=true`
-- `observabilityVerifiedAt`
-- `freshVpsPreparedFromRunbook=true`
-- `freshVpsVerifiedAt`
-- `freshVpsTarget`
-- `errorReportingSinkVerified=true`
-- `errorReportingVerifiedAt`
-- `errorReportingReference`
-- `remainingItemsNonBlocking=true`
-- `remainingItemsReference`
+Record the following as part of a staging verification run:
 
-## Staging Error-Reporting Verification
+1. The workflow run URL.
+2. The deployed commit SHA.
+3. The public staging base URL.
+4. Confirmation that the public origin and websocket routes are working.
+5. Confirmation that secure cookies are set on the public HTTPS origin.
+6. Confirmation that the full MVP smoke was completed.
+7. Confirmation that a two-user collaboration pass was completed.
+8. Confirmation that logs, metrics, and error reporting were checked.
+9. Confirmation that the staging runbook worked on a fresh or disposable VPS without undocumented steps.
 
-Record the explicit step 11 proof during a staging verification run:
+The minimum staging routes to verify remain:
 
-1. Confirm `SENTRY_DSN` is configured in the staging `.env.staging` file.
-2. Intentionally enable `ENABLE_TEST_ERROR_ROUTES=true` for the verification deploy only.
-3. Run the canonical `Staging Deploy` workflow so the env change is applied through the checked-in deploy path.
-4. Trigger the forced diagnostics route through the public origin:
-   ```bash
-   curl -i https://<public staging host>/__diagnostics/error
-   ```
-5. Confirm the route returns `500` and the corresponding event appears in the configured error-reporting sink.
-6. Record the verification timestamp plus a stable event reference such as an event URL, issue URL, or event ID in `ops/platform-acceptance-evidence.json`.
-7. Restore `ENABLE_TEST_ERROR_ROUTES=false` and rerun the canonical deploy path so the diagnostics route returns to its normal disabled state.
+- `/`
+- `/healthz`
+- `/readyz`
+- `/metrics`
+- `/collab/healthz`
+- `/collab/metrics`
+- `/worker/readyz`
+- `/worker/metrics`
+- `/worker/status`
+- `/collab` for authenticated page-scoped collaboration
 
-## Backup / Restore Evidence
+## Error Reporting Verification
 
-Backup and restore are hard acceptance requirements.
+When `SENTRY_DSN` is configured for staging, record one explicit error-reporting verification run:
 
-1. Create or locate one Postgres backup artifact from staging or a staging-equivalent environment.
-2. Restore it into a clean target environment.
-3. Re-run the minimum smoke checks needed to prove the restored stack is healthy.
-4. Record the artifact location, backup timestamp, restore timestamp, restore target, and post-restore smoke result in `ops/platform-acceptance-evidence.json`.
+1. Temporarily set `ENABLE_TEST_ERROR_ROUTES=true` in the staging environment.
+2. Run the standard staging deploy workflow.
+3. Trigger the public diagnostics route:
 
-If the evidence file is missing or incomplete, the acceptance command must report `blocked`.
+```bash
+curl -i https://<staging-host>/__diagnostics/error
+```
 
-## Pass / Fail Rule
+4. Confirm the route returns `500`.
+5. Confirm the corresponding event appears in the configured error-reporting sink.
+6. Record the verification time and a stable reference such as an event URL or event ID.
+7. Restore `ENABLE_TEST_ERROR_ROUTES=false` and redeploy staging.
 
-Epic 3 closes only when every checklist item is `pass`.
+## Backup And Restore Evidence
+
+Platform verification is not complete without one recorded restore proof.
+
+The evidence file should include:
+
+- backup artifact location
+- backup creation time
+- restore verification time
+- restore target environment
+- confirmation that post-restore smoke checks passed
+
+Use [`ops/backup-restore-recovery.md`](./backup-restore-recovery.md) for the recovery procedure.
+
+## Result States
 
 - `fail`: a repo-managed verification step failed
-- `blocked`: local verification passed, but staging proof or backup/restore proof is still missing
-- `pass`: local verification, staging verification, and backup/restore evidence are all complete
-
-Remaining gaps after a `pass` must be polish or explicit MVP non-goals, not blockers.
+- `blocked`: local checks passed, but staging or recovery evidence is missing or incomplete
+- `pass`: local checks, staging evidence, and recovery evidence are all complete
