@@ -1,5 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type {
+  ProjectDto,
+  WorkspaceDetailDto,
+  WorkspaceLaunchpadResponse
+} from "@openmirage/types";
 import { App } from "./App";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -38,28 +43,37 @@ function setRuntimeEnv() {
   };
 }
 
-const workspaceOne = {
+const workspaceOne: WorkspaceDetailDto = {
+  createdAt: "2026-04-18T00:00:00.000Z",
+  deletedAt: null,
   id: "workspace-1",
+  membershipId: "membership-1",
   name: "OpenMirage Dev",
   role: "owner",
-  slug: "openmirage-dev"
+  slug: "openmirage-dev",
+  updatedAt: "2026-04-18T00:00:00.000Z"
 };
 
-const workspaceTwo = {
+const workspaceTwo: WorkspaceDetailDto = {
+  createdAt: "2026-04-18T01:00:00.000Z",
+  deletedAt: null,
   id: "workspace-2",
+  membershipId: "membership-2",
   name: "Client Workspace",
   role: "editor",
-  slug: "client-workspace"
+  slug: "client-workspace",
+  updatedAt: "2026-04-18T01:00:00.000Z"
 };
 
 const primaryProjectName = "Launchpad Project";
 const primaryFileName = "Launchpad File";
 const sharedPrimaryFileName = "Shared Launchpad File";
 
-const projectsByWorkspace = {
+const projectsByWorkspace: Record<"workspace-1" | "workspace-2", ProjectDto[]> = {
   "workspace-1": [
     {
       createdAt: "2026-04-18T00:00:00.000Z",
+      deletedAt: null,
       description: null,
       id: "project-1",
       name: primaryProjectName,
@@ -70,6 +84,7 @@ const projectsByWorkspace = {
   "workspace-2": [
     {
       createdAt: "2026-04-18T00:00:00.000Z",
+      deletedAt: null,
       description: null,
       id: "project-2",
       name: "Client Project",
@@ -77,7 +92,7 @@ const projectsByWorkspace = {
       workspaceId: "workspace-2"
     }
   ]
-} satisfies Record<string, Array<Record<string, string | null>>>;
+};
 
 const fileOpenByFileId = {
   "file-1": {
@@ -125,7 +140,7 @@ const fileOpenByFileId = {
         width: 1440
       }
     ],
-    project: projectsByWorkspace["workspace-1"][0],
+    project: projectsByWorkspace["workspace-1"][0]!,
     workspace: workspaceOne
   },
   "file-2": {
@@ -162,7 +177,7 @@ const fileOpenByFileId = {
         width: 1440
       }
     ],
-    project: projectsByWorkspace["workspace-2"][0],
+    project: projectsByWorkspace["workspace-2"][0]!,
     workspace: workspaceTwo
   }
 };
@@ -198,7 +213,7 @@ function createWorkspaceProjectsResponse(workspaceId: "workspace-1" | "workspace
 
 function createWorkspaceLaunchpadPayload(
   workspaceId: "workspace-1" | "workspace-2"
-) {
+): WorkspaceLaunchpadResponse {
   const fileOpen =
     workspaceId === "workspace-1" ? fileOpenByFileId["file-1"] : fileOpenByFileId["file-2"];
 
