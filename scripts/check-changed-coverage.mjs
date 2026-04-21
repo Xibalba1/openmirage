@@ -178,13 +178,17 @@ function readNodeTestCoverage(reportFile) {
   }
 
   const coverageByFile = new Map();
+  const pathStack = [];
 
   for (const line of readFileSync(reportFile, "utf8").split("\n")) {
-    if (!line.startsWith("# ")) {
+    const prefixMatch = line.match(/^(#|ℹ)\s(.*)$/u);
+
+    if (!prefixMatch) {
       continue;
     }
 
-    const trimmed = line.slice(2).trim();
+    const raw = prefixMatch[2] ?? "";
+    const trimmed = raw.trim();
 
     if (
       trimmed.startsWith("-") ||
@@ -196,20 +200,32 @@ function readNodeTestCoverage(reportFile) {
       continue;
     }
 
-    const columns = trimmed.split("|").map((column) => column.trim());
+    const columnsRaw = raw.split("|");
 
-    if (columns.length < 4) {
+    if (columnsRaw.length < 4) {
       continue;
     }
 
-    const filePath = columns[0];
+    const fileColumnRaw = columnsRaw[0] ?? "";
+    const filePath = fileColumnRaw.trim();
 
     if (!filePath || filePath === "file") {
       continue;
     }
 
-    coverageByFile.set(normalizePath(filePath), {
-      uncoveredLines: parseUncoveredLines(columns[4] ?? "")
+    const depth = fileColumnRaw.match(/^(\s*)/)?.[1].length ?? 0;
+    const linePercent = (columnsRaw[1] ?? "").trim();
+
+    if (!linePercent) {
+      pathStack.length = depth;
+      pathStack[depth] = filePath;
+      continue;
+    }
+
+    const resolvedPath = [...pathStack.slice(0, depth), filePath].join("/");
+
+    coverageByFile.set(normalizePath(resolvedPath), {
+      uncoveredLines: parseUncoveredLines((columnsRaw[4] ?? "").trim())
     });
   }
 

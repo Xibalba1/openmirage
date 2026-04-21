@@ -166,6 +166,8 @@ export interface LaunchpadFileSummary {
   defaultPageId: string | null;
   file: FileDto;
   pageCount: number;
+  thumbnailAssetId: string | null;
+  thumbnailUrl: string | null;
 }
 
 export interface LaunchpadProjectGroup {

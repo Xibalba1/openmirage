@@ -756,6 +756,15 @@ async function resolveAssetContentUrl(
   return storage.resolveDownloadUrl(asset.storageKey);
 }
 
+export async function resolveAssetContentUrlForRequest(
+  asset: AssetDto,
+  request: Pick<AssetContentRequest, "fileId" | "projectId" | "workspaceId">,
+  storage: StorageLike,
+  context: AssetResponseContext
+): Promise<string> {
+  return resolveAssetContentUrl(asset, request, storage, context);
+}
+
 async function mapAssetRecord(
   asset: AssetDto,
   request: Pick<AssetContentRequest, "fileId" | "projectId" | "workspaceId">,

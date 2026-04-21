@@ -244,7 +244,9 @@ function mapLaunchpadFileSummary(
   return {
     defaultPageId: row.default_page_id,
     file: mapFile(row),
-    pageCount: Number(row.page_count)
+    pageCount: Number(row.page_count),
+    thumbnailAssetId: row.thumbnail_asset_id,
+    thumbnailUrl: null
   };
 }
 

@@ -23,6 +23,7 @@ import {
   getWorkspaceLaunchpad,
   getAuthContextForSessionToken,
   getApplicationVersionInfo,
+  getAuthorizedAsset,
   issueMagicLinkForEmail,
   listAuthorizedWorkspaces,
   listFilePages,
@@ -73,6 +74,7 @@ import {
   registerRawMultipartParser,
   resolveAssetDeliveryMode,
   resolveAssetContentRequest,
+  resolveAssetContentUrlForRequest,
   resolveCreateAssetRequest,
   resolveListAssetsRequest,
   resolveListSharedAssetsRequest,
@@ -1012,7 +1014,56 @@ export async function createApiApp(
         return createNotFoundReply(reply);
       }
 
-      return result satisfies WorkspaceLaunchpadResponse;
+      const projects = await Promise.all(
+        result.projects.map(async (group) => ({
+          ...group,
+          files: await Promise.all(
+            group.files.map(async (summary) => {
+              if (!summary.thumbnailAssetId) {
+                return summary;
+              }
+
+              const asset = await getAuthorizedAsset(
+                authContext.user.id,
+                request.params.workspaceId,
+                group.project.id,
+                summary.file.id,
+                summary.thumbnailAssetId,
+                databasePool
+              );
+
+              if (!asset) {
+                return {
+                  ...summary,
+                  thumbnailUrl: null
+                };
+              }
+
+              return {
+                ...summary,
+                thumbnailUrl: await resolveAssetContentUrlForRequest(
+                  asset,
+                  {
+                    fileId: summary.file.id,
+                    projectId: group.project.id,
+                    workspaceId: request.params.workspaceId
+                  },
+                  storage,
+                  {
+                    appBaseUrl: env.appBaseUrl,
+                    assetDeliveryMode: resolveAssetDeliveryMode(env.storage.provider)
+                  }
+                )
+              };
+            })
+          )
+        }))
+      );
+
+      return {
+        ...result,
+        projects
+      } satisfies WorkspaceLaunchpadResponse;
     }
   );
   app.get<{ Params: WorkspaceParams }>(

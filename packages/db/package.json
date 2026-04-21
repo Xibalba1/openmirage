@@ -15,7 +15,7 @@
     "build": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings=0",
     "test": "node --test --import tsx ./src/*.test.ts",
-    "test:coverage": "pnpm build && mkdir -p coverage && node --experimental-test-coverage --test ./dist/*.test.js > coverage/node-test-coverage.txt 2>&1; status=$?; cat coverage/node-test-coverage.txt; if [ $status -ne 0 ]; then exit $status; fi; node ../../scripts/check-changed-coverage.mjs --format node-test-coverage --report-file coverage/node-test-coverage.txt src/index.ts src/metadata.ts",
+    "test:coverage": "mkdir -p coverage && node --import tsx --experimental-test-coverage --test ./src/*.test.ts > coverage/node-test-coverage.txt 2>&1; rc=$?; cat coverage/node-test-coverage.txt; if [ $rc -ne 0 ]; then exit $rc; fi; node ../../scripts/check-changed-coverage.mjs --format node-test-coverage --report-file coverage/node-test-coverage.txt src/index.ts src/metadata.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "docker:build": "node ../../scripts/noop-task.mjs docker:build @openmirage/db",
     "migrate:create": "node ./scripts/create-migration.mjs",

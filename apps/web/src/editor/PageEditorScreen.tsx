@@ -26,6 +26,7 @@ import {
 } from "@openmirage/types";
 import {
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   useEffect,
   useMemo,
   useRef,
@@ -130,6 +131,82 @@ const PRESENCE_COLORS = [
   "#14b8a6",
   "#ef4444"
 ] as const;
+
+function EditorIcon(props: {
+  name:
+    | "comment"
+    | "ellipse"
+    | "export"
+    | "frame"
+    | "image"
+    | "inspect"
+    | "layers"
+    | "line"
+    | "minus"
+    | "pages"
+    | "plus"
+    | "redo"
+    | "rename"
+    | "reset"
+    | "share"
+    | "text"
+    | "undo"
+    | "zoom-in"
+    | "zoom-out";
+}) {
+  const paths: Record<string, ReactNode> = {
+    comment: <path d="M5 7h14v9H9l-4 3v-3H5z" />,
+    ellipse: <ellipse cx="12" cy="12" rx="6.5" ry="4.5" />,
+    export: <path d="M12 4v10m0 0 4-4m-4 4-4-4M6 18h12" />,
+    frame: <path d="M6 6h12v12H6zM6 9h12M9 6v12" />,
+    image: <path d="M5 6h14v12H5zM8.5 10.5h.01M7 16l3.5-3.5L13 15l2-2 2 3" />,
+    inspect: <path d="M11 6h2v4h-2zM11 14h2v4h-2zM6 11h4v2H6zM14 11h4v2h-4z" />,
+    layers: <path d="m12 5 7 4-7 4-7-4 7-4Zm0 8 7 4-7 4-7-4" />,
+    line: <path d="M6 18 18 6" />,
+    minus: <path d="M7 12h10" />,
+    pages: <path d="M7 5h8v14H7zM9 9h4M9 13h4M17 7v12" />,
+    plus: <path d="M12 7v10M7 12h10" />,
+    redo: <path d="M15 8h4v4M19 8l-5.5 5.5a4 4 0 1 1-2.5-6.8H13" />,
+    rename: <path d="M6 18h4l8-8-4-4-8 8v4zM12 8l4 4" />,
+    reset: <path d="M7 7v4h4M7.5 11a5.5 5.5 0 1 0 2-4.2" />,
+    share: <path d="M15 8a2 2 0 1 0-1.9-2.7L8.7 8a2 2 0 0 0 0 4l4.4 2.7A2 2 0 1 0 14 16l-4.4-2.7a2 2 0 0 0 0-2.6L14 8a2 2 0 0 0 1 .3Z" />,
+    text: <path d="M6 7h12M12 7v10M9 17h6" />,
+    undo: <path d="M9 8H5v4M5 8l5.5 5.5a4 4 0 1 0 2.5-6.8H11" />,
+    "zoom-in": <path d="M11 8v6M8 11h6M17 17l3 3M10.5 17a6.5 6.5 0 1 1 0-13 6.5 6.5 0 0 1 0 13Z" />,
+    "zoom-out": <path d="M8 11h6M17 17l3 3M10.5 17a6.5 6.5 0 1 1 0-13 6.5 6.5 0 0 1 0 13Z" />
+  };
+
+  return (
+    <svg
+      aria-hidden="true"
+      className="icon"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      {paths[props.name]}
+    </svg>
+  );
+}
+
+function RailEmptyState(props: { body: string; title: string }) {
+  return (
+    <div className="editor-empty-state">
+      <div className="editor-empty-preview" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </div>
+      <div>
+        <strong>{props.title}</strong>
+        <p className="muted">{props.body}</p>
+      </div>
+    </div>
+  );
+}
 
 function createApiUrl(baseUrl: string, path: string): string {
   return new URL(path, baseUrl).toString();
@@ -2305,7 +2382,7 @@ export function PageEditorScreen(props: {
       <section className="panel editor-stage-panel">
         <div className="editor-shell-header">
           <div className="editor-shell-heading">
-            <p className="eyebrow">Canvas</p>
+            <span className="section-label">Canvas</span>
             <h2>{props.file.name}</h2>
             <p className="muted" data-testid="editor-hierarchy">
               {props.workspace.name} / {props.project.name} / {props.file.name} /{" "}
@@ -2324,16 +2401,17 @@ export function PageEditorScreen(props: {
                 onClick={() => setShowFileRename((current) => !current)}
                 type="button"
               >
+                <EditorIcon name="rename" />
                 {showFileRename ? "Hide file rename" : "Rename file"}
               </button>
             ) : null}
-            <div className="editor-mode-strip" aria-label="Left rail modes">
+            <div className="editor-segmented-control" aria-label="Left rail modes">
               {leftRailModes.map((mode) => (
                 <button
                   aria-controls="editor-left-rail"
                   aria-expanded={leftRailOpen && leftRailMode === mode}
                   aria-pressed={leftRailOpen && leftRailMode === mode}
-                  className={`button button-secondary ${
+                  className={`button button-secondary button-icon-label ${
                     leftRailOpen && leftRailMode === mode
                       ? "editor-mode-button-active"
                       : ""
@@ -2343,6 +2421,15 @@ export function PageEditorScreen(props: {
                   onClick={() => toggleLeftRail(mode)}
                   type="button"
                 >
+                  <EditorIcon
+                    name={
+                      mode === "pages"
+                        ? "pages"
+                        : mode === "layers"
+                          ? "layers"
+                          : "comment"
+                    }
+                  />
                   {mode === "pages"
                     ? "Pages"
                     : mode === "layers"
@@ -2351,13 +2438,13 @@ export function PageEditorScreen(props: {
                 </button>
               ))}
             </div>
-            <div className="editor-mode-strip" aria-label="Right panel modes">
+            <div className="editor-segmented-control" aria-label="Right panel modes">
               {(["inspect", "share", "export"] as RightPanelMode[]).map((mode) => (
                 <button
                   aria-controls="editor-right-panel"
                   aria-expanded={rightPanelOpen && rightPanelMode === mode}
                   aria-pressed={rightPanelOpen && rightPanelMode === mode}
-                  className={`button button-secondary ${
+                  className={`button button-secondary button-icon-label ${
                     rightPanelOpen && rightPanelMode === mode
                       ? "editor-mode-button-active"
                       : ""
@@ -2367,6 +2454,15 @@ export function PageEditorScreen(props: {
                   onClick={() => toggleRightPanel(mode)}
                   type="button"
                 >
+                  <EditorIcon
+                    name={
+                      mode === "inspect"
+                        ? "inspect"
+                        : mode === "share"
+                          ? "share"
+                          : "export"
+                    }
+                  />
                   {mode === "inspect"
                     ? "Inspect"
                     : mode === "share"
@@ -2396,8 +2492,8 @@ export function PageEditorScreen(props: {
         ) : null}
 
         <div className="editor-toolbar">
-          <div>
-            <p className="eyebrow">Page</p>
+          <div className="section-copy">
+            <span className="section-label">Page</span>
             <h2>{props.page.name}</h2>
           </div>
           <input
@@ -2413,62 +2509,73 @@ export function PageEditorScreen(props: {
             ref={imageUploadInputRef}
             type="file"
           />
-          <div className="toolbar-strip">
+          <div className="editor-toolbar-groups">
             {canMutate ? (
-              <>
+              <div className="toolbar-strip">
                 <button
-                  className="button button-secondary"
+                  className="button button-secondary button-icon-label"
                   onClick={() => createNode("frame")}
                   type="button"
                 >
+                  <EditorIcon name="frame" />
                   Frame
                 </button>
                 <button
-                  className="button button-secondary"
+                  className="button button-secondary button-icon-label"
                   onClick={() => createNode("rectangle")}
                   type="button"
                 >
+                  <EditorIcon name="frame" />
                   Rectangle
                 </button>
                 <button
-                  className="button button-secondary"
+                  className="button button-secondary button-icon-label"
                   onClick={() => createNode("ellipse")}
                   type="button"
                 >
+                  <EditorIcon name="ellipse" />
                   Ellipse
                 </button>
                 <button
-                  className="button button-secondary"
+                  className="button button-secondary button-icon-label"
                   onClick={() => createNode("line")}
                   type="button"
                 >
+                  <EditorIcon name="line" />
                   Line
                 </button>
                 <button
-                  className="button button-secondary"
+                  className="button button-secondary button-icon-label"
                   onClick={() => createNode("text")}
                   type="button"
                 >
+                  <EditorIcon name="text" />
                   Text
                 </button>
                 <button
-                  className="button button-secondary"
+                  className="button button-secondary button-icon-label"
                   disabled={isUploadingAsset}
                   onClick={() => imageUploadInputRef.current?.click()}
                   type="button"
                 >
+                  <EditorIcon name="image" />
                   {isUploadingAsset ? "Uploading..." : "Image"}
                 </button>
+              </div>
+            ) : null}
+            {canMutate ? (
+              <div className="toolbar-strip toolbar-strip-utility">
                 <button
-                  className="button button-secondary"
+                  className="button button-secondary button-icon-label"
                   disabled={selectedIds.length < 2}
                   onClick={groupSelection}
                   type="button"
                 >
+                  <EditorIcon name="layers" />
                   Group
                 </button>
                 <button
-                  className="button button-secondary"
+                  className="button button-secondary button-icon-label"
                   disabled={
                     sessionSnapshot.document.nodes[primarySelectionId ?? ""]
                       ?.type !== "group"
@@ -2476,63 +2583,71 @@ export function PageEditorScreen(props: {
                   onClick={ungroupSelection}
                   type="button"
                 >
+                  <EditorIcon name="pages" />
                   Ungroup
                 </button>
                 <button
-                  className="button button-secondary"
+                  className="button button-secondary button-icon-label"
                   disabled={!sessionSnapshot.canUndo}
                   onClick={() => sessionRef.current?.undo()}
                   type="button"
                 >
+                  <EditorIcon name="undo" />
                   Undo
                 </button>
                 <button
-                  className="button button-secondary"
+                  className="button button-secondary button-icon-label"
                   disabled={!sessionSnapshot.canRedo}
                   onClick={() => sessionRef.current?.redo()}
                   type="button"
                 >
+                  <EditorIcon name="redo" />
                   Redo
                 </button>
-              </>
+              </div>
             ) : null}
-            <button
-              className="button button-secondary"
-              onClick={() =>
-                setViewport((current) => ({
-                  ...current,
-                  zoom: clampZoom(current.zoom * 0.9)
-                }))
-              }
-              type="button"
-            >
-              Zoom out
-            </button>
-            <button
-              className="button button-secondary"
-              onClick={() => setViewport(createInitialViewport())}
-              type="button"
-            >
-              Reset view
-            </button>
-            <button
-              className="button button-secondary"
-              onClick={() =>
-                setViewport((current) => ({
-                  ...current,
-                  zoom: clampZoom(current.zoom * 1.1)
-                }))
-              }
-              type="button"
-            >
-              Zoom in
-            </button>
+            <div className="toolbar-strip toolbar-strip-utility">
+              <button
+                className="button button-secondary button-icon-only"
+                onClick={() =>
+                  setViewport((current) => ({
+                    ...current,
+                    zoom: clampZoom(current.zoom * 0.9)
+                  }))
+                }
+                type="button"
+              >
+                <EditorIcon name="zoom-out" />
+                <span className="sr-only">Zoom out</span>
+              </button>
+              <button
+                className="button button-secondary button-icon-only"
+                onClick={() => setViewport(createInitialViewport())}
+                type="button"
+              >
+                <EditorIcon name="reset" />
+                <span className="sr-only">Reset view</span>
+              </button>
+              <button
+                className="button button-secondary button-icon-only"
+                onClick={() =>
+                  setViewport((current) => ({
+                    ...current,
+                    zoom: clampZoom(current.zoom * 1.1)
+                  }))
+                }
+                type="button"
+              >
+                <EditorIcon name="zoom-in" />
+                <span className="sr-only">Zoom in</span>
+              </button>
+            </div>
           </div>
         </div>
 
-        <div className="editor-meta">
-          <span>Access: {props.access.mode}</span>
-          <span>
+        <div className="editor-status-strip">
+          <span className="status-pill">Access: {props.access.mode}</span>
+          <span className="status-pill">
             Sync:{" "}
             {collabStatus.state === "connected"
               ? "Live"
@@ -2542,7 +2657,7 @@ export function PageEditorScreen(props: {
                   ? "Offline"
                   : "Needs attention"}
           </span>
-          <span>
+          <span className="status-pill">
             Assets:{" "}
             {assetLoadState.status === "error"
               ? "Needs attention"
@@ -2550,12 +2665,14 @@ export function PageEditorScreen(props: {
                 ? "Loading"
                 : `${assetLoadState.assets.length} ready`}
           </span>
-          <span>View: {viewport.zoom.toFixed(2)}x</span>
-          <span>Nodes: {paintRecords.length}</span>
-          <span>Selection: {effectivePrimarySelectionId ?? "None"}</span>
-          <span>Focus: {activeScopeId ?? "Canvas"}</span>
+          <span className="status-pill">View: {viewport.zoom.toFixed(2)}x</span>
+          <span className="status-pill">Nodes: {paintRecords.length}</span>
+          <span className="status-pill">
+            Selection: {effectivePrimarySelectionId ?? "None"}
+          </span>
+          <span className="status-pill">Focus: {activeScopeId ?? "Canvas"}</span>
           <div className="presence-strip">
-            <span className="presence-chip presence-chip-self">
+            <span className="presence-chip presence-chip-self status-pill">
               You · {props.currentUser.displayName}
             </span>
             {visiblePresenceEntries.map((entry) => (
@@ -2603,11 +2720,11 @@ export function PageEditorScreen(props: {
               id="editor-left-rail"
             >
               <div className="editor-overlay-panel-header">
-                <div className="editor-overlay-panel-tabs">
+                <div className="editor-overlay-panel-tabs editor-segmented-control">
                   {leftRailModes.map((mode) => (
                     <button
                       aria-pressed={leftRailMode === mode}
-                      className={`button button-secondary button-icon ${
+                      className={`button button-secondary button-icon-label ${
                         leftRailMode === mode
                           ? "editor-mode-button-active"
                           : ""
@@ -2619,6 +2736,15 @@ export function PageEditorScreen(props: {
                       }}
                       type="button"
                     >
+                      <EditorIcon
+                        name={
+                          mode === "pages"
+                            ? "pages"
+                            : mode === "layers"
+                              ? "layers"
+                              : "comment"
+                        }
+                      />
                       {mode === "pages"
                         ? "Pages"
                         : mode === "layers"
@@ -2629,17 +2755,18 @@ export function PageEditorScreen(props: {
                 </div>
                 <button
                   aria-label="Close left rail"
-                  className="button button-secondary button-icon"
+                  className="button button-secondary button-icon-only"
                   onClick={() => setLeftRailOpen(false)}
                   type="button"
                 >
-                  Close
+                  <EditorIcon name="minus" />
+                  <span className="sr-only">Close</span>
                 </button>
               </div>
               <div className="editor-overlay-panel-body">
                 {leftRailMode === "pages" ? (
                   <div className="editor-sidebar-section">
-                    <p className="eyebrow">Pages</p>
+                    <span className="section-label">Pages</span>
                     {canMutate ? <CreatePageForm onCreate={props.onCreatePage} /> : null}
                     <ul className="resource-list compact-resource-list">
                       {props.pages.map((page) => (
@@ -2672,7 +2799,7 @@ export function PageEditorScreen(props: {
 
                 {leftRailMode === "layers" ? (
                   <div className="editor-sidebar-section">
-                    <p className="eyebrow">Layers</p>
+                    <span className="section-label">Layers</span>
                     <div className="layer-list">
                       {layerItems.map(({ depth, node }) => {
                         const order = getLayerOrder(
@@ -2756,7 +2883,7 @@ export function PageEditorScreen(props: {
 
                 {leftRailMode === "comments" && canViewComments ? (
                   <div className="editor-sidebar-section">
-                    <p className="eyebrow">Comments</p>
+                    <span className="section-label">Comments</span>
                     {canComment ? (
                       <form className="comment-form" onSubmit={handleSubmitComment}>
                         <label className="comment-field">
@@ -2803,10 +2930,10 @@ export function PageEditorScreen(props: {
                         </button>
                       </form>
                     ) : (
-                      <p className="muted">
-                        Comments are visible here, but you can't add or resolve
-                        them in this view.
-                      </p>
+                      <RailEmptyState
+                        body="Comments are visible here, but this view cannot add or resolve them."
+                        title="Read-only comments"
+                      />
                     )}
                     {commentLoadState.status === "error" ? (
                       <p className="muted">{commentLoadState.message}</p>
@@ -2872,9 +2999,10 @@ export function PageEditorScreen(props: {
                       })}
                       {sortedComments.length === 0 &&
                       commentLoadState.status !== "loading" ? (
-                        <p className="muted">
-                          No comments yet for this page or file.
-                        </p>
+                        <RailEmptyState
+                          body="Add feedback here to capture review notes for the page, file, or selected node."
+                          title="No comments yet"
+                        />
                       ) : null}
                     </div>
                   </div>
@@ -2891,12 +3019,12 @@ export function PageEditorScreen(props: {
               id="editor-right-panel"
             >
               <div className="editor-overlay-panel-header">
-                <div className="editor-overlay-panel-tabs">
+                <div className="editor-overlay-panel-tabs editor-segmented-control">
                   {(["inspect", "share", "export"] as RightPanelMode[]).map(
                     (mode) => (
                       <button
                         aria-pressed={rightPanelMode === mode}
-                        className={`button button-secondary button-icon ${
+                        className={`button button-secondary button-icon-label ${
                           rightPanelMode === mode
                             ? "editor-mode-button-active"
                             : ""
@@ -2908,6 +3036,15 @@ export function PageEditorScreen(props: {
                         }}
                         type="button"
                       >
+                        <EditorIcon
+                          name={
+                            mode === "inspect"
+                              ? "inspect"
+                              : mode === "share"
+                                ? "share"
+                                : "export"
+                          }
+                        />
                         {mode === "inspect"
                           ? "Inspect"
                           : mode === "share"
@@ -2919,17 +3056,18 @@ export function PageEditorScreen(props: {
                 </div>
                 <button
                   aria-label="Close right panel"
-                  className="button button-secondary button-icon"
+                  className="button button-secondary button-icon-only"
                   onClick={() => setRightPanelOpen(false)}
                   type="button"
                 >
-                  Close
+                  <EditorIcon name="minus" />
+                  <span className="sr-only">Close</span>
                 </button>
               </div>
               <div className="editor-overlay-panel-body">
                 {rightPanelMode === "inspect" ? (
                   <div className="editor-sidebar-section">
-                    <p className="eyebrow">Inspect</p>
+                    <span className="section-label">Inspect</span>
                     {inspectDetails ? (
                       <div className="inspect-sections">
                         {inspectDetails.sections.map((section) => (
@@ -2947,17 +3085,17 @@ export function PageEditorScreen(props: {
                         ))}
                       </div>
                     ) : (
-                      <p className="muted">
-                        Select a supported node to inspect dimensions, spacing,
-                        color, typography, and metadata.
-                      </p>
+                      <RailEmptyState
+                        body="Select a supported node to inspect dimensions, spacing, color, typography, and metadata."
+                        title="Nothing selected"
+                      />
                     )}
                   </div>
                 ) : null}
 
                 {rightPanelMode === "export" ? (
                   <div className="editor-sidebar-section">
-                    <p className="eyebrow">Export</p>
+                    <span className="section-label">Export</span>
                     {canCreateExports ? (
                       <>
                         <div className="share-link-actions">
@@ -3038,28 +3176,29 @@ export function PageEditorScreen(props: {
                             {describeExportJobState(exportJobState)}
                           </p>
                         ) : (
-                      <p className="muted">
-                        Export the current page as a PNG or the whole file as a
-                        PDF while you keep working.
-                      </p>
+                          <RailEmptyState
+                            body="Export the current page as a PNG or the whole file as a PDF while you keep working."
+                            title="No exports yet"
+                          />
+                        )}
+                      </>
+                    ) : (
+                      <RailEmptyState
+                        body="Exports aren't available from a read-only share link."
+                        title="Export unavailable"
+                      />
                     )}
-                  </>
-                ) : (
-                  <p className="muted">
-                    Exports aren't available from a read-only share link.
-                  </p>
-                )}
-              </div>
-            ) : null}
+                  </div>
+                ) : null}
 
                 {rightPanelMode === "share" ? (
                   <div className="editor-sidebar-section">
-                    <p className="eyebrow">Share</p>
+                    <span className="section-label">Share</span>
                     {props.shareToken ? (
-                      <p className="muted">
-                        This view came from a read-only share link, so changes
-                        and sharing controls are turned off.
-                      </p>
+                      <RailEmptyState
+                        body="This view came from a read-only share link, so changes and sharing controls are turned off."
+                        title="Read-only share"
+                      />
                     ) : canManageShareLinks ? (
                       <>
                         <button
@@ -3127,18 +3266,18 @@ export function PageEditorScreen(props: {
                           ))}
                           {shareLinkLoadState.shareLinks.length === 0 &&
                           shareLinkLoadState.status !== "loading" ? (
-                            <p className="muted">
-                              No share links yet. Create one when you're ready
-                              to share this file.
-                            </p>
+                            <RailEmptyState
+                              body="Create one when you're ready to share this file."
+                              title="No share links yet"
+                            />
                           ) : null}
                         </div>
                       </>
                     ) : (
-                      <p className="muted">
-                        You can view this file, but only editors can manage
-                        share links.
-                      </p>
+                      <RailEmptyState
+                        body="You can view this file, but only editors can manage share links."
+                        title="Share unavailable"
+                      />
                     )}
                   </div>
                 ) : null}
