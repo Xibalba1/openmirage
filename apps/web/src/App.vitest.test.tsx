@@ -209,7 +209,9 @@ function createWorkspaceLaunchpadPayload(
           {
             defaultPageId: fileOpen.defaultPageId,
             file: fileOpen.file,
-            pageCount: fileOpen.pages.length
+            pageCount: fileOpen.pages.length,
+            thumbnailAssetId: null,
+            thumbnailUrl: null
           }
         ],
         project: fileOpen.project
@@ -378,6 +380,35 @@ describe("App auth and routing flows", () => {
     expect(window.localStorage.getItem("openmirage.activeWorkspaceId")).toBe(
       "workspace-1"
     );
+  });
+
+  it("renders thumbnail-backed launchpad file cards when previews are available", async () => {
+    window.history.replaceState(null, "", "/app");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation((input, init) => {
+        const url = String(input);
+
+        if (url.includes("/v1/workspaces/workspace-1/launchpad")) {
+          const payload = createWorkspaceLaunchpadPayload("workspace-1");
+          payload.projects[0]!.files[0] = {
+            ...payload.projects[0]!.files[0]!,
+            thumbnailUrl: "https://cdn.openmirage.test/file-1.png"
+          };
+
+          return Promise.resolve(createJsonResponse(payload));
+        }
+
+        return createAuthenticatedFetchMock()(input, init);
+      })
+    );
+
+    render(<App />);
+
+    expect(
+      await screen.findByAltText(`Preview of ${primaryFileName}`)
+    ).toHaveAttribute("src", "https://cdn.openmirage.test/file-1.png");
   });
 
   it("restores the last active workspace and updates browser-local memory when switching workspaces", async () => {
@@ -607,7 +638,7 @@ describe("App auth and routing flows", () => {
     await screen.findByText(primaryFileName);
     await user.click(screen.getByRole("button", { name: "Browse pages" }));
 
-    await screen.findAllByRole("button", { name: "Open page" });
+    await screen.findByText("Page 2");
     expect(screen.getByText("Page 1")).toBeInTheDocument();
     expect(screen.getByText("Page 2")).toBeInTheDocument();
 
@@ -764,7 +795,9 @@ describe("App auth and routing flows", () => {
                 id: "file-4",
                 name: "New Launchpad File"
               },
-              pageCount: 2
+              pageCount: 2,
+              thumbnailAssetId: null,
+              thumbnailUrl: null
             });
           }
 
@@ -922,7 +955,9 @@ describe("App auth and routing flows", () => {
                         id: "file-empty",
                         name: "Untitled Draft"
                       },
-                      pageCount: 0
+                      pageCount: 0,
+                      thumbnailAssetId: null,
+                      thumbnailUrl: null
                     }
                   ],
                   project: projectsByWorkspace["workspace-1"][0]
@@ -1019,6 +1054,43 @@ describe("App auth and routing flows", () => {
     await screen.findByText("Enter a project name.");
   });
 
+  it("renders fallback empty states inside the authenticated shell", async () => {
+    window.history.replaceState(null, "", "/app/workspaces/workspace-1");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation((input, init) => {
+        const url = String(input);
+
+        if (url.includes("/auth/me")) {
+          return Promise.resolve(createJsonResponse(createAuthenticatedSession()));
+        }
+
+        if (url.includes("/v1/workspaces/workspace-1/projects")) {
+          return Promise.resolve(
+            createJsonResponse({
+              projects: [],
+              workspace: workspaceOne
+            })
+          );
+        }
+
+        return createAuthenticatedFetchMock()(input, init);
+      })
+    );
+
+    render(<App />);
+
+    await screen.findByText(
+      "Create the first project in this workspace to start organizing files."
+    );
+    expect(
+      screen.getByText(
+        "Create the first project in this workspace to start organizing files."
+      )
+    ).toBeInTheDocument();
+  });
+
   it("shows fallback project form validation", async () => {
     window.history.replaceState(
       null,
@@ -1078,6 +1150,232 @@ describe("App auth and routing flows", () => {
       "workspace-2"
     );
     expect(screen.getByText("Client File")).toBeInTheDocument();
+  });
+
+  it("uses the authenticated shell navigation links across launchpad, workspace, project, and file routes", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/app/workspaces/workspace-1/projects/project-1/files/file-1"
+    );
+    const user = userEvent.setup();
+
+    vi.stubGlobal("fetch", createAuthenticatedFetchMock());
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: primaryFileName });
+    const primaryNav = within(screen.getByRole("navigation", { name: "Primary" }));
+
+    const navToggle = screen.getByRole("button", { name: "Navigation" });
+    expect(navToggle).toHaveAttribute("aria-expanded", "false");
+    await user.click(navToggle);
+    expect(navToggle).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(primaryNav.getByRole("button", { name: primaryFileName }));
+    expect(window.location.pathname).toBe(
+      "/app/workspaces/workspace-1/projects/project-1/files/file-1"
+    );
+
+    await user.click(primaryNav.getByRole("button", { name: primaryProjectName }));
+    await waitFor(() =>
+      expect(window.location.pathname).toBe(
+        "/app/workspaces/workspace-1/projects/project-1"
+      )
+    );
+
+    await screen.findByRole("heading", { name: primaryProjectName });
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
+        "button",
+        { name: workspaceOne.name }
+      )
+    );
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/app/workspaces/workspace-1")
+    );
+
+    await screen.findByRole("heading", { name: workspaceOne.name });
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
+        "button",
+        { name: "Launchpad" }
+      )
+    );
+    await waitFor(() => expect(window.location.pathname).toBe("/app"));
+  });
+
+  it("opens and renames projects from the workspace route", async () => {
+    window.history.replaceState(null, "", "/app/workspaces/workspace-1");
+    const user = userEvent.setup();
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+      const url = String(input);
+
+      if (
+        url.includes("/v1/workspaces/workspace-1/projects/project-1") &&
+        init?.method === "PATCH"
+      ) {
+        return Promise.resolve(
+          createJsonResponse({
+            ...projectsByWorkspace["workspace-1"][0],
+            name: "Renamed Project"
+          })
+        );
+      }
+
+      return createAuthenticatedFetchMock()(input, init);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: workspaceOne.name });
+    await user.click(screen.getByRole("button", { name: "Rename project" }));
+    await user.type(screen.getByPlaceholderText("New name"), "Renamed Project");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/v1/workspaces/workspace-1/projects/project-1"),
+        expect.objectContaining({ method: "PATCH" })
+      )
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: new RegExp(`^${primaryProjectName}\\s+Updated`)
+      })
+    );
+    await waitFor(() =>
+      expect(window.location.pathname).toBe(
+        "/app/workspaces/workspace-1/projects/project-1"
+      )
+    );
+  });
+
+  it("opens and renames files from the project route", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/app/workspaces/workspace-1/projects/project-1"
+    );
+    const user = userEvent.setup();
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+      const url = String(input);
+
+      if (
+        url.includes("/v1/workspaces/workspace-1/projects/project-1/files/file-1") &&
+        init?.method === "PATCH"
+      ) {
+        return Promise.resolve(
+          createJsonResponse({
+            ...fileOpenByFileId["file-1"].file,
+            name: "Renamed File"
+          })
+        );
+      }
+
+      return createAuthenticatedFetchMock()(input, init);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: primaryProjectName });
+    await user.click(screen.getByRole("button", { name: "Rename file" }));
+    await user.type(screen.getByPlaceholderText("New name"), "Renamed File");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "/v1/workspaces/workspace-1/projects/project-1/files/file-1"
+        ),
+        expect.objectContaining({ method: "PATCH" })
+      )
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: new RegExp(`^${primaryFileName}\\s+Updated`)
+      })
+    );
+    await waitFor(() =>
+      expect(window.location.pathname).toBe(
+        "/app/workspaces/workspace-1/projects/project-1/files/file-1"
+      )
+    );
+  });
+
+  it("opens and renames file pages from the file route", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/app/workspaces/workspace-1/projects/project-1/files/file-1"
+    );
+    const user = userEvent.setup();
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+      const url = String(input);
+
+      if (
+        url.includes("/v1/workspaces/workspace-1/projects/project-1/files/file-1/pages/page-1") &&
+        init?.method === "PATCH"
+      ) {
+        return Promise.resolve(
+          createJsonResponse({
+            ...fileOpenByFileId["file-1"].pages[0],
+            name: "Renamed Page"
+          })
+        );
+      }
+
+      if (
+        url.includes("/v1/workspaces/workspace-1/projects/project-1/files/file-1") &&
+        init?.method === "PATCH"
+      ) {
+        return Promise.resolve(
+          createJsonResponse({
+            ...fileOpenByFileId["file-1"].file,
+            name: "Renamed File"
+          })
+        );
+      }
+
+      return createAuthenticatedFetchMock()(input, init);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: primaryFileName });
+    await user.click(screen.getByRole("button", { name: "Rename file" }));
+    await user.type(screen.getByPlaceholderText("New name"), "Renamed File");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await user.click(screen.getAllByRole("button", { name: "Rename page" })[0]!);
+    await user.type(screen.getByPlaceholderText("New name"), "Renamed Page");
+    await user.click(screen.getAllByRole("button", { name: "Save" })[0]!);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "/v1/workspaces/workspace-1/projects/project-1/files/file-1/pages/page-1"
+        ),
+        expect.objectContaining({ method: "PATCH" })
+      )
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: new RegExp("^Page 2\\s+Order 2$") })
+    );
+    await waitFor(() =>
+      expect(window.location.pathname).toBe(
+        "/app/workspaces/workspace-1/projects/project-1/files/file-1/pages/page-2"
+      )
+    );
   });
 
   it("navigates to fallback workspace and project routes from the launchpad", async () => {

@@ -484,6 +484,15 @@ describe("PageEditorScreen shell", () => {
     );
     await user.click(screen.getByRole("button", { name: "Export page PNG" }));
     await user.click(screen.getByRole("button", { name: "Export file PDF" }));
+
+    expect(screen.getByText("View: 1.00x")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Zoom out" }));
+    expect(screen.getByText("View: 0.90x")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByText("View: 0.99x")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reset view" }));
+    expect(screen.getByText("View: 1.00x")).toBeInTheDocument();
+
     await user.click(screen.getByLabelText("Close right panel"));
     expect(screen.queryByTestId("right-panel")).not.toBeInTheDocument();
   });

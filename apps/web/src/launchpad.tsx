@@ -1,6 +1,7 @@
 import {
   type FileOpenResponse,
   type LaunchpadProjectGroup,
+  type LaunchpadFileSummary,
   type WorkspaceDetailDto
 } from "@openmirage/types";
 import { type FormEvent, useEffect, useState } from "react";
@@ -15,6 +16,56 @@ export interface LaunchpadViewData {
   activeWorkspace: WorkspaceDetailDto | null;
   projectGroups: LaunchpadProjectGroup[];
   workspaces: WorkspaceDetailDto[];
+}
+
+function formatTimestamp(value: string): string {
+  return new Date(value).toLocaleString();
+}
+
+function PreviewPlaceholder(props: { label: string }) {
+  return (
+    <div className="preview-placeholder" aria-hidden="true">
+      <div className="preview-frame preview-frame-large" />
+      <div className="preview-frame preview-frame-card" />
+      <div className="preview-frame preview-frame-chip" />
+      <span>{props.label}</span>
+    </div>
+  );
+}
+
+function EmptyState(props: {
+  body: string;
+  title: string;
+}) {
+  return (
+    <div className="empty-state">
+      <PreviewPlaceholder label={props.title} />
+      <div className="empty-state-copy">
+        <strong>{props.title}</strong>
+        <p className="muted">{props.body}</p>
+      </div>
+    </div>
+  );
+}
+
+function LaunchpadFilePreview(props: { summary: LaunchpadFileSummary }) {
+  if (props.summary.thumbnailUrl) {
+    return (
+      <div className="launchpad-file-preview">
+        <img
+          alt={`Preview of ${props.summary.file.name}`}
+          className="launchpad-file-preview-image"
+          src={props.summary.thumbnailUrl}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="launchpad-file-preview">
+      <PreviewPlaceholder label="Preview" />
+    </div>
+  );
 }
 
 export function LaunchpadView(props: {
@@ -112,23 +163,22 @@ export function LaunchpadView(props: {
   const activeWorkspace = props.data.activeWorkspace;
 
   return (
-    <>
-      <article className="panel">
-        <p className="eyebrow">Active workspace</p>
+    <div className="route-stack">
+      <article className="panel panel-hero">
         <div className="launchpad-heading">
-          <div>
+          <div className="section-copy">
+            <span className="section-label">Active workspace</span>
             <h2>{activeWorkspace ? activeWorkspace.name : "No workspaces yet"}</h2>
             <p className="muted">
               {activeWorkspace
                 ? `${activeWorkspace.slug} · ${activeWorkspace.role}`
                 : "You don't have access to a workspace yet."}
             </p>
-            {activeWorkspace ? (
-              <p className="muted">
-                Browse projects and files in one place, then open the page you
-                need.
-              </p>
-            ) : null}
+            <p className="muted">
+              {activeWorkspace
+                ? "Pick up a project, jump into a file, or create something new without leaving the launchpad."
+                : "Once you join a workspace, projects and files will collect here."}
+            </p>
           </div>
           {activeWorkspace ? (
             <div className="action-strip">
@@ -144,15 +194,20 @@ export function LaunchpadView(props: {
           ) : null}
         </div>
       </article>
+
       <article className="panel">
-        <p className="eyebrow">Workspaces</p>
-        <h2>Choose workspace</h2>
-        <ul className="resource-list">
-          {props.data.workspaces.map((workspace) => (
-            <li key={workspace.id}>
-              <div className="resource-row resource-row-inline">
+        <div className="panel-header">
+          <div className="section-copy">
+            <span className="section-label">Workspaces</span>
+            <h2>Choose a workspace</h2>
+          </div>
+        </div>
+        {props.data.workspaces.length > 0 ? (
+          <div className="workspace-grid">
+            {props.data.workspaces.map((workspace) => (
+              <div className="workspace-switch-card" key={workspace.id}>
                 <button
-                  className={`resource-button ${
+                  className={`resource-button workspace-switch-button ${
                     workspace.id === activeWorkspace?.id
                       ? "resource-button-active"
                       : ""
@@ -174,18 +229,28 @@ export function LaunchpadView(props: {
                   Open workspace
                 </button>
               </div>
-            </li>
-          ))}
-        </ul>
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            body="Workspace memberships will appear here once your account has access."
+            title="No workspaces yet"
+          />
+        )}
       </article>
+
       {activeWorkspace ? (
         <article className="panel">
-          <p className="eyebrow">Projects</p>
-          <h2>Projects</h2>
-          <p className="muted">
-            Projects stay grouped here so you can create, browse, and open files
-            without leaving the launchpad.
-          </p>
+          <div className="panel-header">
+            <div className="section-copy">
+              <span className="section-label">Projects</span>
+              <h2>Recent work</h2>
+              <p className="muted">
+                Projects stay grouped so teams can browse screens and jump back
+                into the right file quickly.
+              </p>
+            </div>
+          </div>
           {props.data.projectGroups.length > 0 ? (
             <div className="launchpad-project-list">
               {props.data.projectGroups.map((group) => (
@@ -213,14 +278,14 @@ export function LaunchpadView(props: {
               ))}
             </div>
           ) : (
-            <p className="muted">
-              No projects yet. Create one to start organizing work in this
-              workspace.
-            </p>
+            <EmptyState
+              body="Create a project to start organizing files for this workspace."
+              title="No projects yet"
+            />
           )}
         </article>
       ) : null}
-    </>
+    </div>
   );
 }
 
@@ -237,7 +302,7 @@ function LaunchpadProjectSection(props: {
   return (
     <section className="launchpad-project-section">
       <header className="launchpad-project-header">
-        <div>
+        <div className="section-copy">
           <h3>{props.group.project.name}</h3>
           <p className="muted">
             {props.group.files.length} file{props.group.files.length === 1 ? "" : "s"}
@@ -255,7 +320,7 @@ function LaunchpadProjectSection(props: {
         </div>
       </header>
       {props.group.files.length > 0 ? (
-        <div className="launchpad-file-list">
+        <div className="launchpad-file-grid">
           {props.group.files.map((summary) => {
             const fileDetailsState =
               props.fileDetailsById[summary.file.id] ?? ({ status: "idle" } as const);
@@ -263,16 +328,17 @@ function LaunchpadProjectSection(props: {
 
             return (
               <article className="launchpad-file-card" key={summary.file.id}>
-                <div className="launchpad-file-row">
+                <LaunchpadFilePreview summary={summary} />
+                <div className="launchpad-file-body">
                   <div className="launchpad-file-meta">
                     <strong>{summary.file.name}</strong>
                     <span>
                       {summary.pageCount} page
                       {summary.pageCount === 1 ? "" : "s"} · Updated{" "}
-                      {new Date(summary.file.updatedAt).toLocaleString()}
+                      {formatTimestamp(summary.file.updatedAt)}
                     </span>
                   </div>
-                  <div className="action-strip">
+                  <div className="launchpad-file-actions">
                     <button
                       className="button button-primary"
                       disabled={!summary.defaultPageId}
@@ -296,43 +362,44 @@ function LaunchpadProjectSection(props: {
                       {isExpanded ? "Hide pages" : "Browse pages"}
                     </button>
                   </div>
-                </div>
-                {!summary.defaultPageId ? (
-                  <p className="form-error">
-                    Add a page before opening this file.
-                  </p>
-                ) : null}
-                {isExpanded ? (
-                  <div className="launchpad-pages-panel">
-                    <div className="launchpad-pages-header">
-                      <div>
-                        <h4>Pages</h4>
-                        <p className="muted">
-                          Open any page here without leaving the launchpad.
-                        </p>
+                  {!summary.defaultPageId ? (
+                    <p className="form-error">
+                      Add a page before opening this file.
+                    </p>
+                  ) : null}
+                  {isExpanded ? (
+                    <div className="launchpad-pages-panel">
+                      <div className="launchpad-pages-header">
+                        <div className="section-copy">
+                          <h4>Pages</h4>
+                          <p className="muted">
+                            Open any page here without leaving the launchpad.
+                          </p>
+                        </div>
+                        <DisclosureCreatePage
+                          onCreate={(name) =>
+                            props.onCreatePage(summary.file.id, name)
+                          }
+                        />
                       </div>
-                      <DisclosureCreatePage
-                        onCreate={(name) =>
-                          props.onCreatePage(summary.file.id, name)
+                      <LaunchpadPagesState
+                        fileDetailsState={fileDetailsState}
+                        onOpenPage={(pageId) =>
+                          props.onOpenPage(summary.file.id, pageId)
                         }
                       />
                     </div>
-                    <LaunchpadPagesState
-                      fileDetailsState={fileDetailsState}
-                      onOpenPage={(pageId) =>
-                        props.onOpenPage(summary.file.id, pageId)
-                      }
-                    />
-                  </div>
-                ) : null}
+                  ) : null}
+                </div>
               </article>
             );
           })}
         </div>
       ) : (
-        <p className="muted">
-          No files yet. Create one to start designing in this project.
-        </p>
+        <EmptyState
+          body="Create a file in this project to start designing."
+          title="No files yet"
+        />
       )}
     </section>
   );
@@ -360,7 +427,12 @@ function LaunchpadPagesState(props: {
   const loadedState = props.fileDetailsState;
 
   if (loadedState.value.pages.length === 0) {
-    return <p className="muted">No pages yet. Add one to keep working here.</p>;
+    return (
+      <EmptyState
+        body="No pages yet. Add one to keep working here."
+        title="No pages yet"
+      />
+    );
   }
 
   return (

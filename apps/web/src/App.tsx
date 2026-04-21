@@ -138,6 +138,18 @@ type ResourceData =
 type FileOpenResource = Extract<ResourceData, { kind: "file-open" }>;
 type LaunchpadResource = Extract<ResourceData, { kind: "launchpad" }>;
 
+interface ShellWorkspaceLink {
+  id: string;
+  label: string;
+}
+
+interface ShellContext {
+  currentFile?: { id: string; label: string; projectId: string; workspaceId: string };
+  currentProject?: { id: string; label: string; workspaceId: string };
+  currentWorkspace?: ShellWorkspaceLink;
+  summary: string;
+}
+
 function BuildStamp(props: { appVersion: string }) {
   return (
     <aside className="build-stamp" aria-label="Deployed build version">
@@ -154,6 +166,184 @@ function renderWithBuildStamp(appVersion: string, content: ReactNode) {
       <BuildStamp appVersion={appVersion} />
     </>
   );
+}
+
+function Icon(props: {
+  name:
+    | "arrow-left"
+    | "canvas"
+    | "comment"
+    | "ellipse"
+    | "export"
+    | "file"
+    | "frame"
+    | "grid"
+    | "home"
+    | "image"
+    | "inspect"
+    | "layers"
+    | "line"
+    | "logout"
+    | "minus"
+    | "pages"
+    | "plus"
+    | "project"
+    | "redo"
+    | "rename"
+    | "reset"
+    | "share"
+    | "text"
+    | "undo"
+    | "workspace";
+  title?: string;
+}) {
+  const paths: Record<string, ReactNode> = {
+    "arrow-left": <path d="M14 6 8 12l6 6M9 12h10" />,
+    canvas: <path d="M5 6h14v12H5zM9 10h6M9 14h4" />,
+    comment: <path d="M5 7h14v9H9l-4 3v-3H5z" />,
+    ellipse: <ellipse cx="12" cy="12" rx="6.5" ry="4.5" />,
+    export: <path d="M12 4v10m0 0 4-4m-4 4-4-4M6 18h12" />,
+    file: <path d="M8 4h6l4 4v12H8zM14 4v4h4" />,
+    frame: <path d="M6 6h12v12H6zM6 9h12M9 6v12" />,
+    grid: <path d="M6 6h5v5H6zM13 6h5v5h-5zM6 13h5v5H6zM13 13h5v5h-5z" />,
+    home: <path d="M5 11 12 5l7 6v8H5zM9 19v-5h6v5" />,
+    image: <path d="M5 6h14v12H5zM8.5 10.5h.01M7 16l3.5-3.5L13 15l2-2 2 3" />,
+    inspect: <path d="M11 6h2v4h-2zM11 14h2v4h-2zM6 11h4v2H6zM14 11h4v2h-4z" />,
+    layers: <path d="m12 5 7 4-7 4-7-4 7-4Zm0 8 7 4-7 4-7-4" />,
+    line: <path d="M6 18 18 6" />,
+    logout: <path d="M10 6H6v12h4M14 8l4 4-4 4M18 12H9" />,
+    minus: <path d="M7 12h10" />,
+    pages: <path d="M7 5h8v14H7zM9 9h4M9 13h4M17 7v12" />,
+    plus: <path d="M12 7v10M7 12h10" />,
+    project: <path d="M4 7h7l2 2h7v9H4z" />,
+    redo: <path d="M15 8h4v4M19 8l-5.5 5.5a4 4 0 1 1-2.5-6.8H13" />,
+    rename: <path d="M6 18h4l8-8-4-4-8 8v4zM12 8l4 4" />,
+    reset: <path d="M7 7v4h4M7.5 11a5.5 5.5 0 1 0 2-4.2" />,
+    share: <path d="M15 8a2 2 0 1 0-1.9-2.7L8.7 8a2 2 0 0 0 0 4l4.4 2.7A2 2 0 1 0 14 16l-4.4-2.7a2 2 0 0 0 0-2.6L14 8a2 2 0 0 0 1 .3Z" />,
+    text: <path d="M6 7h12M12 7v10M9 17h6" />,
+    undo: <path d="M9 8H5v4M5 8l5.5 5.5a4 4 0 1 0 2.5-6.8H11" />,
+    workspace: <path d="M4 6h16v5H4zM4 13h7v5H4zM13 13h7v5h-7z" />
+  };
+
+  return (
+    <svg
+      aria-hidden={props.title ? undefined : true}
+      className="icon"
+      fill="none"
+      role={props.title ? "img" : undefined}
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      {props.title ? <title>{props.title}</title> : null}
+      {paths[props.name]}
+    </svg>
+  );
+}
+
+function IllustrationCard(props: { label: string }) {
+  return (
+    <div className="illustration-card" aria-hidden="true">
+      <div className="illustration-block illustration-block-frame" />
+      <div className="illustration-block illustration-block-sheet" />
+      <div className="illustration-block illustration-block-chip" />
+      <span>{props.label}</span>
+    </div>
+  );
+}
+
+function EmptyStateCard(props: { body: string; title: string }) {
+  return (
+    <div className="empty-state">
+      <IllustrationCard label={props.title} />
+      <div className="empty-state-copy">
+        <strong>{props.title}</strong>
+        <p className="muted">{props.body}</p>
+      </div>
+    </div>
+  );
+}
+
+function deriveShellContext(route: AppRoute, resourceState: ResourceState): ShellContext {
+  if (resourceState.status === "loaded") {
+    switch (resourceState.value.kind) {
+      case "launchpad":
+        return {
+          ...(resourceState.value.activeWorkspace
+            ? {
+                currentWorkspace: {
+                  id: resourceState.value.activeWorkspace.id,
+                  label: resourceState.value.activeWorkspace.name
+                }
+              }
+            : {}),
+          summary: resourceState.value.activeWorkspace
+            ? `${resourceState.value.activeWorkspace.name} workspace`
+            : "No workspace selected"
+        };
+      case "projects":
+        return {
+          currentWorkspace: {
+            id: resourceState.value.workspace.id,
+            label: resourceState.value.workspace.name
+          },
+          summary: `${resourceState.value.projects.length} projects`
+        };
+      case "files":
+        return {
+          currentProject: {
+            id: resourceState.value.project.id,
+            label: resourceState.value.project.name,
+            workspaceId: resourceState.value.workspace.id
+          },
+          currentWorkspace: {
+            id: resourceState.value.workspace.id,
+            label: resourceState.value.workspace.name
+          },
+          summary: `${resourceState.value.files.length} files`
+        };
+      case "file-open":
+        return {
+          currentFile: {
+            id: resourceState.value.file.id,
+            label: resourceState.value.file.name,
+            projectId: resourceState.value.project.id,
+            workspaceId: resourceState.value.workspace.id
+          },
+          currentProject: {
+            id: resourceState.value.project.id,
+            label: resourceState.value.project.name,
+            workspaceId: resourceState.value.workspace.id
+          },
+          currentWorkspace: {
+            id: resourceState.value.workspace.id,
+            label: resourceState.value.workspace.name
+          },
+          summary: `${resourceState.value.pages.length} pages`
+        };
+    }
+  }
+
+  if (
+    route.kind === "workspace" ||
+    route.kind === "project" ||
+    route.kind === "file" ||
+    route.kind === "page"
+  ) {
+    return {
+      currentWorkspace: {
+        id: route.workspaceId,
+        label: "Current workspace"
+      },
+      summary: "Loading workspace"
+    };
+  }
+
+  return {
+    summary: "OpenMirage"
+  };
 }
 
 function readBrowserLocation(): BrowserLocationState {
@@ -967,6 +1157,7 @@ function AuthenticatedApp(props: {
   const [appHomeWorkspaceId, setAppHomeWorkspaceId] = useState<string | null>(
     readStoredActiveWorkspaceId
   );
+  const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => {
     if (
@@ -1048,6 +1239,10 @@ function AuthenticatedApp(props: {
       setAppHomeWorkspaceId(resolvedWorkspaceId);
     }
   }, [appHomeWorkspaceId, resourceState]);
+
+  useEffect(() => {
+    setNavOpen(false);
+  }, [props.route]);
 
   async function reloadResource() {
     if (!isProtectedRoute(props.route)) {
@@ -1333,6 +1528,7 @@ function AuthenticatedApp(props: {
     editorData && currentPageId
       ? (editorData.pages.find((page) => page.id === currentPageId) ?? null)
       : null;
+  const shellContext = deriveShellContext(props.route, resourceState);
 
   return (
     <main
@@ -1340,7 +1536,7 @@ function AuthenticatedApp(props: {
     >
       <header className="app-header">
         <div>
-          <p className="eyebrow">OpenMirage</p>
+          <span className="section-label">OpenMirage</span>
           <h1 className="app-title">
             {isEditorRoute
               ? "Canvas"
@@ -1357,6 +1553,17 @@ function AuthenticatedApp(props: {
           </p>
         </div>
         <div className="header-actions">
+          {!isEditorRoute ? (
+            <button
+              aria-expanded={navOpen}
+              className="button button-secondary nav-toggle"
+              onClick={() => setNavOpen((current) => !current)}
+              type="button"
+            >
+              <Icon name="grid" />
+              Navigation
+            </button>
+          ) : null}
           <div className="identity-chip">
             <strong>{props.auth.user.displayName}</strong>
             <span>{props.auth.user.email}</span>
@@ -1397,42 +1604,122 @@ function AuthenticatedApp(props: {
           workspace={editorData.workspace}
         />
       ) : (
-        <section className="app-shell">
-          <aside className="panel sidebar-panel">
-            <p className="eyebrow">Account</p>
-            <h2>Signed in</h2>
-            <p className="muted">
-              Keep your place in the launchpad or jump back to it anytime.
-            </p>
-            <button
-              className="button button-secondary button-full"
-              onClick={() => props.onNavigate({ kind: "app-home" })}
-              type="button"
-            >
-              Back to launchpad
-            </button>
-            <dl className="detail-list compact-list">
-              <div>
-                <dt>User ID</dt>
-                <dd>{props.auth.user.id}</dd>
+        <section className="workspace-shell">
+          <aside className={`workspace-nav ${navOpen ? "workspace-nav-open" : ""}`}>
+            <div className="workspace-nav-inner">
+              <div className="workspace-nav-brand">
+                <div className="workspace-nav-badge">
+                  <Icon name="workspace" />
+                </div>
+                <div>
+                  <strong>Workspace browser</strong>
+                  <span>{shellContext.summary}</span>
+                </div>
               </div>
-              <div>
-                <dt>Session expires</dt>
-                <dd>
-                  {new Date(props.auth.session.expiresAt).toLocaleString()}
-                </dd>
+
+              <nav className="workspace-nav-section" aria-label="Primary">
+                <button
+                  className={`nav-link ${
+                    props.route.kind === "app-home" ? "nav-link-active" : ""
+                  }`}
+                  onClick={() => {
+                    setNavOpen(false);
+                    props.onNavigate({ kind: "app-home" });
+                  }}
+                  type="button"
+                >
+                  <Icon name="home" />
+                  Launchpad
+                </button>
+                {shellContext.currentWorkspace ? (
+                  <button
+                    className={`nav-link ${
+                      props.route.kind === "workspace" ? "nav-link-active" : ""
+                    }`}
+                    onClick={() => {
+                      setNavOpen(false);
+                      props.onNavigate({
+                        kind: "workspace",
+                        workspaceId: shellContext.currentWorkspace?.id as string
+                      });
+                    }}
+                    type="button"
+                  >
+                    <Icon name="workspace" />
+                    {shellContext.currentWorkspace.label}
+                  </button>
+                ) : null}
+                {shellContext.currentProject ? (
+                  <button
+                    className={`nav-link ${
+                      props.route.kind === "project" ? "nav-link-active" : ""
+                    }`}
+                    onClick={() => {
+                      setNavOpen(false);
+                      props.onNavigate({
+                        kind: "project",
+                        projectId: shellContext.currentProject?.id as string,
+                        workspaceId: shellContext.currentProject?.workspaceId as string
+                      });
+                    }}
+                    type="button"
+                  >
+                    <Icon name="project" />
+                    {shellContext.currentProject.label}
+                  </button>
+                ) : null}
+                {shellContext.currentFile ? (
+                  <button
+                    className={`nav-link ${
+                      props.route.kind === "file" ? "nav-link-active" : ""
+                    }`}
+                    onClick={() => {
+                      setNavOpen(false);
+                      props.onNavigate({
+                        fileId: shellContext.currentFile?.id as string,
+                        kind: "file",
+                        projectId: shellContext.currentFile?.projectId as string,
+                        workspaceId: shellContext.currentFile?.workspaceId as string
+                      });
+                    }}
+                    type="button"
+                  >
+                    <Icon name="file" />
+                    {shellContext.currentFile.label}
+                  </button>
+                ) : null}
+              </nav>
+
+              <div className="workspace-nav-section workspace-nav-account">
+                <span className="section-label">Session</span>
+                <button
+                  className="button button-secondary button-full"
+                  onClick={() => {
+                    setNavOpen(false);
+                    props.onNavigate({ kind: "app-home" });
+                  }}
+                  type="button"
+                >
+                  Back to launchpad
+                </button>
+                <dl className="detail-list compact-list">
+                  <div>
+                    <dt>Expires</dt>
+                    <dd>{new Date(props.auth.session.expiresAt).toLocaleString()}</dd>
+                  </div>
+                  <div>
+                    <dt>Memberships</dt>
+                    <dd>{props.auth.memberships.length}</dd>
+                  </div>
+                </dl>
               </div>
-              <div>
-                <dt>Memberships</dt>
-                <dd>{props.auth.memberships.length}</dd>
-              </div>
-            </dl>
+            </div>
           </aside>
 
-          <section className="main-panel-stack">
+          <section className="workspace-content">
             {resourceState.status === "loading" ? (
               <article className="panel">
-                <p className="eyebrow">Loading</p>
+                <span className="section-label">Loading</span>
                 <h2>
                   {props.route.kind === "app-home"
                     ? "Loading launchpad"
@@ -1447,7 +1734,7 @@ function AuthenticatedApp(props: {
             ) : null}
             {resourceState.status === "error" ? (
               <article className="panel">
-                <p className="eyebrow">Unavailable</p>
+                <span className="section-label">Unavailable</span>
                 <h2>We couldn't load this view</h2>
                 <p className="muted">{resourceState.message}</p>
                 <button
@@ -1682,8 +1969,18 @@ function NavigationContent(props: {
       const data = props.data;
 
       return (
-        <>
+        <div className="route-stack">
           <article className="panel">
+            <div className="panel-header">
+              <div className="section-copy">
+                <span className="section-label">Projects</span>
+                <h2>{data.workspace.name}</h2>
+                <p className="muted">
+                  Open an existing project or start a new one in this workspace.
+                </p>
+              </div>
+              <CreateProjectForm onCreate={props.onCreateProject} />
+            </div>
             <Breadcrumbs
               items={[
                 {
@@ -1700,54 +1997,65 @@ function NavigationContent(props: {
               ]}
               onNavigate={props.onNavigate}
             />
-            <p className="eyebrow">Projects</p>
-            <h2>{data.workspace.name}</h2>
-            <p className="muted">
-              Open an existing project or start a new one in this workspace.
-            </p>
-            <CreateProjectForm onCreate={props.onCreateProject} />
           </article>
           <article className="panel">
-            <ul className="resource-list">
-              {data.projects.map((project) => (
-                <li key={project.id}>
-                  <div className="resource-row">
-                    <button
-                      className="resource-button"
-                      onClick={() =>
-                        props.onNavigate({
-                          kind: "project",
-                          projectId: project.id,
-                          workspaceId: data.workspace.id
-                        })
-                      }
-                      type="button"
-                    >
-                      <strong>{project.name}</strong>
-                      <span>
-                        Updated {new Date(project.updatedAt).toLocaleString()}
-                      </span>
-                    </button>
-                    <InlineRenameForm
-                      label="Rename project"
-                      onSubmit={(name) =>
-                        props.onRenameProject(project.id, name)
-                      }
-                    />
-                  </div>
-                </li>
-              ))}
-            </ul>
+            {data.projects.length > 0 ? (
+              <ul className="resource-list">
+                {data.projects.map((project) => (
+                  <li key={project.id}>
+                    <div className="resource-row">
+                      <button
+                        className="resource-button resource-card"
+                        onClick={() =>
+                          props.onNavigate({
+                            kind: "project",
+                            projectId: project.id,
+                            workspaceId: data.workspace.id
+                          })
+                        }
+                        type="button"
+                      >
+                        <strong>{project.name}</strong>
+                        <span>
+                          Updated {new Date(project.updatedAt).toLocaleString()}
+                        </span>
+                      </button>
+                      <InlineRenameForm
+                        label="Rename project"
+                        onSubmit={(name) =>
+                          props.onRenameProject(project.id, name)
+                        }
+                      />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyStateCard
+                body="Create the first project in this workspace to start organizing files."
+                title="No projects yet"
+              />
+            )}
           </article>
-        </>
+        </div>
       );
     }
     case "files": {
       const data = props.data;
 
       return (
-        <>
+        <div className="route-stack">
           <article className="panel">
+            <div className="panel-header">
+              <div className="section-copy">
+                <span className="section-label">Files</span>
+                <h2>{data.project.name}</h2>
+                <p className="muted">
+                  Open a file or create a new one with multiple pages.
+                </p>
+              </div>
+              <CreateFileForm onCreate={props.onCreateFile} />
+            </div>
             <Breadcrumbs
               items={[
                 {
@@ -1772,53 +2080,70 @@ function NavigationContent(props: {
               ]}
               onNavigate={props.onNavigate}
             />
-            <p className="eyebrow">Files</p>
-            <h2>{data.project.name}</h2>
-            <p className="muted">
-              Open a file or create a new one with multiple pages.
-            </p>
-            <CreateFileForm onCreate={props.onCreateFile} />
           </article>
           <article className="panel">
-            <ul className="resource-list">
-              {data.files.map((file) => (
-                <li key={file.id}>
-                  <div className="resource-row">
-                    <button
-                      className="resource-button"
-                      onClick={() =>
-                        props.onNavigate({
-                          fileId: file.id,
-                          kind: "file",
-                          projectId: data.project.id,
-                          workspaceId: data.workspace.id
-                        })
-                      }
-                      type="button"
-                    >
-                      <strong>{file.name}</strong>
-                      <span>
-                        Updated {new Date(file.updatedAt).toLocaleString()}
-                      </span>
-                    </button>
-                    <InlineRenameForm
-                      label="Rename file"
-                      onSubmit={(name) => props.onRenameFile(file.id, name)}
-                    />
-                  </div>
-                </li>
-              ))}
-            </ul>
+            {data.files.length > 0 ? (
+              <ul className="resource-list">
+                {data.files.map((file) => (
+                  <li key={file.id}>
+                    <div className="resource-row">
+                      <button
+                        className="resource-button resource-card"
+                        onClick={() =>
+                          props.onNavigate({
+                            fileId: file.id,
+                            kind: "file",
+                            projectId: data.project.id,
+                            workspaceId: data.workspace.id
+                          })
+                        }
+                        type="button"
+                      >
+                        <strong>{file.name}</strong>
+                        <span>
+                          Updated {new Date(file.updatedAt).toLocaleString()}
+                        </span>
+                      </button>
+                      <InlineRenameForm
+                        label="Rename file"
+                        onSubmit={(name) => props.onRenameFile(file.id, name)}
+                      />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyStateCard
+                body="Create a file in this project to move from structure into screens."
+                title="No files yet"
+              />
+            )}
           </article>
-        </>
+        </div>
       );
     }
     case "file-open": {
       const data = props.data;
 
       return (
-        <>
+        <div className="route-stack">
           <article className="panel">
+            <div className="panel-header">
+              <div className="section-copy">
+                <span className="section-label">Pages</span>
+                <h2>{data.file.name}</h2>
+                <p className="muted">
+                  Choose a page to continue in the canvas.
+                </p>
+              </div>
+              <div className="action-strip">
+                <InlineRenameForm
+                  label="Rename file"
+                  onSubmit={(name) => props.onRenameFile(data.file.id, name)}
+                />
+                <CreatePageForm onCreate={props.onCreatePage} />
+              </div>
+            </div>
             <Breadcrumbs
               items={[
                 {
@@ -1852,23 +2177,11 @@ function NavigationContent(props: {
               ]}
               onNavigate={props.onNavigate}
             />
-            <p className="eyebrow">Pages</p>
-            <h2>{data.file.name}</h2>
-            <p className="muted">
-              Choose a page to continue in the canvas.
-            </p>
-            <div className="action-strip">
-              <InlineRenameForm
-                label="Rename file"
-                onSubmit={(name) => props.onRenameFile(data.file.id, name)}
-              />
-              <CreatePageForm onCreate={props.onCreatePage} />
-            </div>
           </article>
           <article className="panel">
             <div className="page-open-summary">
               <div>
-                <p className="eyebrow">Current page</p>
+                <span className="section-label">Current page</span>
                 <h3>
                   {data.pages.find((page) => page.id === data.selectedPageId)
                     ?.name ?? "No page selected"}
@@ -1878,40 +2191,47 @@ function NavigationContent(props: {
                 {data.selectedPageId ?? "No default page"}
               </div>
             </div>
-            <ul className="resource-list">
-              {data.pages.map((page) => (
-                <li key={page.id}>
-                  <div className="resource-row">
-                    <button
-                      className={`resource-button ${
-                        page.id === data.selectedPageId
-                          ? "resource-button-active"
-                          : ""
-                      }`}
-                      onClick={() =>
-                        props.onNavigate({
-                          fileId: data.file.id,
-                          kind: "page",
-                          pageId: page.id,
-                          projectId: data.project.id,
-                          workspaceId: data.workspace.id
-                        })
-                      }
-                      type="button"
-                    >
-                      <strong>{page.name}</strong>
-                      <span>Order {page.orderIndex + 1}</span>
-                    </button>
-                    <InlineRenameForm
-                      label="Rename page"
-                      onSubmit={(name) => props.onRenamePage(page.id, name)}
-                    />
-                  </div>
-                </li>
-              ))}
-            </ul>
+            {data.pages.length > 0 ? (
+              <ul className="resource-list">
+                {data.pages.map((page) => (
+                  <li key={page.id}>
+                    <div className="resource-row">
+                      <button
+                        className={`resource-button resource-card ${
+                          page.id === data.selectedPageId
+                            ? "resource-button-active"
+                            : ""
+                        }`}
+                        onClick={() =>
+                          props.onNavigate({
+                            fileId: data.file.id,
+                            kind: "page",
+                            pageId: page.id,
+                            projectId: data.project.id,
+                            workspaceId: data.workspace.id
+                          })
+                        }
+                        type="button"
+                      >
+                        <strong>{page.name}</strong>
+                        <span>Order {page.orderIndex + 1}</span>
+                      </button>
+                      <InlineRenameForm
+                        label="Rename page"
+                        onSubmit={(name) => props.onRenamePage(page.id, name)}
+                      />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyStateCard
+                body="Add a page to this file before continuing into the canvas."
+                title="No pages yet"
+              />
+            )}
           </article>
-        </>
+        </div>
       );
     }
   }
